@@ -1,4 +1,4 @@
-.PHONY: test race cover fuzz vet fmt check build
+.PHONY: test race cover fuzz vet fmt check build demo
 
 test:
 	go test ./...
@@ -25,3 +25,12 @@ check: vet race cover
 
 build:
 	go build -o sasash ./cmd/sasash
+
+# Renders demo/demo.tape against the RFC 5737 fixture in demo/home.
+# Review aid only, never a CI gate: skips (exit 0) when vhs is not installed.
+demo: build
+	@if command -v vhs >/dev/null 2>&1; then \
+		vhs demo/demo.tape && cp demo/out/demo.gif demo/demo.gif; \
+	else \
+		echo "vhs not installed; skipping demo (brew install vhs)"; \
+	fi
