@@ -17,6 +17,7 @@ fuzz:
 
 vet:
 	go vet ./...
+	go vet -tags integration ./internal/integration
 
 fmt:
 	gofmt -l -w .
@@ -39,4 +40,4 @@ demo: build
 # live OpenSSH. Run locally before a release, not on every save; skips when
 # no sshd binary is installed (brew install openssh).
 integration:
-	go test -tags integration -count=1 -v ./internal/integration
+	go test -tags integration -count=1 -timeout 120s -v ./internal/integration

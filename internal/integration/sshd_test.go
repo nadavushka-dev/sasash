@@ -3,8 +3,8 @@
 // Package integration is the real-sshd test tier from SPEC §12: a throwaway
 // sshd on localhost proving that -O forward / -O cancel / -O check / -O exit
 // behave the way §4 claims against real OpenSSH. It re-proves, in CI shape,
-// what the HITL run in .squad/hitl-3.1-result.txt confirmed on a real box
-// (8/8, OpenSSH 10.2p1).
+// what a human verified live on a real box (2026-09-01: OpenSSH 10.2p1,
+// 8/8 checks — master start, -O check, live forward inject, cancel, exit).
 //
 // Excluded from `go test ./...` by the build tag; run via `make integration`,
 // locally before a release, not on every save. Sleeps and retries are fine
@@ -41,7 +41,7 @@ func findSshd(t *testing.T) string {
 		"/usr/local/opt/openssh/sbin/sshd",
 		"/usr/sbin/sshd",
 	} {
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
 			return p
 		}
 	}
@@ -119,6 +119,13 @@ func startSshd(t *testing.T, r run.Runner) (userKey, port, login string) {
 		t.Fatalf("WriteFile() err = %v", err)
 	}
 
+	// LogLevel VERBOSE + the -e flag below put auth failures on stderr,
+	// which the cleanup dumps on test failure — otherwise sshd logs the
+	// reason to syslog and the tier can only say "it broke".
+	// Deliberately absent: "PerSourcePenalties no" (OpenSSH >= 9.8 penalises
+	// a source IP after failed auth, which would flake retry loops or a
+	// second test in this package) — the keyword is a fatal parse error on
+	// older sshds, so add it only together with a version probe.
 	port = freePort(t)
 	conf := fmt.Sprintf(`ListenAddress 127.0.0.1
 Port %s
@@ -129,7 +136,7 @@ PubkeyAuthentication yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 StrictModes no
-LogLevel ERROR
+LogLevel VERBOSE
 `, port, hostKey, filepath.Join(dir, "sshd.pid"), authKeys)
 	confPath := filepath.Join(dir, "sshd_config")
 	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
@@ -137,23 +144,31 @@ LogLevel ERROR
 	}
 
 	// sshd -D stays in the foreground, so hold it as a run.OS child and kill
-	// it by cancelling its context. CommandContext delivers SIGKILL, which is
-	// fine for a throwaway daemon.
+	// it by cancelling its context (CommandContext delivers SIGKILL, fine
+	// for a throwaway daemon). The goroutine closes done rather than sending
+	// on it: both the readiness poll and the cleanup wait on it, and a send
+	// would satisfy only one of them — the other would hang the whole run.
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan run.Result, 1)
+	var sshdRes run.Result
+	var sshdErr error
+	done := make(chan struct{})
 	go func() {
-		res, _ := r.Run(ctx, sshd, "-D", "-f", confPath)
-		done <- res
+		sshdRes, sshdErr = r.Run(ctx, sshd, "-D", "-e", "-f", confPath)
+		close(done)
 	}()
 	t.Cleanup(func() {
 		cancel()
 		<-done
+		if t.Failed() {
+			t.Logf("sshd (%s) err=%v stderr:\n%s", sshd, sshdErr, sshdRes.Stderr)
+		}
 	})
 
 	waitFor(t, "sshd to accept on "+port, 10*time.Second, func() bool {
 		select {
-		case res := <-done:
-			t.Fatalf("sshd exited before accepting connections: code %d\n%s", res.Code, res.Stderr)
+		case <-done:
+			t.Fatalf("sshd %s exited before accepting connections: code %d, err %v\n%s",
+				sshd, sshdRes.Code, sshdErr, sshdRes.Stderr)
 		default:
 		}
 		return listening(port)
@@ -185,6 +200,8 @@ func controlSocketDir(t *testing.T) string {
 // the listener is gone and the master survived, then tear down. One linear
 // test because the states are strictly ordered.
 func TestControlMaster_LiveForwardLifecycle(t *testing.T) {
+	t.Parallel() // safe: every invocation owns its own sshd, port, and socket
+
 	r := run.OS{}
 	userKey, sshdPort, login := startSshd(t, r)
 	sock := filepath.Join(controlSocketDir(t), "cm.sock")
