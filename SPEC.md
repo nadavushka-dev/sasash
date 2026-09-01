@@ -91,8 +91,9 @@ If the user hand-edits the file, sasash re-reads it and does not fight.
 
 ## 3. Paths: probe, never guess
 
-A host has an ordered list of named addresses. Which one works changes hourly —
-FortiClient flaking, Tailscale asleep, wrong network, host rebooted.
+A host has an ordered list of named addresses. Which one works changes hourly, and sasash does
+not care why: a VPN dropped, an overlay network went quiet, the laptop moved, the host rebooted.
+Paths are opaque data. sasash probes them and reports; it never reasons about what a path *is*.
 
 **Do not infer location.** SSID, default gateway, and `utun*` interfaces all lie
 (three utun interfaces can be up simultaneously and none of them identify themselves).
