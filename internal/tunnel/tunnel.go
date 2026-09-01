@@ -188,8 +188,11 @@ func (e Engine) Exit(ctx context.Context, host string) error {
 }
 
 // Up ensures the master (Start only when CheckMaster says down), then
-// Forwards every spec in order, recording each success. The first error
-// aborts and is returned.
+// Forwards every spec in order, recording each success. A genuine ssh
+// failure aborts and is returned; an ErrStateWrite does not — the tunnel
+// is real and only its record failed, so Up keeps going and returns the
+// joined state-write errors at the end (contract amendment B1: the cache
+// is never truth, so a cache failure must never stop real tunnels).
 func (e Engine) Up(ctx context.Context, host, set string, specs []string) error {
 	alive, err := e.CheckMaster(ctx, host)
 	if err != nil {
@@ -200,12 +203,17 @@ func (e Engine) Up(ctx context.Context, host, set string, specs []string) error 
 			return err
 		}
 	}
+	var stateErrs []error
 	for _, spec := range specs {
 		if err := e.Forward(ctx, host, set, spec); err != nil {
+			if errors.Is(err, ErrStateWrite) {
+				stateErrs = append(stateErrs, err)
+				continue
+			}
 			return err
 		}
 	}
-	return nil
+	return errors.Join(stateErrs...)
 }
 
 // DownSet cancels every spec of the set — the given (desired) specs plus any

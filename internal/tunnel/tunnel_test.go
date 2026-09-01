@@ -202,6 +202,34 @@ func TestEngine_Up_FirstErrorAborts(t *testing.T) {
 	}
 }
 
+// Contract amendment B1: a cache-write failure must never stop real
+// tunnels — Up keeps forwarding and reports the joined ErrStateWrite at
+// the end.
+func TestEngine_Up_ContinuesOnStateWriteFailure(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	// Block the host's state-file slot with a directory: every record fails
+	// while every ssh call succeeds.
+	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
+		t.Fatalf("Mkdir() err = %v", err)
+	}
+
+	err := e.Up(context.Background(), "ubuntu", "web", []string{"3000:localhost:3000", "3001:localhost:3001"})
+	if !errors.Is(err, tunnel.ErrStateWrite) {
+		t.Fatalf("Up() err = %v, want joined ErrStateWrite", err)
+	}
+	want := []string{
+		"ssh -O check ubuntu",
+		"ssh -O forward -L 3000:localhost:3000 ubuntu",
+		"ssh -O forward -L 3001:localhost:3001 ubuntu",
+	}
+	if got := r.CallKeys(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Up() calls = %q, want %q (all forwards attempted)", got, want)
+	}
+}
+
 func TestEngine_DownSet(t *testing.T) {
 	t.Parallel()
 	r := fakerun.New()
