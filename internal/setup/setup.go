@@ -27,7 +27,8 @@ const Header = "# ─── managed by sasash. hand-editable; unknown lines are 
 // Status reports which bootstrap pieces are already in place.
 type Status struct {
 	// IncludePresent is true when ~/.ssh/config already includes
-	// sasash.conf, in any equivalent spelling, anywhere in the file.
+	// sasash.conf, in any equivalent spelling, in the global section —
+	// before any Host or Match block, where ssh applies it unconditionally.
 	IncludePresent bool
 	// ConfPresent is true when ~/.ssh/config.d/sasash.conf exists.
 	ConfPresent bool
@@ -66,13 +67,14 @@ func Check(home string) (Status, error) {
 }
 
 // Ensure brings home to the bootstrapped state. It is idempotent: pieces
-// already in place are left byte-for-byte untouched, and an equivalent
-// Include anywhere in ~/.ssh/config means the config is not rewritten.
+// already in place are left byte-for-byte untouched, and an effective
+// equivalent Include in ~/.ssh/config means the config is not rewritten.
+// The Include target is created before the line that points at it.
 func Ensure(home string) error {
-	if err := ensureInclude(home); err != nil {
+	if err := ensureConf(home); err != nil {
 		return err
 	}
-	if err := ensureConf(home); err != nil {
+	if err := ensureInclude(home); err != nil {
 		return err
 	}
 	return os.MkdirAll(cmDir(home), 0o700)
@@ -96,15 +98,24 @@ func ensureInclude(home string) error {
 		return nil
 	}
 
+	// Write through a symlinked config rather than replacing it: WriteAtomic
+	// renames over its target, and the rename must land on the real file so
+	// a dotfiles-managed link survives.
+	writePath := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		writePath = resolved
+	}
+
 	f := sshconf.Parse(path, append([]byte(IncludeLine+terminatorStyle(data)), data...))
-	if info, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(writePath); err == nil {
 		f.Perm = info.Mode().Perm()
 	}
-	return f.WriteAtomic(path)
+	return f.WriteAtomic(writePath)
 }
 
 // ensureConf creates sasash.conf with the managed-file header. An existing
-// file is never overwritten, whatever it contains.
+// file is never overwritten, whatever it contains; Lstat means even a
+// symlink or a broken one counts as existing.
 func ensureConf(home string) error {
 	path := confPath(home)
 	if _, err := os.Lstat(path); err == nil {
@@ -115,18 +126,29 @@ func ensureConf(home string) error {
 	return sshconf.Parse(path, []byte(Header+"\n")).WriteAtomic(path)
 }
 
-// hasInclude reports whether any Include directive in f names sasash.conf.
-// ssh resolves a relative Include against ~/.ssh and expands a leading tilde,
-// so all equivalent spellings count.
+// hasInclude reports whether an Include directive in f's global section names
+// sasash.conf. ssh resolves a relative Include against ~/.ssh, expands a
+// leading tilde or %d, and globs, so all equivalent spellings count. An
+// Include inside a Host or Match block does not: ssh applies it only when the
+// block matches, so the bootstrap is not in effect.
 func hasInclude(home string, f *sshconf.File) bool {
 	target := filepath.Clean(confPath(home))
 	for _, line := range f.Lines() {
-		if line.Kind != sshconf.KindDirective || !strings.EqualFold(line.Keyword, "Include") {
+		if line.Kind != sshconf.KindDirective {
 			continue
 		}
-		for _, field := range line.Fields {
-			if resolveInclude(home, field) == target {
-				return true
+		switch strings.ToLower(line.Keyword) {
+		case "host", "match":
+			return false
+		case "include":
+			for _, field := range line.Fields {
+				p := resolveInclude(home, field)
+				if p == target {
+					return true
+				}
+				if ok, _ := filepath.Match(p, target); ok {
+					return true
+				}
 			}
 		}
 	}
@@ -141,6 +163,8 @@ func resolveInclude(home, field string) string {
 		p = home
 	case strings.HasPrefix(p, "~/"):
 		p = filepath.Join(home, p[2:])
+	case strings.HasPrefix(p, "%d/"):
+		p = filepath.Join(home, p[3:])
 	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(home, ".ssh", p)

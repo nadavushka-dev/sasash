@@ -50,8 +50,8 @@ func TestEnsure_Include(t *testing.T) {
 		},
 		{
 			name:   "host star first gets include above it",
-			config: "Host *\n  User nadav\n",
-			want:   "Include ~/.ssh/config.d/sasash.conf\nHost *\n  User nadav\n",
+			config: "Host *\n  User dev\n",
+			want:   "Include ~/.ssh/config.d/sasash.conf\nHost *\n  User dev\n",
 		},
 		{
 			name:   "comments and hosts preserved byte for byte",
@@ -60,8 +60,28 @@ func TestEnsure_Include(t *testing.T) {
 		},
 		{
 			name:   "already included tilde form",
-			config: "Host web\n  HostName 192.0.2.10\nInclude ~/.ssh/config.d/sasash.conf\n",
-			want:   "Host web\n  HostName 192.0.2.10\nInclude ~/.ssh/config.d/sasash.conf\n",
+			config: "Include ~/.ssh/config.d/sasash.conf\nHost web\n  HostName 192.0.2.10\n",
+			want:   "Include ~/.ssh/config.d/sasash.conf\nHost web\n  HostName 192.0.2.10\n",
+		},
+		{
+			name:   "already included via glob",
+			config: "Include ~/.ssh/config.d/*.conf\nHost *\n",
+			want:   "Include ~/.ssh/config.d/*.conf\nHost *\n",
+		},
+		{
+			name:   "already included percent d form",
+			config: "Include %d/.ssh/config.d/sasash.conf\n",
+			want:   "Include %d/.ssh/config.d/sasash.conf\n",
+		},
+		{
+			name:   "include inside host block does not count",
+			config: "Host web\n  HostName 192.0.2.10\n  Include ~/.ssh/config.d/sasash.conf\n",
+			want:   "Include ~/.ssh/config.d/sasash.conf\nHost web\n  HostName 192.0.2.10\n  Include ~/.ssh/config.d/sasash.conf\n",
+		},
+		{
+			name:   "include inside match block does not count",
+			config: "Match all\nInclude ~/.ssh/config.d/sasash.conf\n",
+			want:   "Include ~/.ssh/config.d/sasash.conf\nMatch all\nInclude ~/.ssh/config.d/sasash.conf\n",
 		},
 		{
 			name:   "already included relative form",
@@ -105,13 +125,13 @@ func TestEnsure_Include(t *testing.T) {
 		},
 		{
 			name:   "crlf file keeps crlf",
-			config: "Host *\r\n  User nadav\r\n",
-			want:   "Include ~/.ssh/config.d/sasash.conf\r\nHost *\r\n  User nadav\r\n",
+			config: "Host *\r\n  User dev\r\n",
+			want:   "Include ~/.ssh/config.d/sasash.conf\r\nHost *\r\n  User dev\r\n",
 		},
 		{
 			name:   "no trailing newline preserved",
-			config: "Host *\n  User nadav",
-			want:   "Include ~/.ssh/config.d/sasash.conf\nHost *\n  User nadav",
+			config: "Host *\n  User dev",
+			want:   "Include ~/.ssh/config.d/sasash.conf\nHost *\n  User dev",
 		},
 	}
 	for _, tt := range tests {
@@ -135,7 +155,7 @@ func TestEnsure_Include(t *testing.T) {
 func TestEnsure_Idempotent(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
-	writeConfig(t, home, "Host *\n  User nadav\n")
+	writeConfig(t, home, "Host *\n  User dev\n")
 
 	if err := setup.Ensure(home); err != nil {
 		t.Fatalf("first Ensure() failed: %v", err)
@@ -273,6 +293,49 @@ func TestEnsure_Perms(t *testing.T) {
 	})
 }
 
+func TestEnsure_SymlinkedConfig(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	// A config symlinked into a dotfiles repo must stay a symlink; the
+	// inserted line must land in the link's target.
+	dotfiles := filepath.Join(home, "dotfiles")
+	if err := os.MkdirAll(dotfiles, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%q) failed: %v", dotfiles, err)
+	}
+	real := filepath.Join(dotfiles, "ssh_config")
+	if err := os.WriteFile(real, []byte("Host *\n  User dev\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q) failed: %v", real, err)
+	}
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%q) failed: %v", sshDir, err)
+	}
+	link := filepath.Join(sshDir, "config")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("Symlink(%q) failed: %v", link, err)
+	}
+
+	if err := setup.Ensure(home); err != nil {
+		t.Fatalf("Ensure(%q) failed: %v", home, err)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat(config) failed: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("config mode = %v, want still a symlink", info.Mode())
+	}
+	data, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) failed: %v", real, err)
+	}
+	want := setup.IncludeLine + "\nHost *\n  User dev\n"
+	if got := string(data); got != want {
+		t.Errorf("Ensure() link target = %q, want %q", got, want)
+	}
+}
+
 func TestEnsure_Errors(t *testing.T) {
 	t.Parallel()
 
@@ -307,6 +370,9 @@ func TestCheck_Errors(t *testing.T) {
 
 	t.Run("ssh dir unreadable", func(t *testing.T) {
 		t.Parallel()
+		if os.Geteuid() == 0 {
+			t.Skip("chmod 000 does not stop root")
+		}
 		home := t.TempDir()
 		writeConfig(t, home, setup.IncludeLine+"\n")
 		dir := filepath.Join(home, ".ssh")
