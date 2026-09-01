@@ -179,15 +179,21 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner) Model {
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)
-	l.SetFilteringEnabled(false) // the filter slice is SASASH.1.5
-	// Only navigation reaches the list. The remaining default bindings —
-	// paging on bare b/f/u/d/h/l, esc/q quit, filtering — stay zero-valued,
-	// which never matches; quit is owned at the app level.
+	l.SetFilteringEnabled(true) // '/' filters what FilterValue exposes: alias + tags
+	l.Styles.NoItems = styles.Empty
+	// Only navigation and filtering reach the list. The remaining default
+	// bindings — paging on bare b/f/u/d/h/l, esc/q quit, the full-help
+	// toggle — stay zero-valued, which never matches; quit and help are
+	// owned at the app level.
 	l.KeyMap = list.KeyMap{
-		CursorUp:   keys.Up,
-		CursorDown: keys.Down,
-		GoToStart:  keys.Top,
-		GoToEnd:    keys.Bottom,
+		CursorUp:             keys.Up,
+		CursorDown:           keys.Down,
+		GoToStart:            keys.Top,
+		GoToEnd:              keys.Bottom,
+		Filter:               keys.Filter,
+		ClearFilter:          keys.ClearFilter,
+		CancelWhileFiltering: key.NewBinding(key.WithKeys("esc")),
+		AcceptWhileFiltering: key.NewBinding(key.WithKeys("enter")),
 	}
 
 	hm := help.New()
@@ -304,6 +310,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, clipCmd(m.runner, strings.Join(sshCommand(host.Alias), " "))
+			case key.Matches(msg, m.keys.Help):
+				m.help.ShowAll = !m.help.ShowAll
+				m.list.SetSize(m.listWidth(), m.contentHeight())
+				return m, nil
+			case key.Matches(msg, m.keys.ClearFilter):
+				if m.help.ShowAll {
+					m.help.ShowAll = false
+					m.list.SetSize(m.listWidth(), m.contentHeight())
+					return m, nil
+				}
+				// Not consumed: esc falls through to the list, which
+				// clears an applied filter (and is a no-op otherwise).
 			case key.Matches(msg, m.keys.HalfDown):
 				for i := 0; i < m.halfPage(); i++ {
 					m.list.CursorDown()
@@ -346,14 +364,24 @@ func (m Model) listWidth() int {
 	return w
 }
 
-// contentHeight is the pane area: total minus header (2) and bottom
-// chrome (2: command preview + help line).
+// contentHeight is the pane area: total minus header (2), the preview
+// line, and the help block — one line normally, taller while `?` has it
+// expanded.
 func (m Model) contentHeight() int {
-	h := m.height - 4
+	h := m.height - 3 - lipgloss.Height(m.helpView())
 	if h < 1 {
 		h = 1
 	}
 	return h
+}
+
+// helpView renders the bottom help block, generated from the key
+// bindings. help.Width makes bubbles truncate with an ellipsis, but its
+// truncation has an off-by-a-few edge (an item landing within two cells
+// of the limit is added anyway, and everything after it too), so the
+// block gets the same hard clamp as the rest of the chrome.
+func (m Model) helpView() string {
+	return m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(m.keys))
 }
 
 func (m Model) View() string {
@@ -362,13 +390,22 @@ func (m Model) View() string {
 	}
 
 	header := " " + m.styles.Title.Render("sasash")
+	if m.list.FilterState() == list.FilterApplied {
+		header += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
+	}
 
 	var body string
 	if len(m.hosts) == 0 {
 		empty := m.styles.Empty.Render("no hosts found — add a Host block to ~/.ssh/config")
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, empty)
 	} else {
-		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", m.detailView())
+		right := m.detailView()
+		if len(m.list.VisibleItems()) == 0 {
+			// The list pane stays (it holds the filter input); only the
+			// detail side names the fix key.
+			right = m.styles.Empty.Render("no hosts match — esc to clear the filter")
+		}
+		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", right)
 		// A long alias + hostname can outgrow the terminal; truncate every
 		// line so the frame never wraps and pushes the alt screen around.
 		panes = m.styles.Clamp.MaxWidth(m.width).Render(panes)
@@ -382,12 +419,7 @@ func (m Model) View() string {
 	// Same width clamp as the panes: a long alias (or notice) must not
 	// wrap the preview line and push the alt screen around.
 	preview = m.styles.Clamp.MaxWidth(m.width).Render(preview)
-	// help.Width makes bubbles truncate with an ellipsis, but its
-	// truncation has an off-by-a-few edge (an item landing within two
-	// cells of the limit is added anyway, and everything after it too),
-	// so the line gets the same hard clamp as the rest of the chrome.
-	helpLine := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(m.keys))
-	return strings.Join([]string{header, "", body, preview, helpLine}, "\n")
+	return strings.Join([]string{header, "", body, preview, m.helpView()}, "\n")
 }
 
 // detailView renders the right pane for the selected host: one line per

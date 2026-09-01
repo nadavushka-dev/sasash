@@ -5,17 +5,20 @@ import "github.com/charmbracelet/bubbles/key"
 // KeyMap names every binding so the help line is generated from the
 // bindings themselves (SPEC §5 addendum), never hand-maintained.
 type KeyMap struct {
-	Up        key.Binding
-	Down      key.Binding
-	Top       key.Binding
-	Bottom    key.Binding
-	HalfDown  key.Binding
-	HalfUp    key.Binding
-	Connect   key.Binding
-	CopyAddr  key.Binding
-	CopyCmd   key.Binding
-	Quit      key.Binding
-	ForceQuit key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Top         key.Binding
+	Bottom      key.Binding
+	HalfDown    key.Binding
+	HalfUp      key.Binding
+	Connect     key.Binding
+	CopyAddr    key.Binding
+	CopyCmd     key.Binding
+	Filter      key.Binding
+	ClearFilter key.Binding
+	Help        key.Binding
+	Quit        key.Binding
+	ForceQuit   key.Binding
 }
 
 // DefaultKeyMap is the vim-style layout. Bare h/l/b/f/u/d stay unbound:
@@ -23,31 +26,35 @@ type KeyMap struct {
 // single-letter action keys of later slices.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
-		Up:        key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "up")),
-		Down:      key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("↓/j", "down")),
-		Top:       key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g", "first")),
-		Bottom:    key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G", "last")),
-		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("ctrl+d", "½ page down")),
-		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
-		Connect:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
-		CopyAddr:  key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
-		CopyCmd:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
-		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
+		Up:          key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "up")),
+		Down:        key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("↓/j", "down")),
+		Top:         key.NewBinding(key.WithKeys("g", "home"), key.WithHelp("g", "first")),
+		Bottom:      key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G", "last")),
+		HalfDown:    key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("ctrl+d", "½ page down")),
+		HalfUp:      key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
+		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
+		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
+		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
+		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
+		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
 	}
 }
 
-// ShortHelp implements help.KeyMap; the help bar truncates by width.
+// ShortHelp implements help.KeyMap; the help bar truncates by width, so
+// the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.CopyAddr, k.CopyCmd, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Help, k.CopyAddr, k.CopyCmd, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
-// FullHelp implements help.KeyMap, grouped navigation / actions / general.
-// The full help view itself arrives with the help slice (SASASH.1.5).
+// FullHelp implements help.KeyMap, grouped navigation / actions / general;
+// `?` expands the help bar into these columns.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
 		{k.Connect, k.CopyAddr, k.CopyCmd},
-		{k.Quit},
+		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 	}
 }

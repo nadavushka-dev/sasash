@@ -1,6 +1,9 @@
 package ui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 // RefreshTick lets the external test package drive the live-refresh loop
 // without waiting out the real tick interval.
@@ -19,3 +22,6 @@ func ClipArgv(text string) []string    { return clipArgv(text) }
 // SSHExec exposes the handoff process builder so tests can assert the
 // built argv actually reaches the *exec.Cmd.
 var SSHExec = sshExec
+
+// FilterState exposes the list's filter state for the filter-flow tests.
+func FilterState(m Model) list.FilterState { return m.list.FilterState() }
