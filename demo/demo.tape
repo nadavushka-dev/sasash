@@ -3,7 +3,7 @@
 #
 # NOTE: vhs resolves Screenshot by frame index into the recorded frame stream,
 # so which frame lands in a PNG is approximate — hence the neutral frame-* names.
-# The gif and the per-frame demo.txt are the trustworthy artifacts.
+# The gif and the demo.txt frame dump are the trustworthy artifacts.
 
 Output demo/out/demo.gif
 Output demo/out/demo.txt
