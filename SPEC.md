@@ -217,10 +217,14 @@ Tools that don't read ssh_config get a template. No plugin system, no code per t
 # ~/.config/sasash/actions.toml
 [rdp]
 cmd = "xfreerdp /u:{user} /v:{addr} /dynamic-resolution /cert:ignore"
-env = { DISPLAY = "$(launchctl getenv DISPLAY)" }
+env = { WLR_NO_HARDWARE_CURSORS = "1" }
 ```
 
 Substitutions: `{host}` `{user}` `{addr}` `{port}`. sasash never learns what the tool is.
+
+`env` values pass to the child verbatim — sasash never shell-evaluates them; if a
+value needs evaluation, write it explicitly into `cmd`, e.g.
+`cmd = "sh -c 'DISPLAY=$(launchctl getenv DISPLAY) xfreerdp /v:{addr}'"`.
 
 `herdr` needs no entry — it reads `~/.ssh/config`, so `herdr --remote ubuntu` just works.
 
