@@ -34,8 +34,7 @@ func main() {
 
 func dispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "sasash: TUI not built yet; try `sasash help`")
-		return 1
+		args = []string{"tui"} // the default entry is the TUI (tui.go)
 	}
 	switch name := args[0]; name {
 	case "help", "-h", "--help":

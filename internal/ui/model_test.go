@@ -1,0 +1,191 @@
+package ui_test
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
+	"github.com/nadavushka-dev/sasash/internal/ui"
+)
+
+// testHosts builds n hosts host0..host{n-1} on RFC 5737 addresses.
+func testHosts(n int) []hostmodel.Host {
+	hosts := make([]hostmodel.Host, n)
+	for i := range hosts {
+		hosts[i] = hostmodel.Host{
+			Alias: fmt.Sprintf("host%d", i),
+			Paths: []probe.Path{{Name: "lan", Host: fmt.Sprintf("192.0.2.%d", i+1)}},
+		}
+	}
+	return hosts
+}
+
+// sized builds a model over hosts, with a fake dialer so nothing ever
+// dials, and delivers the initial window size.
+func sized(t *testing.T, hosts []hostmodel.Host) ui.Model {
+	t.Helper()
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond})
+	return update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+}
+
+// update runs one Update and asserts the model type is preserved.
+func update(t *testing.T, m ui.Model, msg tea.Msg) ui.Model {
+	t.Helper()
+	next, _ := m.Update(msg)
+	nm, ok := next.(ui.Model)
+	if !ok {
+		t.Fatalf("Update() returned %T, want ui.Model", next)
+	}
+	return nm
+}
+
+func keyMsg(s string) tea.KeyMsg {
+	switch s {
+	case "ctrl+d":
+		return tea.KeyMsg{Type: tea.KeyCtrlD}
+	case "ctrl+u":
+		return tea.KeyMsg{Type: tea.KeyCtrlU}
+	case "ctrl+c":
+		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	default:
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	}
+}
+
+func TestModel_Update_KeyDispatch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		keys      []string
+		wantAlias string
+	}{
+		{name: "j moves down", keys: []string{"j"}, wantAlias: "host1"},
+		{name: "arrow down moves down", keys: []string{"down"}, wantAlias: "host1"},
+		{name: "k clamps at top", keys: []string{"k"}, wantAlias: "host0"},
+		{name: "arrow up after j returns", keys: []string{"j", "up"}, wantAlias: "host0"},
+		{name: "G jumps to bottom", keys: []string{"G"}, wantAlias: "host4"},
+		{name: "g returns to top", keys: []string{"G", "g"}, wantAlias: "host0"},
+		{name: "ctrl+d half-pages down clamped to last", keys: []string{"ctrl+d"}, wantAlias: "host4"},
+		{name: "ctrl+u half-pages back up", keys: []string{"G", "ctrl+u"}, wantAlias: "host0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := sized(t, testHosts(5))
+			for _, k := range tt.keys {
+				m = update(t, m, keyMsg(k))
+			}
+			got, ok := m.Selected()
+			if !ok {
+				t.Fatalf("Selected() ok = false, want true")
+			}
+			if got.Alias != tt.wantAlias {
+				t.Errorf("Selected().Alias = %v, want %v", got.Alias, tt.wantAlias)
+			}
+		})
+	}
+}
+
+func TestModel_Update_Quit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "q quits", key: "q"},
+		{name: "ctrl+c force-quits", key: "ctrl+c"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := sized(t, testHosts(2))
+			_, cmd := m.Update(keyMsg(tt.key))
+			if cmd == nil {
+				t.Fatalf("Update(%q) cmd = nil, want tea.Quit", tt.key)
+			}
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Errorf("Update(%q) cmd() = %T, want tea.QuitMsg", tt.key, cmd())
+			}
+		})
+	}
+}
+
+func TestModel_Update_ProbeFlow(t *testing.T) {
+	t.Parallel()
+	hosts := []hostmodel.Host{
+		{Alias: "web", Paths: []probe.Path{
+			{Name: "lan", Host: "192.0.2.10"},
+			{Name: "ts", Host: "198.51.100.5"},
+		}},
+		{Alias: "db", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.30"}}},
+	}
+	dialer := fakedial.New().
+		Down("192.0.2.10:22").
+		Up("198.51.100.5:22", 20*time.Millisecond).
+		Up("192.0.2.30:22", 5*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	if view := m.View(); !strings.Contains(view, "◌") {
+		t.Errorf("View() before probe = %q, want pending glyph ◌", view)
+	}
+
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatalf("Init() = nil, want probe cmd")
+	}
+	next, tick := m.Update(cmd()) // run the probe through the fake dialer
+	m = next.(ui.Model)
+	if tick == nil {
+		t.Errorf("Update(probeDoneMsg) cmd = nil, want refresh tick")
+	}
+
+	view := m.View()
+	// Selected host is web: lan down, ts up 20ms and therefore the first
+	// alive path in config order — the active one.
+	for _, want := range []string{"web", "db", "○", "down", "●", "20ms", "← active", "$", "ssh web"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View() after probe missing %q\nview:\n%s", want, view)
+		}
+	}
+}
+
+func TestModel_View_Smoke(t *testing.T) {
+	t.Parallel()
+	m := sized(t, testHosts(3))
+	view := m.View()
+	for _, want := range []string{"sasash", "host0", "host1", "host2", "paths", "ssh host0"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View() missing %q", want)
+		}
+	}
+}
+
+func TestModel_View_NoHosts(t *testing.T) {
+	t.Parallel()
+	m := sized(t, nil)
+	if view := m.View(); !strings.Contains(view, "no hosts found") {
+		t.Errorf("View() = %q, want empty-state sentence", view)
+	}
+	if _, ok := m.Selected(); ok {
+		t.Errorf("Selected() ok = true, want false for empty list")
+	}
+	// q must still quit from the empty state.
+	_, cmd := m.Update(keyMsg("q"))
+	if cmd == nil {
+		t.Fatalf("Update(q) cmd = nil, want tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Errorf("Update(q) cmd() = %T, want tea.QuitMsg", cmd())
+	}
+}
