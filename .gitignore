@@ -2,3 +2,7 @@
 /dist/
 *.test
 coverage.out
+
+# cross-session task board (local only, never published)
+.pin-board/
+.squad/
