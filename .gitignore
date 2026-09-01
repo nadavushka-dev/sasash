@@ -1,0 +1,4 @@
+/sasash
+/dist/
+*.test
+coverage.out
