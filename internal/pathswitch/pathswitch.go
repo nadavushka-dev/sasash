@@ -20,7 +20,11 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
 )
 
-// Header precedes a freshly generated variant group, from SPEC §2.
+// Header precedes a generated variant group (SPEC §2). It is not cosmetic:
+// anchoredStarts uses this exact line as the on-disk ownership token, so
+// changing the text — even the dash — silently unmanages every group already
+// written to users' configs; it cannot change without a migration. A test
+// pins it against SPEC.md's literal.
 const Header = "# pinned variants, generated — for when you want to force one path"
 
 // Result describes one path-switch outcome.
@@ -35,6 +39,13 @@ type Result struct {
 	// Changed is false when the host has fewer than two named paths; no
 	// write happens then, and the caller renders the "only one path" note.
 	Changed bool
+	// Unmanaged lists live path names whose "<alias>.<name>" block was left
+	// as-is because the generator does not own it — hand-edited, shadowed by
+	// a user block, or below a break in the generated group. Those pinned
+	// variants may hold stale addresses sasash will not correct; callers
+	// should surface them ("N pinned variants left as-is"). Nil when every
+	// variant is managed.
+	Unmanaged []string
 }
 
 // Cycle advances alias to its next named path: the one after the path whose
@@ -123,11 +134,12 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 
 	h.Set("HostName", res.To.Host)
 
-	out := regenVariants(f, alias, named)
+	out, unmanaged := regenVariants(f, alias, named)
 	if err := out.WriteAtomic(confPath); err != nil {
 		return Result{}, err
 	}
 	res.Changed = true
+	res.Unmanaged = unmanaged
 	return res, nil
 }
 
@@ -140,14 +152,15 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 // authoritative under first-value-wins). A fresh group is inserted at the
 // end of the host's block, stopping short of a comment run that leads into a
 // following Host line so that host keeps its meta; appends to an existing
-// group stay contiguous with it.
-func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.File {
+// group stay contiguous with it. unmanaged reports the live path names whose
+// blocks were left as-is, in file order.
+func regenVariants(f *sshconf.File, alias string, named []probe.Path) (out *sshconf.File, unmanaged []string) {
 	f2 := sshconf.Parse(f.Path, f.Bytes())
 	main, ok := f2.Host(alias)
 	if !ok {
 		// Unreachable: switchPath found the block before the rewrite. Keep
 		// the HostName edit rather than dereferencing nil if that changes.
-		return f
+		return f, nil
 	}
 
 	term := "\n"
@@ -202,9 +215,11 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 			// user extended by hand, or any block outside the region the
 			// generator provably wrote: never rewrite, never delete. When
 			// it shadows a live path name, skip generating a duplicate —
-			// first-value-wins makes the user's block authoritative.
-			if live {
+			// first-value-wins makes the user's block authoritative — and
+			// report it so the caller can say the pin was left as-is.
+			if live && !have[suffix] {
 				have[suffix] = true
+				unmanaged = append(unmanaged, suffix)
 			}
 			continue
 		}
@@ -265,9 +280,9 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 		raw = append(raw[:e.start], append(append([]string(nil), e.repl...), raw[e.end:]...)...)
 	}
 
-	out := sshconf.Parse(f.Path, []byte(strings.Join(raw, "")))
+	out = sshconf.Parse(f.Path, []byte(strings.Join(raw, "")))
 	out.Perm = f.Perm
-	return out
+	return out, unmanaged
 }
 
 // directivesEnd returns the index just past the block's last directive line:

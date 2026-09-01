@@ -3,6 +3,7 @@ package pathswitch_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -124,7 +125,7 @@ Host ubuntu
 			if err != nil {
 				t.Fatalf("Cycle() failed: %v", err)
 			}
-			if got != tt.res {
+			if !reflect.DeepEqual(got, tt.res) {
 				t.Errorf("Cycle() = %+v, want %+v", got, tt.res)
 			}
 			if gotFile := read(t, path); gotFile != tt.want {
@@ -368,8 +369,12 @@ Host web.lan web-lan
   HostName 203.0.113.44
 `
 	path := write(t, in)
-	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+	res, err := pathswitch.Cycle(path, "web")
+	if err != nil {
 		t.Fatalf("Cycle() failed: %v", err)
+	}
+	if !reflect.DeepEqual(res.Unmanaged, []string{"lan"}) {
+		t.Errorf("Cycle() Unmanaged = %v, want [lan]", res.Unmanaged)
 	}
 	want := `# @sasash path lan 192.0.2.10
 # @sasash path ts 198.51.100.5
@@ -438,8 +443,12 @@ Host web.lan
   IdentityFile ~/.ssh/special_ed25519
 `
 	path := write(t, in)
-	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+	res, err := pathswitch.Cycle(path, "web")
+	if err != nil {
 		t.Fatalf("Cycle() failed: %v", err)
+	}
+	if !reflect.DeepEqual(res.Unmanaged, []string{"lan"}) {
+		t.Errorf("Cycle() Unmanaged = %v, want [lan]", res.Unmanaged)
 	}
 	want := `# @sasash path lan 192.0.2.10
 # @sasash path ts 198.51.100.5
@@ -455,6 +464,20 @@ Host web.lan
 `
 	if got := read(t, path); got != want {
 		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// Header is a persisted on-disk ownership token: anchoring depends on the
+// exact bytes, so it must stay identical to SPEC.md's literal forever (a
+// change would silently unmanage every group already written).
+func TestHeader_PinnedToSpec(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join("..", "..", "SPEC.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(SPEC.md) failed: %v", err)
+	}
+	if !strings.Contains(string(data), pathswitch.Header+"\n") {
+		t.Errorf("Header %q not found in SPEC.md; it cannot change without a migration", pathswitch.Header)
 	}
 }
 
@@ -590,12 +613,18 @@ Host ubuntu.ts
   HostName 198.51.100.5
 `
 	path := write(t, in)
-	if _, err := pathswitch.Cycle(path, "ubuntu"); err != nil {
+	res, err := pathswitch.Cycle(path, "ubuntu")
+	if err != nil {
 		t.Fatalf("Cycle() failed: %v", err)
 	}
 	got := read(t, path)
 	if !strings.Contains(got, "# my note about ts\nHost ubuntu.ts\n") {
 		t.Errorf("Cycle() dropped the user comment between variants:\n%q", got)
+	}
+	// The comment breaks the anchored chain: the ts block below it is left
+	// as-is and reported, so the TUI can tell the user the pin is theirs now.
+	if !reflect.DeepEqual(res.Unmanaged, []string{"ts"}) {
+		t.Errorf("Cycle() Unmanaged = %v, want [ts]", res.Unmanaged)
 	}
 }
 
