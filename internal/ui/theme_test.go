@@ -64,6 +64,9 @@ func TestThemes_CanonicalTokens(t *testing.T) {
 		{name: "tokyonight", accent: "#7aa2f7", bg: "#1a1b26"},
 		{name: "nord", accent: "#88c0d0", bg: "#2e3440"},
 	}
+	if len(ui.Themes) != len(tests) {
+		t.Fatalf("len(Themes) = %v, want %v", len(ui.Themes), len(tests))
+	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -109,6 +112,9 @@ func TestModel_ApplyTheme_StylesFollowPalette(t *testing.T) {
 	}
 	if got := ui.HelpStyles(m).ShortKey.GetForeground(); got != ui.Mocha.FgDim {
 		t.Errorf("help ShortKey foreground after t = %v, want mocha %v", got, ui.Mocha.FgDim)
+	}
+	if got := ui.HelpStyles(m).FullDesc.GetForeground(); got != ui.Mocha.FgDim {
+		t.Errorf("help FullDesc foreground after t = %v, want mocha %v", got, ui.Mocha.FgDim)
 	}
 }
 

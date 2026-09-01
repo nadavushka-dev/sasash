@@ -225,6 +225,26 @@ func TestModel_View_Smoke(t *testing.T) {
 			t.Errorf("View() missing %q", want)
 		}
 	}
+
+	// The list look is a SPEC §5 invariant the delegate provides: the
+	// selected row carries the › prefix and unselected rows indent two
+	// columns to align under it. A zero-valued delegate (a lost
+	// SetDelegate) drops both.
+	var selected, unselected bool
+	for _, line := range strings.Split(view, "\n") {
+		if strings.HasPrefix(line, "› host0") {
+			selected = true
+		}
+		if strings.HasPrefix(line, "  host1") {
+			unselected = true
+		}
+	}
+	if !selected {
+		t.Errorf("View() has no ›-prefixed selected row:\n%s", view)
+	}
+	if !unselected {
+		t.Errorf("View() has no two-column-indented unselected row:\n%s", view)
+	}
 }
 
 // peakDialer records the highest number of concurrent dials it has seen.
