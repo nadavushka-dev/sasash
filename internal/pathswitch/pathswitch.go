@@ -44,7 +44,8 @@ type Result struct {
 	// a user block, or below a break in the generated group. Those pinned
 	// variants may hold stale addresses sasash will not correct; callers
 	// should surface them ("N pinned variants left as-is"). Nil when every
-	// variant is managed.
+	// variant is managed — and always nil when Changed is false, since a
+	// no-op inspects nothing; check Changed before reading nil as "all good".
 	Unmanaged []string
 }
 
@@ -217,6 +218,11 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) (out *sshc
 			// it shadows a live path name, skip generating a duplicate —
 			// first-value-wins makes the user's block authoritative — and
 			// report it so the caller can say the pin was left as-is.
+			// The !have guard is not just dedup: walking in file order, it
+			// attributes each name to the block ssh actually resolves, so a
+			// managed block ABOVE a foreign duplicate reports nothing (ssh
+			// uses the managed one) while a foreign block above a managed
+			// one reports the name. Do not "simplify" it away.
 			if live && !have[suffix] {
 				have[suffix] = true
 				unmanaged = append(unmanaged, suffix)
