@@ -125,45 +125,54 @@ func tokenize(cmd string) ([]string, error) {
 	return words, nil
 }
 
-// substitute replaces {host} {user} {addr} {port} in one word. An unknown
-// placeholder, an unclosed {, or a referenced placeholder whose Subst value
-// is empty is an error — never a silently broken word.
+// substitute replaces {host} {user} {addr} {port} in one word; {{ and }}
+// are escapes for literal braces (for brace-using tools like docker or awk).
+// An unknown placeholder, an unclosed {, or a referenced placeholder whose
+// Subst value is empty is an error — never a silently broken word.
 func substitute(word string, s Subst) (string, error) {
-	if !strings.Contains(word, "{") {
+	if !strings.Contains(word, "{") && !strings.Contains(word, "}") {
 		return word, nil
 	}
 	var out strings.Builder
-	rest := word
-	for {
-		open := strings.IndexByte(rest, '{')
-		if open < 0 {
-			out.WriteString(rest)
-			return out.String(), nil
-		}
-		out.WriteString(rest[:open])
-		rest = rest[open+1:]
-		clos := strings.IndexByte(rest, '}')
-		if clos < 0 {
-			return "", fmt.Errorf("unclosed placeholder in %q", word)
-		}
-		name := rest[:clos]
-		rest = rest[clos+1:]
-		var val string
-		switch name {
-		case "host":
-			val = s.Host
-		case "user":
-			val = s.User
-		case "addr":
-			val = s.Addr
-		case "port":
-			val = s.Port
+	for i := 0; i < len(word); i++ {
+		switch c := word[i]; c {
+		case '}':
+			if i+1 < len(word) && word[i+1] == '}' {
+				i++
+			}
+			out.WriteByte('}')
+		case '{':
+			if i+1 < len(word) && word[i+1] == '{' {
+				out.WriteByte('{')
+				i++
+				continue
+			}
+			clos := strings.IndexByte(word[i+1:], '}')
+			if clos < 0 {
+				return "", fmt.Errorf("unclosed placeholder in %q", word)
+			}
+			name := word[i+1 : i+1+clos]
+			i += clos + 1
+			var val string
+			switch name {
+			case "host":
+				val = s.Host
+			case "user":
+				val = s.User
+			case "addr":
+				val = s.Addr
+			case "port":
+				val = s.Port
+			default:
+				return "", fmt.Errorf("unknown placeholder {%s} in %q", name, word)
+			}
+			if val == "" {
+				return "", fmt.Errorf("placeholder {%s} is empty in %q", name, word)
+			}
+			out.WriteString(val)
 		default:
-			return "", fmt.Errorf("unknown placeholder {%s} in %q", name, word)
+			out.WriteByte(c)
 		}
-		if val == "" {
-			return "", fmt.Errorf("placeholder {%s} is empty", name)
-		}
-		out.WriteString(val)
 	}
+	return out.String(), nil
 }

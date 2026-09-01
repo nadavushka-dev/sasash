@@ -93,6 +93,11 @@ func TestLoad_Valid(t *testing.T) {
 			want:    []action.Action{{Name: "c", Cmd: "x"}},
 		},
 		{
+			name:    "trailing comment after table header",
+			content: "[rdp] # remote desktop\ncmd = 'x'\n",
+			want:    []action.Action{{Name: "rdp", Cmd: "x"}},
+		},
+		{
 			name:    "multi-pair env",
 			content: "[m]\ncmd = 'x'\nenv = { B = \"2\", A = \"1\" }\n",
 			want:    []action.Action{{Name: "m", Cmd: "x", Env: map[string]string{"A": "1", "B": "2"}}},
@@ -147,6 +152,10 @@ func TestLoad_Malformed(t *testing.T) {
 		{name: "unsupported escape", content: "[a]\ncmd = \"\\u0041\"\n", wantLine: 2, wantMsg: `unsupported escape \u`},
 		{name: "trailing junk after value", content: "[a]\ncmd = 'x' 'y'\n", wantLine: 2, wantMsg: "unexpected trailing content"},
 		{name: "empty cmd", content: "[a]\ncmd = ''\n", wantLine: 2, wantMsg: "empty cmd"},
+		{name: "whitespace-only cmd", content: "[a]\ncmd = '   '\n", wantLine: 2, wantMsg: "empty cmd"},
+		{name: "missing value", content: "[a]\ncmd =\n", wantLine: 2, wantMsg: "expected a string value"},
+		{name: "empty table name", content: "[]\ncmd = 'x'\n", wantLine: 1, wantMsg: `unsupported table name ""`},
+		{name: "env unterminated value", content: "[a]\ncmd = 'x'\nenv = { A = '\n", wantLine: 3, wantMsg: "unterminated ' string"},
 		{name: "missing cmd", content: "[a]\nenv = { A = \"1\" }\n[b]\ncmd = 'x'\n", wantLine: 1, wantMsg: "table [a] has no cmd"},
 		{name: "env not inline table", content: "[a]\ncmd = 'x'\nenv = \"1\"\n", wantLine: 3, wantMsg: "inline table"},
 		{name: "env unterminated table", content: "[a]\ncmd = 'x'\nenv = { A = \"1\"\n", wantLine: 3, wantMsg: "unterminated inline table"},
@@ -246,6 +255,24 @@ func TestAction_Expand_Valid(t *testing.T) {
 			s:    subst,
 			want: action.Invocation{Argv: []string{"tool", ""}},
 		},
+		{
+			name: "double braces escape literal braces",
+			a:    action.Action{Name: "a", Cmd: "awk '{{print $1}}' {host}"},
+			s:    subst,
+			want: action.Invocation{Argv: []string{"awk", "{print $1}", "web"}},
+		},
+		{
+			name: "escaped braces mix with placeholders",
+			a:    action.Action{Name: "a", Cmd: "tool {{x}}:{port}"},
+			s:    subst,
+			want: action.Invocation{Argv: []string{"tool", "{x}:3389"}},
+		},
+		{
+			name: "lone closing brace is data",
+			a:    action.Action{Name: "a", Cmd: "tool a}b"},
+			s:    subst,
+			want: action.Invocation{Argv: []string{"tool", "a}b"}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,7 +301,8 @@ func TestAction_Expand_Errors(t *testing.T) {
 		{name: "whitespace cmd", a: action.Action{Name: "a", Cmd: "  \t "}, s: full, wantMsg: "empty cmd"},
 		{name: "unknown placeholder", a: action.Action{Name: "a", Cmd: "tool {dpi}"}, s: full, wantMsg: "unknown placeholder {dpi}"},
 		{name: "case-sensitive placeholder", a: action.Action{Name: "a", Cmd: "tool {Host}"}, s: full, wantMsg: "unknown placeholder {Host}"},
-		{name: "empty subst value", a: action.Action{Name: "a", Cmd: "tool /p:{port}"}, s: action.Subst{Host: "h", User: "u", Addr: "a"}, wantMsg: "placeholder {port} is empty"},
+		{name: "empty subst value", a: action.Action{Name: "a", Cmd: "tool /p:{port}"}, s: action.Subst{Host: "h", User: "u", Addr: "a"}, wantMsg: `placeholder {port} is empty in "/p:{port}"`},
+		{name: "empty placeholder name", a: action.Action{Name: "a", Cmd: "tool {}"}, s: full, wantMsg: "unknown placeholder {}"},
 		{name: "unclosed placeholder", a: action.Action{Name: "a", Cmd: "tool {host"}, s: full, wantMsg: "unclosed placeholder"},
 		{name: "unterminated single quote", a: action.Action{Name: "a", Cmd: "tool 'x"}, s: full, wantMsg: "unterminated ' quote"},
 		{name: "unterminated double quote", a: action.Action{Name: "a", Cmd: `tool "x`}, s: full, wantMsg: `unterminated " quote`},

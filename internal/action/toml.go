@@ -48,6 +48,11 @@ func parseActions(data string) ([]Action, error) {
 			continue
 		}
 		if s[0] == '[' {
+			// Table names are bare-key only, so a # on a header line can
+			// only start a trailing comment.
+			if i := strings.IndexByte(s, '#'); i >= 0 {
+				s = strings.TrimSpace(s[:i])
+			}
 			if !strings.HasSuffix(s, "]") {
 				return nil, &ParseError{ln, "malformed table header"}
 			}
@@ -88,7 +93,7 @@ func parseActions(data string) ([]Action, error) {
 			if !trailingOK(rem) {
 				return nil, &ParseError{ln, fmt.Sprintf("unexpected trailing content %q", rem)}
 			}
-			if val == "" {
+			if strings.TrimSpace(val) == "" {
 				return nil, &ParseError{ln, fmt.Sprintf("empty cmd in [%s]", a.Name)}
 			}
 			a.Cmd = val
