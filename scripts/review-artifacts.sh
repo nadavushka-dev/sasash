@@ -5,6 +5,9 @@
 # out/<branch-slug>/ so a reviewer sees the UI this branch produces without
 # running it. out/ is self-gitignored; nothing tracked is touched (the
 # committed demo/demo.gif is deliberately NOT updated — that is `make demo`).
+# demo/out is scratch space shared with `make demo` and gets wiped before
+# rendering — which is only safe because the cd-to-root guard above the rm
+# aborts outside a repo; keep that ordering.
 #
 # Unlike `make demo`, a missing vhs is an error here: whoever asks for review
 # artifacts needs them.
