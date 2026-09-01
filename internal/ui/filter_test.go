@@ -28,14 +28,16 @@ func taggedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 		Up("192.0.2.10:22", 20*time.Millisecond).
 		Up("192.0.2.20:22", 5*time.Millisecond)
 	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner)
+	m = ui.StaticCursor(m) // no blink tick cmds: press() executes what Update returns
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	return update(t, m, m.Init()())
 }
 
 // press feeds each key through Update the way the bubbletea loop would:
 // returned cmds are executed and any filter-match results are fed back in
-// (the list computes matches in a cmd), while everything else — blink
-// ticks and the like — is dropped so tests never sleep.
+// (the list computes matches in a cmd); other produced msgs are dropped.
+// The fixture's static cursor keeps blink ticks from ever being produced,
+// so executing the cmd tree never sleeps.
 func press(t *testing.T, m ui.Model, keys ...string) ui.Model {
 	t.Helper()
 	for _, k := range keys {
@@ -127,6 +129,16 @@ func TestModel_Update_ActionKeysSuppressedWhileFiltering(t *testing.T) {
 		t.Errorf("Calls() after y while filtering = %v, want none", calls)
 	}
 
+	// ? — this slice's own addition to the guarded switch — must type
+	// into the filter, not expand the help view.
+	m = press(t, m, "?")
+	if got := ui.FilterState(m); got != list.Filtering {
+		t.Errorf("FilterState() after ? = %v, want still Filtering", got)
+	}
+	if view := m.View(); strings.Contains(view, "clear filter / back") {
+		t.Errorf("View() after ? while filtering shows the full help:\n%s", view)
+	}
+
 	// esc cancels filtering entirely.
 	m = press(t, m, "esc")
 	if got := ui.FilterState(m); got != list.Unfiltered {
@@ -180,6 +192,62 @@ func TestModel_Update_ConnectAfterFilterApplied(t *testing.T) {
 	_, cmd := m.Update(keyMsg("enter"))
 	if cmd == nil {
 		t.Errorf("Update(enter) with filter applied cmd = nil, want ssh handoff cmd")
+	}
+}
+
+func TestModel_Update_EscClosesHelpBeforeClearingFilter(t *testing.T) {
+	t.Parallel()
+	// The ratified esc priority: with a filter applied AND the help view
+	// open, the first esc closes the help, the second clears the filter.
+	m := taggedModel(t, fakerun.New())
+	m = press(t, m, "/", "a", "l", "p", "enter", "?")
+	if view := m.View(); !strings.Contains(view, "clear filter / back") {
+		t.Fatalf("View() after ? missing the full help:\n%s", view)
+	}
+
+	m = press(t, m, "esc")
+	if view := m.View(); strings.Contains(view, "clear filter / back") {
+		t.Errorf("View() after first esc still shows the help view:\n%s", view)
+	}
+	if got := ui.FilterState(m); got != list.FilterApplied {
+		t.Errorf("FilterState() after first esc = %v, want the filter kept", got)
+	}
+
+	m = press(t, m, "esc")
+	if got := ui.FilterState(m); got != list.Unfiltered {
+		t.Errorf("FilterState() after second esc = %v, want Unfiltered", got)
+	}
+}
+
+func TestModel_View_FitsTerminal(t *testing.T) {
+	t.Parallel()
+	// Every frame must fit the terminal, whatever the chrome is doing:
+	// help expanded, long filter applied, short and narrow windows.
+	tests := []struct {
+		name          string
+		width, height int
+	}{
+		{name: "default", width: 80, height: 24},
+		{name: "narrow full help", width: 66, height: 14},
+		{name: "short tmux split", width: 60, height: 10},
+		{name: "tiny", width: 40, height: 8},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := taggedModel(t, fakerun.New())
+			m = update(t, m, tea.WindowSizeMsg{Width: tt.width, Height: tt.height})
+			m = press(t, m, "/", "a", "l", "p", "h", "a", "d", "e", "v", "t", "l", "v", "enter", "?")
+			lines := strings.Split(m.View(), "\n")
+			if len(lines) > tt.height {
+				t.Errorf("View() has %d lines, want <= %d", len(lines), tt.height)
+			}
+			for i, line := range lines {
+				if w := lipgloss.Width(line); w > tt.width {
+					t.Errorf("View() line %d width = %v, want <= %v", i, w, tt.width)
+				}
+			}
+		})
 	}
 }
 

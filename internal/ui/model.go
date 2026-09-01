@@ -179,8 +179,11 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner) Model {
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)
-	l.SetFilteringEnabled(true) // '/' filters what FilterValue exposes: alias + tags
-	l.Styles.NoItems = styles.Empty
+	// '/' filters what FilterValue exposes: alias + tags. Enabling this
+	// makes bubbles reserve a permanent title/filter row above the list —
+	// a deliberate trade: the selected host lines up with its path rows,
+	// at the cost of one row of list capacity.
+	l.SetFilteringEnabled(true)
 	// Only navigation and filtering reach the list. The remaining default
 	// bindings — paging on bare b/f/u/d/h/l, esc/q quit, the full-help
 	// toggle — stay zero-valued, which never matches; quit and help are
@@ -376,12 +379,34 @@ func (m Model) contentHeight() int {
 }
 
 // helpView renders the bottom help block, generated from the key
-// bindings. help.Width makes bubbles truncate with an ellipsis, but its
-// truncation has an off-by-a-few edge (an item landing within two cells
-// of the limit is added anyway, and everything after it too), so the
-// block gets the same hard clamp as the rest of the chrome.
+// bindings; while the filter input is focused it shows the two keys that
+// actually do anything there. help.Width makes bubbles truncate with an
+// ellipsis, but its truncation has an off-by-a-few edge (an item landing
+// within two cells of the limit is added anyway, and everything after it
+// too), so the block gets the same hard clamp as the rest of the chrome —
+// and a height clamp, so `?` on a short terminal degrades instead of
+// pushing the alt screen around.
 func (m Model) helpView() string {
-	return m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(m.keys))
+	var k help.KeyMap = m.keys
+	if m.list.FilterState() == list.Filtering {
+		k = filterKeys{}
+	}
+	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
+	return clampHeight(v, m.height-4)
+}
+
+// clampHeight truncates s to at most maxLines lines (minimum one).
+// lipgloss.Place pads content to a height but never truncates it, so
+// every block that can outgrow its slot passes through here.
+func clampHeight(s string, maxLines int) string {
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) View() string {
@@ -393,6 +418,8 @@ func (m Model) View() string {
 	if m.list.FilterState() == list.FilterApplied {
 		header += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
 	}
+	// The applied-filter term is user content: clamp like all chrome.
+	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 
 	var body string
 	if len(m.hosts) == 0 {
@@ -411,6 +438,8 @@ func (m Model) View() string {
 		panes = m.styles.Clamp.MaxWidth(m.width).Render(panes)
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panes)
 	}
+	// On a very short terminal the panes can outgrow their slot.
+	body = clampHeight(body, m.contentHeight())
 
 	preview := m.previewView()
 	if m.notice != "" {

@@ -49,12 +49,29 @@ func (k KeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Connect, k.Filter, k.Help, k.CopyAddr, k.CopyCmd, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
-// FullHelp implements help.KeyMap, grouped navigation / actions / general;
-// `?` expands the help bar into these columns.
+// FullHelp implements help.KeyMap, grouped general / navigation / actions;
+// `?` expands the help bar into these columns. bubbles drops whole columns
+// right-to-left when the terminal is narrow, so the group holding filter,
+// esc, help, and quit — the keys the view exists to document — comes first.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
+		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
 		{k.Connect, k.CopyAddr, k.CopyCmd},
-		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 	}
+}
+
+// filterKeys is the help shown while the filter input is focused: only
+// the keys that do anything there.
+type filterKeys struct{}
+
+func (filterKeys) ShortHelp() []key.Binding {
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply filter")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+	}
+}
+
+func (k filterKeys) FullHelp() [][]key.Binding {
+	return [][]key.Binding{k.ShortHelp()}
 }

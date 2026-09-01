@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,3 +26,10 @@ var SSHExec = sshExec
 
 // FilterState exposes the list's filter state for the filter-flow tests.
 func FilterState(m Model) list.FilterState { return m.list.FilterState() }
+
+// StaticCursor turns off the filter input's cursor blink so the key-path
+// tests never produce blink tick cmds (which sleep when executed).
+func StaticCursor(m Model) Model {
+	m.list.FilterInput.Cursor.SetMode(cursor.CursorStatic)
+	return m
+}
