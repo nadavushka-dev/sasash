@@ -123,6 +123,29 @@ func TestIncludeHosts_Order(t *testing.T) {
 			[]string{"upper"},
 		},
 		{
+			"malformed glob treated as no match",
+			map[string]string{
+				".ssh/config": "Include conf[.d/*\nHost a\n",
+			},
+			[]string{"a"},
+		},
+		{
+			"quoted pattern",
+			map[string]string{
+				".ssh/config":      "Include \"quoted.conf\"\n",
+				".ssh/quoted.conf": "Host quoted\n",
+			},
+			[]string{"quoted"},
+		},
+		{
+			"equals separator",
+			map[string]string{
+				".ssh/config":   "Include=sub.conf\n",
+				".ssh/sub.conf": "Host sub\n",
+			},
+			[]string{"sub"},
+		},
+		{
 			"duplicate alias kept in order for first-value-wins",
 			map[string]string{
 				".ssh/config":     "Include first.conf\nHost dup\n  HostName 192.0.2.9\n",
@@ -201,8 +224,31 @@ func TestIncludeHosts_MissingRootErrors(t *testing.T) {
 	}
 }
 
+func TestIncludeHosts_AbsolutePattern(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	elsewhere := t.TempDir()
+	writeTree(t, elsewhere, map[string]string{"abs.conf": "Host abs\n"})
+	writeTree(t, home, map[string]string{
+		".ssh/config": "Include " + filepath.Join(elsewhere, "abs.conf") + "\n",
+	})
+
+	hosts, err := sshconf.IncludeHosts(filepath.Join(home, ".ssh", "config"), home)
+	if err != nil {
+		t.Fatalf("IncludeHosts() err = %v", err)
+	}
+	if got := hostNames(hosts); !reflect.DeepEqual(got, []string{"abs"}) {
+		t.Errorf("IncludeHosts() hosts = %v, want %v", got, []string{"abs"})
+	}
+}
+
 func TestIncludeHosts_UnreadableIncludeErrors(t *testing.T) {
 	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
 
 	home := t.TempDir()
 	writeTree(t, home, map[string]string{

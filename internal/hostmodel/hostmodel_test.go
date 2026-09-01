@@ -54,6 +54,50 @@ Host ubuntu
 	}
 }
 
+// Regression: a meta block introducing the NEXT host sits inside the previous
+// block's line range; it must attach to its own host only. Getting this wrong
+// hands a host the following host's address — sasash would connect the user
+// to the wrong machine.
+func TestBuild_DoesNotClaimNextHostsMeta(t *testing.T) {
+	t.Parallel()
+
+	config := `# @sasash path lan 192.0.2.10
+Host ubuntu
+  HostName 192.0.2.10
+
+# @sasash path vpn 198.51.100.20
+# @sasash forwards web 8080:localhost:80
+# @sasash tags storage
+Host nas
+  HostName 198.51.100.20
+`
+	ubuntu, errs := hostmodel.Build(block(t, config, "ubuntu"))
+	if len(errs) != 0 {
+		t.Fatalf("Build(ubuntu) errs = %v, want none", errs)
+	}
+	wantUbuntu := hostmodel.Host{
+		Alias: "ubuntu",
+		Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}},
+	}
+	if !reflect.DeepEqual(ubuntu, wantUbuntu) {
+		t.Errorf("Build(ubuntu) = %+v, want %+v", ubuntu, wantUbuntu)
+	}
+
+	nas, errs := hostmodel.Build(block(t, config, "nas"))
+	if len(errs) != 0 {
+		t.Fatalf("Build(nas) errs = %v, want none", errs)
+	}
+	wantNas := hostmodel.Host{
+		Alias:    "nas",
+		Paths:    []probe.Path{{Name: "vpn", Host: "198.51.100.20"}},
+		Tags:     []string{"storage"},
+		Forwards: []hostmodel.ForwardSet{{Name: "web", Specs: []string{"8080:localhost:80"}}},
+	}
+	if !reflect.DeepEqual(nas, wantNas) {
+		t.Errorf("Build(nas) = %+v, want %+v", nas, wantNas)
+	}
+}
+
 func TestBuild_Fallback(t *testing.T) {
 	t.Parallel()
 
@@ -172,7 +216,7 @@ func TestBuild_MalformedMeta(t *testing.T) {
 			"bad port",
 			"# @sasash path lan 192.0.2.1:ssh\nHost a\n  HostName 192.0.2.1\n",
 			[]probe.Path{{Host: "192.0.2.1"}},
-			[]string{"bad port"},
+			[]string{"bad addr"},
 		},
 		{
 			"forwards without specs",
@@ -197,6 +241,30 @@ func TestBuild_MalformedMeta(t *testing.T) {
 			"# @sasash path lan 192.0.2.1\n# @sasash color purple\nHost a\n",
 			[]probe.Path{{Name: "lan", Host: "192.0.2.1"}},
 			nil,
+		},
+		{
+			"empty host before colon",
+			"# @sasash path lan :2222\nHost a\n  HostName 192.0.2.1\n",
+			[]probe.Path{{Host: "192.0.2.1"}},
+			[]string{"bad addr"},
+		},
+		{
+			"colon with no port",
+			"# @sasash path lan 192.0.2.1:\nHost a\n  HostName 192.0.2.1\n",
+			[]probe.Path{{Host: "192.0.2.1"}},
+			[]string{"bad addr"},
+		},
+		{
+			"non-numeric Port directive dropped with warning",
+			"# @sasash path lan 192.0.2.1\nHost a\n  Port ssh\n",
+			[]probe.Path{{Name: "lan", Host: "192.0.2.1"}},
+			[]string{"not a number"},
+		},
+		{
+			"valid duplicate replaces an invalid first",
+			"# @sasash path lan 192.0.2.1:bad\n# @sasash path lan 192.0.2.1\nHost a\n",
+			[]probe.Path{{Name: "lan", Host: "192.0.2.1"}},
+			[]string{"bad addr"},
 		},
 	}
 

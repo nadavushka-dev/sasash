@@ -64,11 +64,7 @@ func includeHosts(path, home string, visited map[string]bool) ([]Host, error) {
 			continue
 		}
 		for _, pattern := range line.Fields {
-			matches, err := expandPattern(pattern, home)
-			if err != nil {
-				return nil, err
-			}
-			for _, match := range matches {
+			for _, match := range expandPattern(pattern, home) {
 				sub, err := includeHosts(match, home, visited)
 				if err != nil {
 					return nil, err
@@ -81,9 +77,13 @@ func includeHosts(path, home string, visited map[string]bool) ([]Host, error) {
 }
 
 // expandPattern turns one Include argument into the files it names, applying
-// ssh's path rules: "~" is home, a relative pattern is relative to home/.ssh.
-// Directories a glob happens to match are dropped.
-func expandPattern(pattern, home string) ([]string, error) {
+// ssh's path rules: "~" is home, a relative pattern is relative to home/.ssh,
+// quotes around a pattern are stripped. Directories a glob happens to match
+// are dropped.
+func expandPattern(pattern, home string) []string {
+	if len(pattern) >= 2 && pattern[0] == '"' && pattern[len(pattern)-1] == '"' {
+		pattern = pattern[1 : len(pattern)-1]
+	}
 	switch {
 	case pattern == "~":
 		pattern = home
@@ -93,9 +93,11 @@ func expandPattern(pattern, home string) ([]string, error) {
 		pattern = filepath.Join(home, ".ssh", pattern)
 	}
 
+	// glob(3), which ssh uses, reports a malformed pattern as no match; a
+	// typo in a hand-edited config must not blank the whole host list.
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	files := matches[:0]
 	for _, m := range matches {
@@ -104,5 +106,5 @@ func expandPattern(pattern, home string) ([]string, error) {
 		}
 		files = append(files, m)
 	}
-	return files, nil
+	return files
 }

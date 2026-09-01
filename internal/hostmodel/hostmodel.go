@@ -46,16 +46,23 @@ func Build(h *sshconf.Host) (Host, []error) {
 
 	// ssh dials the Port directive whatever address it resolved, so a path
 	// without an explicit :port inherits it — probing 22 on a host that
-	// listens on 2222 would report a false "down".
+	// listens on 2222 would report a false "down". A non-numeric Port would
+	// poison every inherited path, so it is dropped with a warning instead.
 	defaultPort, _ := h.Get("Port")
+	if defaultPort != "" && !allDigits(defaultPort) {
+		errs = append(errs, fmt.Errorf("host %q: Port %q is not a number, ignored", out.Alias, defaultPort))
+		defaultPort = ""
+	}
 
 	seenPath := make(map[string]bool)
-	for _, m := range h.MetaVerb("path") {
+	for _, m := range h.OwnMetaVerb("path") {
 		if len(m.Args) < 2 {
 			errs = append(errs, fmt.Errorf("host %q: @sasash path: missing addr (line %d)", out.Alias, m.Index+1))
 			continue
 		}
 		name := m.Args[0]
+		// First VALID wins: a name is only claimed by a path that parsed,
+		// so a later well-formed line can stand in for an earlier typo.
 		if seenPath[name] {
 			errs = append(errs, fmt.Errorf("host %q: @sasash path %q: duplicate name, first wins (line %d)", out.Alias, name, m.Index+1))
 			continue
@@ -80,7 +87,7 @@ func Build(h *sshconf.Host) (Host, []error) {
 		out.Paths = []probe.Path{{Host: addr, Port: defaultPort}}
 	}
 
-	for _, m := range h.MetaVerb("tags") {
+	for _, m := range h.OwnMetaVerb("tags") {
 		for _, arg := range m.Args {
 			for _, tag := range strings.Split(arg, ",") {
 				if tag = strings.TrimSpace(tag); tag != "" {
@@ -91,7 +98,7 @@ func Build(h *sshconf.Host) (Host, []error) {
 	}
 
 	seenSet := make(map[string]bool)
-	for _, m := range h.MetaVerb("forwards") {
+	for _, m := range h.OwnMetaVerb("forwards") {
 		if len(m.Args) < 2 {
 			errs = append(errs, fmt.Errorf("host %q: @sasash forwards: missing specs (line %d)", out.Alias, m.Index+1))
 			continue
@@ -135,7 +142,8 @@ func Load(rootPath, home string) (hosts []Host, warnings []error, err error) {
 }
 
 // splitAddr splits "addr[:port]". A bare address — including a bare IPv6
-// literal like ::1 or [::1] — returns port "".
+// literal like ::1 or [::1] — returns port "". An empty host (":2222") or an
+// explicit colon with no port ("192.0.2.1:") is malformed, not defaulted.
 func splitAddr(s string) (host, port string, err error) {
 	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
 		return s[1 : len(s)-1], "", nil
@@ -144,10 +152,17 @@ func splitAddr(s string) (host, port string, err error) {
 	if splitErr != nil {
 		return s, "", nil
 	}
-	for _, r := range p {
-		if r < '0' || r > '9' {
-			return "", "", fmt.Errorf("bad port %q in %q", p, s)
-		}
+	if h == "" || p == "" || !allDigits(p) {
+		return "", "", fmt.Errorf("bad addr %q", s)
 	}
 	return h, p, nil
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
 }
