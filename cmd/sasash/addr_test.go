@@ -29,8 +29,8 @@ Host plain
 		args       []string
 		dialer     probe.Dialer
 		wantCode   int
-		wantStdout string // exact
-		wantStderr string // substring; "" skips the check
+		wantStdout string   // exact
+		wantStderr []string // substrings; nil skips the check
 	}{
 		{
 			name:       "first path alive",
@@ -56,12 +56,16 @@ Host plain
 			wantStdout: "192.0.2.10\n",
 		},
 		{
-			name:       "all paths dead",
+			name:       "all paths dead lists each path",
 			args:       []string{"ubuntu"},
 			dialer:     fakedial.New().Down("192.0.2.10:22").Down("198.51.100.20:22"),
 			wantCode:   1,
 			wantStdout: "",
-			wantStderr: `all 2 path(s) to "ubuntu" are down`,
+			wantStderr: []string{
+				`all 2 path(s) to "ubuntu" are down`,
+				"lan 192.0.2.10:22:",
+				"ts 198.51.100.20:22:",
+			},
 		},
 		{
 			name:       "fallback host probes HostName with Port directive",
@@ -74,9 +78,9 @@ Host plain
 			name:       "unknown host",
 			args:       []string{"bogus"},
 			dialer:     fakedial.New(),
-			wantCode:   1,
+			wantCode:   3,
 			wantStdout: "",
-			wantStderr: `unknown host "bogus"`,
+			wantStderr: []string{`unknown host "bogus"`},
 		},
 		{
 			name:       "no args",
@@ -84,7 +88,7 @@ Host plain
 			dialer:     fakedial.New(),
 			wantCode:   2,
 			wantStdout: "",
-			wantStderr: "usage: sasash addr",
+			wantStderr: []string{"usage: sasash addr"},
 		},
 		{
 			name:       "too many args",
@@ -92,7 +96,7 @@ Host plain
 			dialer:     fakedial.New(),
 			wantCode:   2,
 			wantStdout: "",
-			wantStderr: "usage: sasash addr",
+			wantStderr: []string{"usage: sasash addr"},
 		},
 	}
 
@@ -117,8 +121,10 @@ Host plain
 			if stdout.String() != tt.wantStdout {
 				t.Errorf("runAddr(%v) stdout = %q, want %q", tt.args, stdout.String(), tt.wantStdout)
 			}
-			if tt.wantStderr != "" && !strings.Contains(stderr.String(), tt.wantStderr) {
-				t.Errorf("runAddr(%v) stderr = %q, want substring %q", tt.args, stderr.String(), tt.wantStderr)
+			for _, want := range tt.wantStderr {
+				if !strings.Contains(stderr.String(), want) {
+					t.Errorf("runAddr(%v) stderr = %q, want substring %q", tt.args, stderr.String(), want)
+				}
 			}
 		})
 	}
@@ -130,15 +136,22 @@ func TestRunAddr_MissingConfig(t *testing.T) {
 	home := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	got := runAddr([]string{"ubuntu"}, &stdout, &stderr, filepath.Join(home, ".ssh", "config"), home, fakedial.New())
-	if got != 1 {
-		t.Errorf("runAddr() = %v, want 1", got)
+	if got != 3 {
+		t.Errorf("runAddr() = %v, want 3", got)
 	}
 	if stdout.String() != "" {
 		t.Errorf("runAddr() stdout = %q, want empty", stdout.String())
 	}
+	// Pin WHICH branch fails: the unreadable config, not "unknown host".
+	if !strings.Contains(stderr.String(), "no such file") {
+		t.Errorf("runAddr() stderr = %q, want the missing-config error", stderr.String())
+	}
 }
 
-func TestRunAddr_WarningsGoToStderrNotStdout(t *testing.T) {
+// Warnings about malformed meta surface only when resolution fails: the
+// command lives inside $( ) in prompts and loops, so success must be silent
+// on stderr too, but a failing lookup should show everything relevant.
+func TestRunAddr_WarningsOnlyOnFailure(t *testing.T) {
 	t.Parallel()
 
 	config := `# @sasash path lan
@@ -155,15 +168,35 @@ Host ubuntu
 		t.Fatalf("WriteFile() err = %v", err)
 	}
 
-	var stdout, stderr bytes.Buffer
-	got := runAddr([]string{"ubuntu"}, &stdout, &stderr, root, home, fakedial.New().Up("198.51.100.20:22", 20*time.Millisecond))
-	if got != 0 {
-		t.Fatalf("runAddr() = %v, want 0 (stderr: %q)", got, stderr.String())
-	}
-	if stdout.String() != "198.51.100.20\n" {
-		t.Errorf("runAddr() stdout = %q, want %q", stdout.String(), "198.51.100.20\n")
-	}
-	if !strings.Contains(stderr.String(), "missing addr") {
-		t.Errorf("runAddr() stderr = %q, want the malformed-meta warning", stderr.String())
-	}
+	t.Run("success is silent", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		got := runAddr([]string{"ubuntu"}, &stdout, &stderr, root, home, fakedial.New().Up("198.51.100.20:22", 20*time.Millisecond))
+		if got != 0 {
+			t.Fatalf("runAddr() = %v, want 0 (stderr: %q)", got, stderr.String())
+		}
+		if stdout.String() != "198.51.100.20\n" {
+			t.Errorf("runAddr() stdout = %q, want %q", stdout.String(), "198.51.100.20\n")
+		}
+		if stderr.String() != "" {
+			t.Errorf("runAddr() stderr = %q, want empty on success", stderr.String())
+		}
+	})
+
+	t.Run("failure surfaces the warning", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		got := runAddr([]string{"ubuntu"}, &stdout, &stderr, root, home, fakedial.New().Down("198.51.100.20:22"))
+		if got != 1 {
+			t.Fatalf("runAddr() = %v, want 1 (stderr: %q)", got, stderr.String())
+		}
+		if stdout.String() != "" {
+			t.Errorf("runAddr() stdout = %q, want empty", stdout.String())
+		}
+		if !strings.Contains(stderr.String(), "missing addr") {
+			t.Errorf("runAddr() stderr = %q, want the malformed-meta warning", stderr.String())
+		}
+	})
 }
