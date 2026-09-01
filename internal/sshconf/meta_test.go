@@ -81,12 +81,14 @@ func TestHost_OwnMeta_ExclusiveAttachment(t *testing.T) {
 	}
 }
 
-func TestHost_OwnMeta_MetaAboveMatchBelongsToNoHost(t *testing.T) {
+func TestHost_OwnMeta_MetaAboveMatchStaysWithHost(t *testing.T) {
 	t.Parallel()
 
+	// A Match line owns no meta, so the run leading into it has no next
+	// claimant — excluding it would silently drop the path.
 	config := "Host a\n  HostName 192.0.2.1\n# @sasash path lan 192.0.2.1\nMatch all\n"
-	if got := ownVerbs(t, config, "a"); got != nil {
-		t.Errorf("OwnMeta(a) = %v, want none: the run leads into a Match line", got)
+	if got, want := ownVerbs(t, config, "a"), []string{"path lan"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("OwnMeta(a) = %v, want %v", got, want)
 	}
 }
 

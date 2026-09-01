@@ -9,8 +9,9 @@ import "strings"
 // line describes exactly one host.
 
 // OwnMeta is Meta() minus the trailing unbroken comment run that leads into
-// the line at End: by the attachment rule those lines belong to the following
-// Host block (or, above a Match line, to no block at all), not to this one.
+// a following Host line: by the attachment rule those lines belong to the
+// next block, not to this one. A run leading into a Match line stays here —
+// no following block will claim it, and dropping it would silently lose data.
 //
 // The run boundary mirrors Meta()'s upward walk exactly: meta and plain
 // comment lines continue the run, a blank line or directive breaks it.
@@ -18,6 +19,9 @@ func (h *Host) OwnMeta() []Meta {
 	all := h.Meta()
 	if h.End >= len(h.f.lines) {
 		return all // last block in the file: nothing follows to claim the run
+	}
+	if !strings.EqualFold(parseLine(h.End, h.f.lines[h.End]).Keyword, "host") {
+		return all // the run leads into a Match line, which owns no meta
 	}
 
 	boundary := h.End
