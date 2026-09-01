@@ -28,7 +28,6 @@ func taggedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 		Up("192.0.2.10:22", 20*time.Millisecond).
 		Up("192.0.2.20:22", 5*time.Millisecond)
 	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner)
-	m = ui.StaticCursor(m) // no blink tick cmds: press() executes what Update returns
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	return update(t, m, m.Init()())
 }
@@ -40,6 +39,9 @@ func taggedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 // so executing the cmd tree never sleeps.
 func press(t *testing.T, m ui.Model, keys ...string) ui.Model {
 	t.Helper()
+	// Structural, not per-fixture: any model driven through press() gets a
+	// static cursor, so no blink tick cmd can ever be produced.
+	m = ui.StaticCursor(m)
 	for _, k := range keys {
 		var cmd tea.Cmd
 		next, cmd := m.Update(keyMsg(k))
@@ -135,8 +137,14 @@ func TestModel_Update_ActionKeysSuppressedWhileFiltering(t *testing.T) {
 	if got := ui.FilterState(m); got != list.Filtering {
 		t.Errorf("FilterState() after ? = %v, want still Filtering", got)
 	}
-	if view := m.View(); strings.Contains(view, "clear filter / back") {
-		t.Errorf("View() after ? while filtering shows the full help:\n%s", view)
+	// While filtering, the help bar shows the filter-mode keymap, not the
+	// full app keys (which would all be inert).
+	view := m.View()
+	if !strings.Contains(view, "apply filter") {
+		t.Errorf("View() while filtering missing the filter-mode help:\n%s", view)
+	}
+	if strings.Contains(view, "yank host") {
+		t.Errorf("View() while filtering advertises inert action keys:\n%s", view)
 	}
 
 	// esc cancels filtering entirely.
@@ -231,6 +239,10 @@ func TestModel_View_FitsTerminal(t *testing.T) {
 		{name: "narrow full help", width: 66, height: 14},
 		{name: "short tmux split", width: 60, height: 10},
 		{name: "tiny", width: 40, height: 8},
+		// Each clamp binds in its own narrow band; these two rows are the
+		// ones that make the help-height and header-width clamps load-bearing.
+		{name: "help taller than the window", width: 60, height: 9},
+		{name: "filter term wider than the window", width: 20, height: 12},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -282,6 +294,13 @@ func TestModel_Update_HelpToggle(t *testing.T) {
 		if w := lipgloss.Width(line); w > 80 {
 			t.Errorf("View() with full help, line %d width = %v, want <= 80", i, w)
 		}
+	}
+
+	// At width 40 bubbles keeps only the first help column: it must be
+	// the one documenting filter/esc/help/quit (column order matters).
+	narrow := update(t, m, tea.WindowSizeMsg{Width: 40, Height: 24})
+	if v := narrow.View(); !strings.Contains(v, "clear filter / back") {
+		t.Errorf("View() at width 40 dropped the escape-keys help column:\n%s", v)
 	}
 
 	m = press(t, m, "?")

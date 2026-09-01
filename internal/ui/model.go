@@ -37,7 +37,7 @@ const probeChunk = 64
 // hostItem adapts hostmodel.Host to the bubbles list.
 type hostItem struct{ host hostmodel.Host }
 
-// FilterValue matches alias and tags (filtering itself lands in 1.5).
+// FilterValue is what `/` filters on: alias and @sasash tags.
 func (i hostItem) FilterValue() string {
 	return i.host.Alias + " " + strings.Join(i.host.Tags, " ")
 }
@@ -276,8 +276,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.notice = ""
 		// Action keys must never fire while the filter input is focused
-		// (SPEC §5 addendum). Filtering arrives in 1.5; the guard is
-		// structural from day one so keys added later inherit it.
+		// (SPEC §5 addendum): everything below is typed text then, and
+		// only the list — which owns the input — sees the key.
 		if m.list.FilterState() != list.Filtering {
 			switch {
 			case key.Matches(msg, m.keys.Quit):
