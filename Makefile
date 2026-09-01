@@ -1,4 +1,4 @@
-.PHONY: test race cover fuzz vet fmt check build demo
+.PHONY: test race cover fuzz vet fmt check build demo integration
 
 test:
 	go test ./...
@@ -34,3 +34,9 @@ demo: build
 	else \
 		echo "vhs not installed; skipping demo (brew install vhs)"; \
 	fi
+
+# Real-sshd tier (SPEC §12): proves -O forward/cancel/check/exit against a
+# live OpenSSH. Run locally before a release, not on every save; skips when
+# no sshd binary is installed (brew install openssh).
+integration:
+	go test -tags integration -count=1 -v ./internal/integration
