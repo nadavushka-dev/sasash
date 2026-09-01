@@ -276,6 +276,20 @@ func TestModel_Update_AdhocAliasRejected(t *testing.T) {
 	}
 }
 
+func TestModel_View_AdhocPromptScrolls(t *testing.T) {
+	t.Parallel()
+	// The prompt scrolls: an over-long value shows its TAIL, where the
+	// cursor is — the width-driven viewport, not just its TrimRight
+	// knock-on, is load-bearing.
+	m := probedModel(t, fakerun.New())
+	m = press(t, m, "a")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(
+		"root@192.0.2.99:2222 -L 8080:localhost:80 -L 5432:127.0.0.1:5432 -L 9090:localhost:90")})
+	if view := m.View(); !strings.Contains(view, "9090:localhost:90") {
+		t.Errorf("View() with an over-long prompt value hides its tail:\n%s", view)
+	}
+}
+
 func TestModel_Update_AdhocFromEmptyList(t *testing.T) {
 	t.Parallel()
 	// Fresh install: nothing in the config yet — the prompt is exactly
