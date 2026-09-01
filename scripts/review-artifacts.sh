@@ -10,7 +10,8 @@
 # artifacts needs them.
 set -eu
 
-cd "$(git rev-parse --show-toplevel)"
+root=$(git rev-parse --show-toplevel)
+cd "$root"
 
 if ! command -v vhs >/dev/null 2>&1; then
 	echo "error: vhs not installed (brew install vhs)" >&2
@@ -18,10 +19,12 @@ if ! command -v vhs >/dev/null 2>&1; then
 fi
 
 branch=$(git rev-parse --abbrev-ref HEAD)
+case $branch in HEAD) branch=$(git rev-parse --short HEAD);; esac
 slug=$(printf '%s' "$branch" | tr '/' '-')
 dest="out/$slug"
 
 make build
+rm -rf demo/out
 vhs demo/demo.tape
 
 mkdir -p out
