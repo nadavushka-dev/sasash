@@ -300,6 +300,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.help.Width = msg.Width
+		// The prompt needs an explicit width to get textinput's horizontal
+		// viewport: without one, long input silently loses its tail and
+		// cursor past the terminal edge.
+		m.prompt.Width = max(10, msg.Width-14)
 		m.list.SetSize(m.listWidth(), m.contentHeight())
 		return m, nil
 
@@ -594,7 +598,10 @@ func (m Model) View() string {
 		if m.mode == promptAlias {
 			label = "save as:"
 		}
-		preview = " " + m.styles.CmdPrompt.Render(label) + " " + m.prompt.View()
+		// textinput pads its value to Width; trim the raw padding so a
+		// notice (a rejection message, typically) still fits the line.
+		field := strings.TrimRight(m.prompt.View(), " ")
+		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
 	}
 	if m.notice != "" {
 		preview += "  " + m.styles.Notice.Render(m.notice)

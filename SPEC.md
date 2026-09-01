@@ -201,7 +201,7 @@ Vim-style navigation is required alongside the action keys above: `j`/`k` (and a
 move, `g`/`G` jump to first/last host, `ctrl+d`/`ctrl+u` half-page, `esc` goes back /
 clears the filter. Every binding is a named bubbles `key.Binding` so the help view is
 generated from the bindings, never hand-maintained. Single-letter action keys must not
-fire while the filter input is focused.
+fire while the filter input or a prompt is focused.
 
 The UI is dark-only. Every lipgloss style derives from a semantic palette struct — no
 hex literal outside the palette layer. Four shipped themes: gruvbox dark (default),

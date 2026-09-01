@@ -70,12 +70,21 @@ func parseAdhoc(input string) (adhocTarget, error) {
 	return t, nil
 }
 
-// splitDest splits "host[:port]", mirroring hostmodel's addr rules: a bare
+// splitDest splits "host[:port]", mirroring hostmodel.splitAddr's rules
+// (kept in sync by hand — hostmodel is another lane's package): a bare
 // IPv6 literal (::1 or [::1]) is a host with no port; an empty host or a
 // present-but-bad port is an error, never silently defaulted.
 func splitDest(s string) (host, port string, err error) {
+	// A leading dash would land as ssh's destination argument and be
+	// parsed as an option — a guaranteed-broken exec, so reject it here.
+	if strings.HasPrefix(s, "-") {
+		return "", "", fmt.Errorf("bad target %q: a host cannot start with -", s)
+	}
 	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
-		return s[1 : len(s)-1], "", nil
+		if h := s[1 : len(s)-1]; h != "" {
+			return h, "", nil
+		}
+		return "", "", fmt.Errorf("empty host")
 	}
 	h, p, splitErr := net.SplitHostPort(s)
 	if splitErr != nil {
@@ -135,7 +144,10 @@ type hostsReloadedMsg struct {
 // aliasProblem validates a proposed alias against ssh_config token rules
 // and the currently loaded hosts; "" means acceptable.
 func (m Model) aliasProblem(alias string) string {
-	if strings.ContainsAny(alias, " \t\"") || strings.ContainsAny(alias, "*?!") {
+	// A leading dash would make `ssh <alias>` parse the alias as an
+	// option forever after; a leading # would comment the Host line out.
+	if strings.HasPrefix(alias, "-") || strings.HasPrefix(alias, "#") ||
+		strings.ContainsAny(alias, " \t\"") || strings.ContainsAny(alias, "*?!") {
 		return fmt.Sprintf("alias %q: want a single plain word", alias)
 	}
 	for _, h := range m.hosts {

@@ -46,6 +46,10 @@ func TestParseAdhocArgv_ExactStrings(t *testing.T) {
 		{name: "dangling -L", input: "h -L", wantErr: true},
 		{name: "forward without colons", input: "h -L 8080", wantErr: true},
 		{name: "unknown token", input: "h bogus", wantErr: true},
+		{name: "empty brackets", input: "[]", wantErr: true},
+		{name: "user at empty brackets", input: "user@[]", wantErr: true},
+		{name: "option smuggled as host", input: "-fNT", wantErr: true},
+		{name: "proxycommand smuggled as host", input: "-oProxyCommand=x", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -246,6 +250,8 @@ func TestModel_Update_AdhocAliasRejected(t *testing.T) {
 	}{
 		{name: "collision with existing host", alias: "web", want: "already exists"},
 		{name: "wildcard", alias: "we*b", want: "single plain word"},
+		{name: "leading dash would break ssh alias", alias: "-fNT", want: "single plain word"},
+		{name: "leading hash would comment the block", alias: "#edge", want: "single plain word"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -267,6 +273,35 @@ func TestModel_Update_AdhocAliasRejected(t *testing.T) {
 				t.Errorf("View() missing %q:\n%s", tt.want, view)
 			}
 		})
+	}
+}
+
+func TestModel_Update_AdhocFromEmptyList(t *testing.T) {
+	t.Parallel()
+	// Fresh install: nothing in the config yet — the prompt is exactly
+	// how the first host gets in, so it must open over the empty state.
+	m := sized(t, nil)
+	m = press(t, m, "a")
+	if !ui.Prompting(m) {
+		t.Fatalf("Prompting() = false on an empty list, want true")
+	}
+	if view := m.View(); !strings.Contains(view, "connect:") {
+		t.Errorf("View() missing the connect prompt over the empty state:\n%s", view)
+	}
+}
+
+func TestModel_View_PromptFullHelp(t *testing.T) {
+	t.Parallel()
+	// ? expands the help, then a opens the prompt: the expanded block
+	// must switch to the prompt keymap's columns.
+	m := probedModel(t, fakerun.New())
+	m = press(t, m, "?", "a")
+	view := m.View()
+	if !strings.Contains(view, "cancel") {
+		t.Errorf("View() with prompt + full help missing the prompt keymap:\n%s", view)
+	}
+	if strings.Contains(view, "yank host") {
+		t.Errorf("View() with prompt focused advertises inert action keys:\n%s", view)
 	}
 }
 
