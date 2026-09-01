@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/exp/teatest"
 
@@ -26,10 +27,17 @@ const teatestTimeout = 3 * time.Second
 
 // programModel builds the model teatest drives: alpha up (with a dialer
 // delay so the probe genuinely lands asynchronously), bravo down.
+//
+// The aliases end in .invalid (RFC 2606) on purpose: enter is one
+// filter-guard bug away from tea.ExecProcess running `ssh <alias>` for
+// real, and an unresolvable alias caps that blast radius at nothing.
+// These tests deliberately do NOT use ui.StaticCursor — under a real
+// program the cursor blink runs on its own goroutine and never blocks,
+// and keeping it is part of the real-loop fidelity this tier exists for.
 func programModel() ui.Model {
 	hosts := []hostmodel.Host{
-		{Alias: "alpha", Tags: []string{"dev"}, Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}},
-		{Alias: "bravo", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.20"}}},
+		{Alias: "alpha.invalid", Tags: []string{"dev"}, Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}},
+		{Alias: "bravo.invalid", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.20"}}},
 	}
 	dialer := fakedial.New().
 		Stub("192.0.2.10:22", fakedial.Reply{Latency: 20 * time.Millisecond, Delay: 30 * time.Millisecond}).
@@ -42,11 +50,19 @@ func newProgram(t *testing.T) *teatest.TestModel {
 	return teatest.NewTestModel(t, programModel(), teatest.WithInitialTermSize(80, 24))
 }
 
-// waitFor polls the program's output for a substring condition.
-func waitFor(t *testing.T, tm *teatest.TestModel, want string) {
+// waitFor polls the program's output until every want has appeared.
+// tm.Output() is a DRAINING reader — each call consumes what earlier
+// frames wrote — so substrings expected in the same frame must go into
+// one call, never into consecutive ones.
+func waitFor(t *testing.T, tm *teatest.TestModel, wants ...string) {
 	t.Helper()
 	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
-		return bytes.Contains(bts, []byte(want))
+		for _, want := range wants {
+			if !bytes.Contains(bts, []byte(want)) {
+				return false
+			}
+		}
+		return true
 	}, teatest.WithDuration(teatestTimeout))
 }
 
@@ -70,8 +86,8 @@ func TestModel_Program_AsyncProbeRenders(t *testing.T) {
 	tm.Type("j")
 	waitFor(t, tm, "down")
 	fm := finalModel(t, tm)
-	if host, ok := fm.Selected(); !ok || host.Alias != "bravo" {
-		t.Errorf("Selected() = %v, %v; want bravo after j", host.Alias, ok)
+	if host, ok := fm.Selected(); !ok || host.Alias != "bravo.invalid" {
+		t.Errorf("Selected() = %v, %v; want bravo.invalid after j", host.Alias, ok)
 	}
 }
 
@@ -84,8 +100,8 @@ func TestModel_Program_KeyRoutingToList(t *testing.T) {
 	tm.Type("k")
 	waitFor(t, tm, "ssh alpha")
 	fm := finalModel(t, tm)
-	if host, ok := fm.Selected(); !ok || host.Alias != "alpha" {
-		t.Errorf("Selected() = %v, %v; want alpha after j k", host.Alias, ok)
+	if host, ok := fm.Selected(); !ok || host.Alias != "alpha.invalid" {
+		t.Errorf("Selected() = %v, %v; want alpha.invalid after j k", host.Alias, ok)
 	}
 }
 
@@ -102,6 +118,9 @@ func TestModel_Program_FilterGatesQuit(t *testing.T) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
 	waitFor(t, tm, "yank host") // full app help back: filtering cancelled
 	fm := finalModel(t, tm)
+	if got := ui.FilterState(fm); got != list.Unfiltered {
+		t.Errorf("FilterState() = %v, want Unfiltered after esc", got)
+	}
 	if _, ok := fm.Selected(); !ok {
 		t.Errorf("Selected() ok = false, want a selection after cancelled filter")
 	}
@@ -111,18 +130,27 @@ func TestModel_Program_FilterByTagThenConnectPreview(t *testing.T) {
 	t.Parallel()
 	tm := newProgram(t)
 	waitFor(t, tm, "alpha")
+	// Move off alpha first: bubbletea repaints diffs, so the preview
+	// asserting the tag match must actually CHANGE to be re-emitted.
+	tm.Type("j")
+	waitFor(t, tm, "ssh bravo")
 	tm.Type("/dev")
 	tm.Send(tea.KeyMsg{Type: tea.KeyEnter}) // accept the filter
-	waitFor(t, tm, "/dev")                  // header shows the applied term
+	// One wait, one repaint: applying the filter snaps the selection to
+	// the tag match, so the header term and the preview change together.
+	waitFor(t, tm, "/dev", "ssh alpha")
 	fm := finalModel(t, tm)
-	if host, ok := fm.Selected(); !ok || host.Alias != "alpha" {
-		t.Errorf("Selected() = %v, %v; want alpha via tag filter", host.Alias, ok)
+	if host, ok := fm.Selected(); !ok || host.Alias != "alpha.invalid" {
+		t.Errorf("Selected() = %v, %v; want alpha.invalid via tag filter", host.Alias, ok)
 	}
-	if got := ui.FilterState(fm); got.String() != "filter applied" {
-		t.Errorf("FilterState() = %v, want filter applied", got)
+	if got := ui.FilterState(fm); got != list.FilterApplied {
+		t.Errorf("FilterState() = %v, want FilterApplied", got)
 	}
 }
 
+// TestModel_Program_ThemeCycle covers only what needs the loop: the t
+// keypress routing through the real program. Style wiring belongs to
+// theme_test.go and is deliberately not re-asserted here.
 func TestModel_Program_ThemeCycle(t *testing.T) {
 	t.Parallel()
 	tm := newProgram(t)
@@ -132,9 +160,6 @@ func TestModel_Program_ThemeCycle(t *testing.T) {
 	fm := finalModel(t, tm)
 	if got := ui.ThemeName(fm); got != "mocha" {
 		t.Errorf("ThemeName() = %v, want mocha", got)
-	}
-	if got := ui.StylesOf(fm).Title.GetForeground(); got != ui.Mocha.Accent {
-		t.Errorf("Title foreground = %v, want mocha accent %v", got, ui.Mocha.Accent)
 	}
 }
 
