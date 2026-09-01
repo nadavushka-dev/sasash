@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
 func TestResolveTheme(t *testing.T) {
@@ -94,6 +96,77 @@ func TestCmdTUI_UnknownThemeFlag(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "gruvbox") {
 		t.Errorf("stderr = %q, want the valid theme list", stderr.String())
+	}
+}
+
+func TestSaveHostTo_AppendsPreservingBytes(t *testing.T) {
+	t.Parallel()
+	// Odd-but-valid existing content: mixed indent, unknown directive,
+	// no trailing newline. Every byte of it must survive the append.
+	existing := "# ─── managed by sasash ───\n\n# @sasash path lan 192.0.2.7\nHost old\n\tHostName 192.0.2.7\n  UnknownDirective kept\nHost plain"
+	path := filepath.Join(t.TempDir(), "sasash.conf")
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	err := saveHostTo(path)(ui.AdhocEntry{
+		Alias:    "edge",
+		User:     "root",
+		Host:     "192.0.2.99",
+		Port:     "2222",
+		Forwards: []string{"8080:localhost:80", "5432:127.0.0.1:5432"},
+	})
+	if err != nil {
+		t.Fatalf("saveHostTo() = %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if !strings.HasPrefix(string(got), existing+"\n") {
+		t.Errorf("existing content not byte-preserved:\n%q", got)
+	}
+	wantBlock := "\n# @sasash forwards adhoc 8080:localhost:80 5432:127.0.0.1:5432\nHost edge\n  HostName 192.0.2.99\n  User root\n  Port 2222\n"
+	if !strings.HasSuffix(string(got), wantBlock) {
+		t.Errorf("appended block = %q, want suffix %q", got, wantBlock)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("perm after save = %v, want 0600", perm)
+	}
+}
+
+func TestSaveHostTo_MinimalEntryAndSecondAppend(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "sasash.conf")
+	if err := os.WriteFile(path, []byte("# header\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := saveHostTo(path)(ui.AdhocEntry{Alias: "a1", Host: "192.0.2.5"}); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	if err := saveHostTo(path)(ui.AdhocEntry{Alias: "a2", Host: "192.0.2.6"}); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	want := "# header\n\nHost a1\n  HostName 192.0.2.5\n\nHost a2\n  HostName 192.0.2.6\n"
+	if string(got) != want {
+		t.Errorf("file = %q, want %q", got, want)
+	}
+}
+
+func TestSaveHostTo_MissingConfErrors(t *testing.T) {
+	t.Parallel()
+	err := saveHostTo(filepath.Join(t.TempDir(), "sasash.conf"))(ui.AdhocEntry{Alias: "x", Host: "192.0.2.5"})
+	if err == nil || !strings.Contains(err.Error(), "sasash setup") {
+		t.Errorf("saveHostTo() on missing conf = %v, want a setup hint", err)
 	}
 }
 

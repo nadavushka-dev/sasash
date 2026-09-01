@@ -5,6 +5,8 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 )
 
 // RefreshTick lets the external test package drive the live-refresh loop
@@ -44,9 +46,40 @@ func WithSaveTheme(m Model, f func(string) error) Model {
 func StylesOf(m Model) Styles        { return m.styles }
 func HelpStyles(m Model) help.Styles { return m.help.Styles }
 
-// StaticCursor turns off the filter input's cursor blink so the key-path
-// tests never produce blink tick cmds (which sleep when executed).
+// StaticCursor turns off the filter and prompt inputs' cursor blink so
+// the key-path tests never produce blink tick cmds (which sleep when
+// executed).
 func StaticCursor(m Model) Model {
 	m.list.FilterInput.Cursor.SetMode(cursor.CursorStatic)
+	m.prompt.Cursor.SetMode(cursor.CursorStatic)
 	return m
 }
+
+// ParseAdhocArgv exposes the prompt-input -> exact-ssh-argv pipeline for
+// table tests (the argv strings are the product).
+func ParseAdhocArgv(input string) ([]string, error) {
+	t, err := parseAdhoc(input)
+	if err != nil {
+		return nil, err
+	}
+	return adhocArgv(t), nil
+}
+
+// AdhocExit replays the terminal returning from an ad-hoc handoff.
+func AdhocExit(err error) tea.Msg { return adhocExitMsg{err: err} }
+
+// WithSaveHost and WithLoadHosts swap the ad-hoc persistence hooks so
+// tests can observe them.
+func WithSaveHost(m Model, f func(AdhocEntry) error) Model {
+	m.saveHost = f
+	return m
+}
+
+func WithLoadHosts(m Model, f func() ([]hostmodel.Host, error)) Model {
+	m.loadHosts = f
+	return m
+}
+
+// Prompting and PromptingSave expose which prompt, if any, owns the keys.
+func Prompting(m Model) bool     { return m.mode != promptNone }
+func PromptingSave(m Model) bool { return m.mode == promptAlias }
