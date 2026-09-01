@@ -14,8 +14,8 @@ import (
 )
 
 func init() {
-	register("setup", "one-time bootstrap: Include line, sasash.conf, ~/.ssh/cm", func(args []string) int {
-		return runSetup(args, os.Stdin, os.Stdout, os.Stderr)
+	register("setup", "one-time bootstrap: Include line, sasash.conf, ~/.ssh/cm", func(args []string, stdout, stderr io.Writer) int {
+		return runSetup(args, os.Stdin, stdout, stderr)
 	})
 }
 
