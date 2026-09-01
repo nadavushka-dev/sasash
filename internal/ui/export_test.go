@@ -82,6 +82,12 @@ func WithEditor(m Model, editor []string, hint, confPath string) Model {
 	return m
 }
 
+// WithEditorWarn sets the setup-incomplete warning for tests.
+func WithEditorWarn(m Model, warn string) Model {
+	m.editorWarn = warn
+	return m
+}
+
 // WithSaveHost and WithLoadHosts swap the ad-hoc persistence hooks so
 // tests can observe them.
 func WithSaveHost(m Model, f func(AdhocEntry) error) Model {

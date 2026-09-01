@@ -185,6 +185,7 @@ type Model struct {
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
+	editorWarn string
 	confPath   string
 
 	// notice is a transient one-line message (copy feedback, ssh start
@@ -218,6 +219,11 @@ type Config struct {
 	// EditorHint, when non-empty, shows as a notice after the editor
 	// returns (e.g. the $EDITOR-unset fallback explanation).
 	EditorHint string
+	// EditorWarn, when non-empty, overrides EditorHint after the editor
+	// returns: the cmd layer sets it when setup has not wired sasash.conf
+	// into ssh, so an edit that cannot show up in the list says why
+	// instead of silently changing nothing.
+	EditorWarn string
 	// ConfPath is the file `e` edits: sasash.conf.
 	ConfPath string
 }
@@ -282,6 +288,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		loadHosts:  cfg.LoadHosts,
 		editor:     cfg.Editor,
 		editorHint: cfg.EditorHint,
+		editorWarn: cfg.EditorWarn,
 		confPath:   cfg.ConfPath,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
@@ -372,7 +379,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, probeCmd(m.prober, m.hosts)
 		}
 		// Hand-edits win (SPEC §2): re-read and re-render, never fight.
+		// The setup warning outranks the fallback hint — an edit ssh
+		// cannot see must say why, not silently change nothing.
 		m.notice = m.editorHint
+		if m.editorWarn != "" {
+			m.notice = m.editorWarn
+		}
 		if m.loadHosts == nil {
 			return m, probeCmd(m.prober, m.hosts)
 		}

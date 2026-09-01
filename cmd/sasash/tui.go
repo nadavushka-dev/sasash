@@ -13,6 +13,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
@@ -61,12 +62,19 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	}
 	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
 	editor, editorHint := resolveEditor(os.Getenv("EDITOR"))
+	// An edit ssh cannot see (setup has not wired sasash.conf in) must
+	// come back with an explanation, not a silently unchanged list.
+	editorWarn := ""
+	if st, err := setup.Check(home); err == nil && !(st.IncludePresent && st.ConfPresent) {
+		editorWarn = "sasash.conf is not wired into ssh yet — run `sasash setup`"
+	}
 	m := ui.New(hosts, probe.Prober{}, run.OS{}, ui.Config{
 		Theme:      theme,
 		SaveTheme:  saveThemeTo(statePath),
 		SaveHost:   saveHostTo(confPath),
 		Editor:     editor,
 		EditorHint: editorHint,
+		EditorWarn: editorWarn,
 		ConfPath:   confPath,
 		LoadHosts: func() ([]hostmodel.Host, error) {
 			// Reload warnings are dropped: they already printed at startup
