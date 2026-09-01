@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	register("setup", "one-time bootstrap: Include line, sasash.conf, ~/.ssh/cm", func(args []string, stdout, stderr io.Writer) int {
+	register("setup", "one-time bootstrap: Include line, sasash.conf, ControlMaster socket dir (~/.ssh/cm)", func(args []string, stdout, stderr io.Writer) int {
 		return runSetup(args, os.Stdin, stdout, stderr)
 	})
 }
@@ -55,7 +55,7 @@ func setupHome(home string, yes bool, stdin io.Reader, stdout, stderr io.Writer)
 		fmt.Fprintln(stdout, "  create ~/.ssh/config.d/sasash.conf")
 	}
 	if !st.CMDirPresent {
-		fmt.Fprintln(stdout, "  create ~/.ssh/cm/ for control sockets")
+		fmt.Fprintln(stdout, "  create ~/.ssh/cm/, where ssh keeps its ControlMaster sockets")
 	}
 
 	if !yes && !confirm(stdin, stdout) {
