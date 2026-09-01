@@ -17,9 +17,15 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe"
 )
 
-// refreshEvery is how often paths are re-probed. One refresh is a single
-// parallel ProbeAll bounded by the prober timeout, so this stays cheap.
+// refreshEvery is how often paths are re-probed. One refresh dials every
+// path, bounded by probeChunk and the prober timeout, so this stays cheap.
 const refreshEvery = 5 * time.Second
+
+// probeChunk caps how many paths one refresh dials at once: a large config
+// must not open hundreds of sockets per round (ProbeAll itself starts one
+// goroutine per path). Chunks run sequentially inside the tea.Cmd, off the
+// UI thread, so a big fleet costs refresh latency, never responsiveness.
+const probeChunk = 64
 
 // hostItem adapts hostmodel.Host to the bubbles list.
 type hostItem struct{ host hostmodel.Host }
@@ -65,7 +71,14 @@ func probeCmd(p probe.Prober, hosts []hostmodel.Host) tea.Cmd {
 		for _, h := range hosts {
 			flat = append(flat, h.Paths...)
 		}
-		statuses := p.ProbeAll(context.Background(), flat)
+		statuses := make([]probe.Status, 0, len(flat))
+		for start := 0; start < len(flat); start += probeChunk {
+			end := start + probeChunk
+			if end > len(flat) {
+				end = len(flat)
+			}
+			statuses = append(statuses, p.ProbeAll(context.Background(), flat[start:end])...)
+		}
 		out := make(map[string][]probe.Status, len(hosts))
 		for _, h := range hosts {
 			out[h.Alias] = statuses[:len(h.Paths):len(h.Paths)]
@@ -165,19 +178,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, probeCmd(m.prober, m.hosts)
 
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, m.keys.Quit), key.Matches(msg, m.keys.ForceQuit):
+		if key.Matches(msg, m.keys.ForceQuit) {
 			return m, tea.Quit
-		case key.Matches(msg, m.keys.HalfDown):
-			for i := 0; i < m.halfPage(); i++ {
-				m.list.CursorDown()
+		}
+		// Action keys must never fire while the filter input is focused
+		// (SPEC §5 addendum). Filtering arrives in 1.5; the guard is
+		// structural from day one so keys added later inherit it.
+		if m.list.FilterState() != list.Filtering {
+			switch {
+			case key.Matches(msg, m.keys.Quit):
+				return m, tea.Quit
+			case key.Matches(msg, m.keys.HalfDown):
+				for i := 0; i < m.halfPage(); i++ {
+					m.list.CursorDown()
+				}
+				return m, nil
+			case key.Matches(msg, m.keys.HalfUp):
+				for i := 0; i < m.halfPage(); i++ {
+					m.list.CursorUp()
+				}
+				return m, nil
 			}
-			return m, nil
-		case key.Matches(msg, m.keys.HalfUp):
-			for i := 0; i < m.halfPage(); i++ {
-				m.list.CursorUp()
-			}
-			return m, nil
 		}
 	}
 
@@ -232,6 +253,9 @@ func (m Model) View() string {
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, empty)
 	} else {
 		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", m.detailView())
+		// A long alias + hostname can outgrow the terminal; truncate every
+		// line so the frame never wraps and pushes the alt screen around.
+		panes = m.styles.Clamp.MaxWidth(m.width).Render(panes)
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panes)
 	}
 
@@ -271,7 +295,8 @@ func (m Model) detailView() string {
 		if i < len(sts) {
 			if s := sts[i]; s.Alive() {
 				glyph = m.styles.StatusUp.Render("●")
-				extra = m.styles.PathExtra.Render(fmt.Sprintf("%dms", s.Latency.Milliseconds()))
+				// Same latency spelling as `sasash status`: 20ms, 1.005s.
+				extra = m.styles.PathExtra.Render(s.Latency.Round(time.Millisecond).String())
 			} else {
 				glyph = m.styles.StatusDown.Render("○")
 				extra = m.styles.PathExtra.Render("down")

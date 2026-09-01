@@ -158,6 +158,47 @@ func TestModel_Update_ProbeFlow(t *testing.T) {
 			t.Errorf("View() after probe missing %q\nview:\n%s", want, view)
 		}
 	}
+
+	// db's status must be its own, not an offset into web's: the per-host
+	// slicing of the flat probe result is the only index math in the package.
+	m = update(t, m, keyMsg("j"))
+	view = m.View()
+	for _, want := range []string{"5ms", "ssh db"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View() with db selected missing %q\nview:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "20ms") {
+		t.Errorf("View() with db selected still shows web's 20ms latency\nview:\n%s", view)
+	}
+}
+
+func TestModel_Update_RefreshTick(t *testing.T) {
+	t.Parallel()
+	hosts := testHosts(1)
+	addr := hosts[0].Paths[0].Addr()
+	dialer := fakedial.New().Down(addr)
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	next, _ := m.Update(m.Init()())
+	m = next.(ui.Model)
+	if view := m.View(); !strings.Contains(view, "down") {
+		t.Fatalf("View() after first probe = %q, want down", view)
+	}
+
+	// The host comes back up; the next tick must re-probe and repaint.
+	dialer.Up(addr, 7*time.Millisecond)
+	next, cmd := m.Update(ui.RefreshTick())
+	m = next.(ui.Model)
+	if cmd == nil {
+		t.Fatalf("Update(refreshTick) cmd = nil, want probe cmd")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(ui.Model)
+	if view := m.View(); !strings.Contains(view, "7ms") {
+		t.Errorf("View() after refresh = %q, want recovered 7ms status", view)
+	}
 }
 
 func TestModel_View_Smoke(t *testing.T) {

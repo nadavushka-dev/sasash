@@ -31,6 +31,7 @@ type Styles struct {
 	HelpSep    lipgloss.Style
 
 	Empty lipgloss.Style // empty-state sentence
+	Clamp lipgloss.Style // colorless layout style for width truncation
 }
 
 // NewStyles materializes the widget styles for one theme.
@@ -57,5 +58,6 @@ func NewStyles(p Palette) Styles {
 		HelpSep:    lipgloss.NewStyle().Foreground(p.BgSubtle),
 
 		Empty: lipgloss.NewStyle().Foreground(p.FgDim),
+		Clamp: lipgloss.NewStyle(),
 	}
 }
