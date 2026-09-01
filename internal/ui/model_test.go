@@ -1,12 +1,15 @@
 package ui_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
@@ -181,8 +184,11 @@ func TestModel_Update_RefreshTick(t *testing.T) {
 	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	next, _ := m.Update(m.Init()())
+	next, rearm := m.Update(m.Init()())
 	m = next.(ui.Model)
+	if rearm == nil {
+		t.Errorf("Update(probeDoneMsg) cmd = nil, want re-arming tick")
+	}
 	if view := m.View(); !strings.Contains(view, "down") {
 		t.Fatalf("View() after first probe = %q, want down", view)
 	}
@@ -208,6 +214,64 @@ func TestModel_View_Smoke(t *testing.T) {
 	for _, want := range []string{"sasash", "host0", "host1", "host2", "paths", "ssh host0"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing %q", want)
+		}
+	}
+}
+
+// peakDialer records the highest number of concurrent dials it has seen.
+// The short block gives dials in the same round time to overlap, so an
+// unbounded fan-out reliably exceeds the cap.
+type peakDialer struct {
+	mu        sync.Mutex
+	cur, peak int
+}
+
+func (d *peakDialer) Dial(ctx context.Context, addr string) (time.Duration, error) {
+	d.mu.Lock()
+	d.cur++
+	if d.cur > d.peak {
+		d.peak = d.cur
+	}
+	d.mu.Unlock()
+	time.Sleep(2 * time.Millisecond)
+	d.mu.Lock()
+	d.cur--
+	d.mu.Unlock()
+	return time.Millisecond, nil
+}
+
+func TestModel_Init_ProbeFanOutBounded(t *testing.T) {
+	t.Parallel()
+	dialer := &peakDialer{}
+	hosts := testHosts(2*ui.ProbeChunk + 3)
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: time.Second})
+	msg := m.Init()()
+
+	if dialer.peak > ui.ProbeChunk {
+		t.Errorf("peak concurrent dials = %v, want <= %v", dialer.peak, ui.ProbeChunk)
+	}
+	// Every host still gets its own status after the chunked rounds.
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	next, _ = next.(ui.Model).Update(msg)
+	m = next.(ui.Model)
+	m = update(t, m, keyMsg("G"))
+	if view := m.View(); !strings.Contains(view, "1ms") {
+		t.Errorf("View() for last host = %q, want probed 1ms status", view)
+	}
+}
+
+func TestModel_View_NeverWiderThanTerminal(t *testing.T) {
+	t.Parallel()
+	hosts := []hostmodel.Host{{
+		Alias: "prod-web-frankfurt-teaching-cluster-01",
+		Paths: []probe.Path{{Name: "lan", Host: strings.Repeat("very-long-name.", 4) + "example.com"}},
+	}}
+	m := sized(t, hosts)
+	next, _ := m.Update(m.Init()())
+	m = next.(ui.Model)
+	for i, line := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("View() line %d width = %v, want <= 80", i, w)
 		}
 	}
 }

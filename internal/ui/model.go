@@ -62,9 +62,10 @@ type probeDoneMsg struct{ statuses map[string][]probe.Status }
 // refreshTickMsg asks for the next probe round.
 type refreshTickMsg struct{}
 
-// probeCmd dials every path of every host in one parallel ProbeAll round.
-// It runs on bubbletea's command goroutine, so the UI never blocks on the
-// network; the result comes back as a probeDoneMsg.
+// probeCmd dials every path of every host, in parallel ProbeAll rounds of
+// at most probeChunk paths. It runs on bubbletea's command goroutine, so
+// the UI never blocks on the network; the result comes back as a
+// probeDoneMsg.
 func probeCmd(p probe.Prober, hosts []hostmodel.Host) tea.Cmd {
 	return func() tea.Msg {
 		var flat []probe.Path
