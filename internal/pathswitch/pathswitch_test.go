@@ -202,7 +202,10 @@ func TestCycle_RereadsHandEdits(t *testing.T) {
 	}
 }
 
-func TestCycle_PortLines(t *testing.T) {
+// Contract A2: Port follows the switched path. Taking ownership of the
+// user's baseline Port first preserves it by making the port-less meta
+// explicit; switching back restores the baseline exactly.
+func TestCycle_PortFollowsPath(t *testing.T) {
 	t.Parallel()
 	in := `# @sasash path lan 192.0.2.10
 # @sasash path ts 198.51.100.5:2222
@@ -212,13 +215,13 @@ Host web
 `
 	path := write(t, in)
 	if _, err := pathswitch.Cycle(path, "web"); err != nil {
-		t.Fatalf("Cycle() failed: %v", err)
+		t.Fatalf("first Cycle() failed: %v", err)
 	}
-	want := `# @sasash path lan 192.0.2.10
+	want := `# @sasash path lan 192.0.2.10:2200
 # @sasash path ts 198.51.100.5:2222
 Host web
   HostName 198.51.100.5
-  Port 2200
+  Port 2222
 
 # pinned variants, generated — for when you want to force one path
 Host web.lan
@@ -229,7 +232,187 @@ Host web.ts
   Port 2222
 `
 	if got := read(t, path); got != want {
-		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+		t.Errorf("first Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+
+	// Back to lan: the baseline 2200 comes back from the normalized meta.
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("second Cycle() failed: %v", err)
+	}
+	wantBack := strings.Replace(want, "  HostName 198.51.100.5\n  Port 2222\n\n", "  HostName 192.0.2.10\n  Port 2200\n\n", 1)
+	if got := read(t, path); got != wantBack {
+		t.Errorf("second Cycle() file =\n%q\nwant\n%q", got, wantBack)
+	}
+
+	// And forward again: stable round-trip on the normalized file.
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("third Cycle() failed: %v", err)
+	}
+	if got := read(t, path); got != want {
+		t.Errorf("third Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// No baseline Port: switching to a :port path inserts Port directly after
+// HostName; switching back removes the owned line — two cycles restore the
+// original bytes exactly, and the port-less path's variant carries no Port
+// even while the owned Port line exists.
+func TestCycle_PortInsertAndRemove(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 192.0.2.10
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("first Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 198.51.100.5
+  Port 2222
+
+# pinned variants, generated — for when you want to force one path
+Host web.lan
+  HostName 192.0.2.10
+Host web.ts
+  HostName 198.51.100.5
+  Port 2222
+`
+	if got := read(t, path); got != want {
+		t.Errorf("first Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("second Cycle() failed: %v", err)
+	}
+	wantBack := in + `
+# pinned variants, generated — for when you want to force one path
+Host web.lan
+  HostName 192.0.2.10
+Host web.ts
+  HostName 198.51.100.5
+  Port 2222
+`
+	if got := read(t, path); got != wantBack {
+		t.Errorf("second Cycle() file =\n%q\nwant\n%q", got, wantBack)
+	}
+}
+
+// The documented A2 coincidence hazard, pinned: a user-authored Port equal to
+// the active path's explicit port reads as owned and is removed on the way to
+// a port-less path.
+func TestCycle_PortCoincidenceHazard(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 198.51.100.5
+  Port 2222
+`
+	path := write(t, in)
+	got, err := pathswitch.Cycle(path, "web")
+	if err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	if got.To.Name != "lan" || got.To.Port != "" {
+		t.Errorf("Cycle() To = %+v, want lan with no port", got.To)
+	}
+	file := read(t, path)
+	if strings.Contains(file, "\n  Port 2222\n\n") || !strings.Contains(file, "Host web\n  HostName 192.0.2.10\n\n") {
+		t.Errorf("Cycle() main block =\n%q\nwant owned Port removed", file)
+	}
+}
+
+// Meta normalization keeps extra tokens after the addr and CRLF terminators.
+func TestCycle_PortNormalizationPreserves(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extra meta tokens", func(t *testing.T) {
+		t.Parallel()
+		in := `# @sasash path lan 192.0.2.10 fastest fallback
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 192.0.2.10
+  Port 2200
+`
+		path := write(t, in)
+		if _, err := pathswitch.Cycle(path, "web"); err != nil {
+			t.Fatalf("Cycle() failed: %v", err)
+		}
+		if got := read(t, path); !strings.Contains(got, "# @sasash path lan 192.0.2.10:2200 fastest fallback\n") {
+			t.Errorf("Cycle() file =\n%q\nwant normalized meta keeping extra tokens", got)
+		}
+	})
+
+	t.Run("bare ipv6 gets bracketed", func(t *testing.T) {
+		t.Parallel()
+		in := `# @sasash path v6 2001:db8::1
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 2001:db8::1
+  Port 2200
+`
+		path := write(t, in)
+		if _, err := pathswitch.Cycle(path, "web"); err != nil {
+			t.Fatalf("Cycle() failed: %v", err)
+		}
+		got := read(t, path)
+		if !strings.Contains(got, "# @sasash path v6 [2001:db8::1]:2200\n") {
+			t.Errorf("Cycle() file =\n%q\nwant bracketed v6 meta", got)
+		}
+		// The normalized meta must round-trip: cycling back restores 2200.
+		if _, err := pathswitch.Cycle(path, "web"); err != nil {
+			t.Fatalf("second Cycle() failed: %v", err)
+		}
+		if got := read(t, path); !strings.Contains(got, "Host web\n  HostName 2001:db8::1\n  Port 2200\n") {
+			t.Errorf("second Cycle() file =\n%q\nwant v6 baseline restored", got)
+		}
+	})
+
+	t.Run("crlf", func(t *testing.T) {
+		t.Parallel()
+		in := strings.ReplaceAll(`# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 192.0.2.10
+  Port 2200
+`, "\n", "\r\n")
+		path := write(t, in)
+		if _, err := pathswitch.Cycle(path, "web"); err != nil {
+			t.Fatalf("Cycle() failed: %v", err)
+		}
+		got := read(t, path)
+		if !strings.Contains(got, "# @sasash path lan 192.0.2.10:2200\r\n") || !strings.Contains(got, "  Port 2222\r\n") {
+			t.Errorf("Cycle() file =\n%q\nwant CRLF-terminated normalized meta and Port", got)
+		}
+		if strings.Contains(strings.ReplaceAll(got, "\r\n", ""), "\n") {
+			t.Errorf("Cycle() introduced a lone LF:\n%q", got)
+		}
+	})
+}
+
+// A user Port with only port-less paths is never touched: there is nothing
+// for Port to follow.
+func TestCycle_PortlessPathsLeavePortAlone(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 192.0.2.10
+  Port 2200
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	got := read(t, path)
+	if !strings.Contains(got, "# @sasash path lan 192.0.2.10\n") {
+		t.Errorf("Cycle() normalized metas with nothing to fix:\n%q", got)
+	}
+	if !strings.Contains(got, "Host web\n  HostName 198.51.100.5\n  Port 2200\n") {
+		t.Errorf("Cycle() touched the user Port:\n%q", got)
 	}
 }
 
