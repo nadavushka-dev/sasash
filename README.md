@@ -9,4 +9,5 @@ for the design of record.
 The demo drives the real binary against the fixture config in `demo/home`
 (RFC 5737 documentation addresses, so every path shows as down). Regenerate it with
 `make demo` (requires [vhs](https://github.com/charmbracelet/vhs): `brew install vhs`;
-the target skips gracefully without it).
+the target skips gracefully without it). Every render differs byte-wise, so only
+commit the regenerated `demo/demo.gif` when the demo content actually changed.
