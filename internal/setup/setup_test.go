@@ -155,7 +155,9 @@ func TestEnsure_Include(t *testing.T) {
 func TestEnsure_Idempotent(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
-	writeConfig(t, home, "Host *\n  User dev\n")
+	// The nested Include does not count as bootstrapped, so the first run
+	// inserts at the top; the second must then recognize its own line.
+	writeConfig(t, home, "Host web\n  HostName 192.0.2.10\n  Include ~/.ssh/config.d/sasash.conf\n")
 
 	if err := setup.Ensure(home); err != nil {
 		t.Fatalf("first Ensure() failed: %v", err)
