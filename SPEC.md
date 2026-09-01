@@ -263,8 +263,9 @@ One line per host in config order, always exactly five whitespace-separated fiel
 ### `up` / `down` semantics
 
 `up <host>` with no set name applies **all** declared forward sets, in meta
-order; `up <host> <set>` applies just that one. An already-running master is
-success — `up` starts only what is missing. A mid-sequence failure aborts the
+order; `up <host> <set>` applies just that one. A host with no declared sets
+still gets its master ensured — `up` is never a no-op. An already-running
+master is success — `up` starts only what is missing. A mid-sequence failure aborts the
 remaining sets but leaves the earlier ones up (the state cache is never
 truth; status re-derives reality). A state-cache write failure is a warning,
 never a failure: the ssh action succeeded. `down` is `ssh -O exit` and is

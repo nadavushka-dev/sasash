@@ -122,6 +122,14 @@ func TestRunUp(t *testing.T) {
 			wantStderr: []string{"warning: forward added but state not recorded"},
 		},
 		{
+			name:        "master-only failure omits the set name",
+			args:        []string{"plain"},
+			upErr:       map[string]error{"": errors.New("ssh: connect refused")},
+			wantCode:    1,
+			wantUpCalls: []string{"plain/="},
+			wantStderr:  []string{"sasash up: ssh: connect refused"},
+		},
+		{
 			name:       "unknown host",
 			args:       []string{"bogus"},
 			wantCode:   3,
