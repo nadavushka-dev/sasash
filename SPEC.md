@@ -193,6 +193,19 @@ The command line at the bottom always shows what the highlighted action will run
 **Handoff:** use `tea.ExecProcess` to suspend the TUI and give the terminal fully to `ssh`.
 Native resize, mouse, colors, `~.`, nested tmux — all free. On exit you're back in the list.
 
+### Keybindings & themes (ratified addendum)
+
+Vim-style navigation is required alongside the action keys above: `j`/`k` (and arrows)
+move, `g`/`G` jump to first/last host, `ctrl+d`/`ctrl+u` half-page, `esc` goes back /
+clears the filter. Every binding is a named bubbles `key.Binding` so the help view is
+generated from the bindings, never hand-maintained. Single-letter action keys must not
+fire while the filter input is focused.
+
+The UI is dark-only. Every lipgloss style derives from a semantic palette struct — no
+hex literal outside the palette layer. Four shipped themes: gruvbox dark (default),
+catppuccin mocha, tokyo night, nord; theme selection (flag/env/config) persists and
+degrades cleanly to 256-color and `NO_COLOR`. Custom user themes are deferred.
+
 ---
 
 ## 6. Actions (non-ssh tools)
