@@ -146,9 +146,10 @@ func TestRunStatus_ProbesAllHostsConcurrently(t *testing.T) {
 	if want := "a - 192.0.2.1:22 1ms down:-\nb - 192.0.2.2:22 1ms down:-\n"; stdout.String() != want {
 		t.Errorf("runStatus() stdout = %q, want %q", stdout.String(), want)
 	}
-	// Sequential probing would take 2*delay; leave headroom for -race.
-	if elapsed >= 2*delay {
-		t.Errorf("runStatus() took %v, want < %v: hosts must probe concurrently", elapsed, 2*delay)
+	// Sequential probing would take 2*delay; fail well below that so a
+	// regression trips decisively, with headroom left for -race scheduling.
+	if limit := delay * 3 / 2; elapsed >= limit {
+		t.Errorf("runStatus() took %v, want < %v: hosts must probe concurrently", elapsed, limit)
 	}
 }
 
