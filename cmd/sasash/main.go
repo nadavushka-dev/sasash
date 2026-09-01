@@ -14,14 +14,17 @@ import (
 
 type command struct {
 	summary string
-	run     func(args []string) int
+	run     func(args []string, stdout, stderr io.Writer) int
 }
 
 var commands = map[string]command{}
 
 // register wires a subcommand into the dispatch table. Call it from an
 // init func in the subcommand's own file.
-func register(name, summary string, run func(args []string) int) {
+func register(name, summary string, run func(args []string, stdout, stderr io.Writer) int) {
+	if _, dup := commands[name]; dup || name == "help" {
+		panic("sasash: duplicate or reserved subcommand " + name)
+	}
 	commands[name] = command{summary: summary, run: run}
 }
 
@@ -44,7 +47,7 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "sasash: unknown subcommand %q; try `sasash help`\n", name)
 			return 1
 		}
-		return cmd.run(args[1:])
+		return cmd.run(args[1:], stdout, stderr)
 	}
 }
 

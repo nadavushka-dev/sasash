@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"runtime/debug"
 )
 
@@ -9,8 +10,8 @@ func init() {
 	register("version", "print the sasash version", cmdVersion)
 }
 
-func cmdVersion(args []string) int {
-	fmt.Println(version())
+func cmdVersion(_ []string, stdout, _ io.Writer) int {
+	fmt.Fprintln(stdout, version())
 	return 0
 }
 

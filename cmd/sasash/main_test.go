@@ -4,12 +4,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
 
 func init() {
-	register("argcount", "test-only: exit with len(args)", func(args []string) int {
+	register("argcount", "test-only: exit with len(args)", func(args []string, _, _ io.Writer) int {
 		return len(args)
 	})
 }
@@ -51,6 +52,12 @@ func TestDispatch(t *testing.T) {
 			name:     "subcommand receives remaining args",
 			args:     []string{"argcount", "a", "b"},
 			wantCode: 2,
+		},
+		{
+			name:       "subcommand stdout reaches the caller",
+			args:       []string{"version"},
+			wantCode:   0,
+			wantStdout: "dev",
 		},
 	}
 	for _, tt := range tests {
