@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
@@ -105,7 +106,7 @@ func TestRunUp(t *testing.T) {
 			upErr:       map[string]error{"web": errors.New("ssh: connect refused")},
 			wantCode:    1,
 			wantUpCalls: []string{"ubuntu/web=3000:localhost:3000,3001:localhost:3001"},
-			wantStderr:  []string{"ssh: connect refused"},
+			wantStderr:  []string{`set "web": ssh: connect refused`},
 		},
 		{
 			name: "state write failure warns but is success",
@@ -169,6 +170,69 @@ func TestRunUp(t *testing.T) {
 	}
 }
 
+// Unlike addr, up surfaces config warnings on SUCCESS too — these are
+// interactive actions, stderr is free (same policy as status).
+func TestRunUp_WarningsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	config := `# @sasash forwards broken
+# @sasash forwards web 3000:localhost:3000
+Host ubuntu
+  HostName 192.0.2.10
+`
+	home := t.TempDir()
+	root := filepath.Join(home, ".ssh", "config")
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		t.Fatalf("MkdirAll() err = %v", err)
+	}
+	if err := os.WriteFile(root, []byte(config), 0o600); err != nil {
+		t.Fatalf("WriteFile() err = %v", err)
+	}
+
+	fake := &fakeTunnel{}
+	var stdout, stderr bytes.Buffer
+	got := runUp([]string{"ubuntu"}, &stdout, &stderr, root, home, fake)
+	if got != 0 {
+		t.Fatalf("runUp() = %v, want 0 (stderr: %q)", got, stderr.String())
+	}
+	if want := []string{"ubuntu/web=3000:localhost:3000"}; !reflect.DeepEqual(fake.upCalls, want) {
+		t.Errorf("runUp() Up calls = %v, want %v", fake.upCalls, want)
+	}
+	if !strings.Contains(stderr.String(), "warning") || !strings.Contains(stderr.String(), "missing specs") {
+		t.Errorf("runUp() stderr = %q, want the malformed-meta warning on success", stderr.String())
+	}
+}
+
+// One end-to-end pin through the REAL engine: runUp's set iteration composed
+// with Engine.Up must produce exactly the SPEC §4 argv sequence. The fake
+// runner's stubs double as the argv assertion — an unstubbed call fails loud.
+func TestRunUp_DrivesRealEngineArgv(t *testing.T) {
+	t.Parallel()
+
+	root, home := writeUpDownConfig(t)
+	runner := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", "3000:localhost:3000", "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", "3001:localhost:3001", "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", "4011:localhost:4011", "ubuntu")
+	eng := tunnel.Engine{Runner: runner, StateDir: t.TempDir()}
+
+	var stdout, stderr bytes.Buffer
+	if got := runUp([]string{"ubuntu"}, &stdout, &stderr, root, home, eng); got != 0 {
+		t.Fatalf("runUp() = %v, want 0 (stderr: %q)", got, stderr.String())
+	}
+	want := []string{
+		"ssh -O check ubuntu",
+		"ssh -O forward -L 3000:localhost:3000 ubuntu",
+		"ssh -O forward -L 3001:localhost:3001 ubuntu",
+		"ssh -O check ubuntu",
+		"ssh -O forward -L 4011:localhost:4011 ubuntu",
+	}
+	if got := runner.CallKeys(); !reflect.DeepEqual(got, want) {
+		t.Errorf("runUp() argv = %v, want %v", got, want)
+	}
+}
+
 func TestRunUp_MissingConfig(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +267,16 @@ func TestRunDown(t *testing.T) {
 			args:          []string{"ubuntu"},
 			wantCode:      0,
 			wantExitCalls: []string{"ubuntu"},
+		},
+		{
+			// CONTRACT-tunnel §4: the master really went down; only the
+			// cache clear failed. Mirrors up's handling.
+			name:          "state write failure warns but is success",
+			args:          []string{"ubuntu"},
+			exitErr:       fmt.Errorf("master exit requested but state not recorded: %w", tunnel.ErrStateWrite),
+			wantCode:      0,
+			wantExitCalls: []string{"ubuntu"},
+			wantStderr:    []string{"warning: master exit requested but state not recorded"},
 		},
 		{
 			name:          "ssh refusal is exit 1 with ssh's message",

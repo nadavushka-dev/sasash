@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
@@ -21,13 +21,14 @@ func cmdDown(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sasash down: %v\n", err)
 		return 3
 	}
-	eng := tunnel.Engine{StateDir: filepath.Join(home, ".local", "state", "sasash")}
-	return runDown(args, stdout, stderr, filepath.Join(home, ".ssh", "config"), home, eng)
+	eng := tunnel.Engine{StateDir: stateDir(home)}
+	return runDown(args, stdout, stderr, sshConfigPath(home), home, eng)
 }
 
 // runDown is `ssh -O exit` with the addr/status exit-code contract on top:
 // 0 = master torn down, 1 = ssh refused (its message on stderr — a master
-// that was never up reports here), 2 = usage, 3 = config problem.
+// that was never up reports here; down is not idempotent), 2 = usage,
+// 3 = config problem.
 func runDown(args []string, stdout, stderr io.Writer, root, home string, eng tunneler) int {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: sasash down <host>")
@@ -40,7 +41,14 @@ func runDown(args []string, stdout, stderr io.Writer, root, home string, eng tun
 		return code
 	}
 
-	if err := eng.Exit(context.Background(), h.Alias); err != nil {
+	switch err := eng.Exit(context.Background(), h.Alias); {
+	case err == nil:
+	case errors.Is(err, tunnel.ErrStateWrite):
+		// The master really went down; only the cache clear failed
+		// (CONTRACT-tunnel §4: a state write failure must not fail the ssh
+		// action that succeeded).
+		fmt.Fprintf(stderr, "sasash down: warning: %v\n", err)
+	default:
 		fmt.Fprintf(stderr, "sasash down: %v\n", err)
 		return 1
 	}

@@ -23,6 +23,14 @@ type tunneler interface {
 	Exit(ctx context.Context, host string) error
 }
 
+var _ tunneler = tunnel.Engine{} // the wiring funcs are uncovered; pin this at compile time
+
+// stateDir is the tunnel state cache location; up and down (and later the
+// TUI) must agree on it or the cache silently splits.
+func stateDir(home string) string { return filepath.Join(home, ".local", "state", "sasash") }
+
+func sshConfigPath(home string) string { return filepath.Join(home, ".ssh", "config") }
+
 // cmdUp wires the real world; every decision lives in runUp.
 func cmdUp(args []string, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
@@ -30,8 +38,8 @@ func cmdUp(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sasash up: %v\n", err)
 		return 3
 	}
-	eng := tunnel.Engine{StateDir: filepath.Join(home, ".local", "state", "sasash")}
-	return runUp(args, stdout, stderr, filepath.Join(home, ".ssh", "config"), home, eng)
+	eng := tunnel.Engine{StateDir: stateDir(home)}
+	return runUp(args, stdout, stderr, sshConfigPath(home), home, eng)
 }
 
 // runUp starts the host's control master and applies forward sets: the named
@@ -41,6 +49,10 @@ func cmdUp(args []string, stdout, stderr io.Writer) int {
 // Engine.Up only starts what is missing), 1 = the action failed (ssh's own
 // message on stderr), 2 = usage, 3 = config problem (unknown host, unknown
 // set, unreadable config).
+//
+// A mid-sequence failure aborts the remaining sets but leaves the earlier
+// ones up — the cache is never truth, and the next status re-derives what is
+// actually running.
 func runUp(args []string, stdout, stderr io.Writer, root, home string, eng tunneler) int {
 	if len(args) < 1 || len(args) > 2 {
 		fmt.Fprintln(stderr, "usage: sasash up <host> [set]")
@@ -83,7 +95,11 @@ func runUp(args []string, stdout, stderr io.Writer, root, home string, eng tunne
 			// keep going — the next Status re-derives reality anyway.
 			fmt.Fprintf(stderr, "sasash up: warning: %v\n", err)
 		default:
-			fmt.Fprintf(stderr, "sasash up: %v\n", err)
+			if s.Name != "" {
+				fmt.Fprintf(stderr, "sasash up: set %q: %v\n", s.Name, err)
+			} else {
+				fmt.Fprintf(stderr, "sasash up: %v\n", err)
+			}
 			return 1
 		}
 	}

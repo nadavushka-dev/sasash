@@ -260,11 +260,23 @@ One line per host in config order, always exactly five whitespace-separated fiel
 - Field 5 lists dead path names (dial address when unnamed), `down:-` when all alive —
   so `NF` is always 5 for awk.
 
-### Exit codes (`addr` and `status`)
+### `up` / `down` semantics
 
-`0` success (`status`: even with hosts down — it reports, it doesn't judge) ·
-`1` `addr` only: all paths down, retryable · `2` usage · `3` config problem
-(unknown host, unreadable config).
+`up <host>` with no set name applies **all** declared forward sets, in meta
+order; `up <host> <set>` applies just that one. An already-running master is
+success — `up` starts only what is missing. A mid-sequence failure aborts the
+remaining sets but leaves the earlier ones up (the state cache is never
+truth; status re-derives reality). A state-cache write failure is a warning,
+never a failure: the ssh action succeeded. `down` is `ssh -O exit` and is
+**not** idempotent — a master that isn't running reports failure.
+
+### Exit codes (`addr`, `status`, `up`, `down`)
+
+`0` success (`status`: even with hosts down — it reports, it doesn't judge;
+`up`: including an already-running master) ·
+`1` action failed — `addr`: all paths down, retryable; `up`/`down`: ssh
+refused, its message on stderr · `2` usage · `3` config problem
+(unknown host, unknown forward set, unreadable config).
 
 ---
 
