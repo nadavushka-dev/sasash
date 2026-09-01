@@ -1,6 +1,8 @@
 package ui_test
 
 import (
+	"errors"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -163,6 +165,14 @@ func TestModel_Update_CopyFailure(t *testing.T) {
 	}
 }
 
+func TestSSHExec_Args(t *testing.T) {
+	t.Parallel()
+	// The builder's argv must actually reach the process enter runs.
+	if got := ui.SSHExec("web").Args; !reflect.DeepEqual(got, []string{"ssh", "web"}) {
+		t.Errorf("SSHExec(web).Args = %v, want %v", got, []string{"ssh", "web"})
+	}
+}
+
 func TestModel_Update_Connect(t *testing.T) {
 	t.Parallel()
 	m := probedModel(t, fakerun.New())
@@ -172,8 +182,66 @@ func TestModel_Update_Connect(t *testing.T) {
 	}
 
 	empty := sized(t, nil)
-	if _, cmd := empty.Update(keyMsg("enter")); cmd != nil {
-		t.Errorf("Update(enter) on empty list cmd = %v, want nil", cmd)
+	for _, k := range []string{"enter", "y", "c"} {
+		if _, cmd := empty.Update(keyMsg(k)); cmd != nil {
+			t.Errorf("Update(%s) on empty list cmd = %v, want nil", k, cmd)
+		}
+	}
+}
+
+func TestModel_Update_CopyAddr_BeforeFirstProbe(t *testing.T) {
+	t.Parallel()
+	runner := fakerun.New()
+	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}}}
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, runner)
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	// No probe result yet: the pane says pending, so y must not claim the
+	// paths are down.
+	m2, cmd := m.Update(keyMsg("y"))
+	m = m2.(ui.Model)
+	if cmd != nil {
+		t.Errorf("Update(y) before first probe cmd = %v, want nil", cmd)
+	}
+	if len(runner.Calls()) != 0 {
+		t.Errorf("Calls() = %v, want none", runner.Calls())
+	}
+	if view := m.View(); !strings.Contains(view, "still probing") {
+		t.Errorf("View() = %q, want a still-probing notice", view)
+	}
+}
+
+func TestModel_Update_SSHExit_NoticeOnlyOnStartFailure(t *testing.T) {
+	t.Parallel()
+	// A genuine *exec.ExitError, as bubbletea's callback delivers for any
+	// non-zero remote exit — an ordinary session end, not news.
+	exitErr := exec.Command("false").Run()
+	if exitErr == nil {
+		t.Fatalf("exec false: expected non-nil exit error for fixture")
+	}
+	tests := []struct {
+		name       string
+		err        error
+		wantNotice bool
+	}{
+		{name: "clean exit", err: nil, wantNotice: false},
+		{name: "non-zero ssh exit is not news", err: exitErr, wantNotice: false},
+		{name: "start failure surfaces", err: errors.New(`exec: "ssh": executable file not found`), wantNotice: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := probedModel(t, fakerun.New())
+			next, cmd := m.Update(ui.SSHExit(tt.err))
+			m = next.(ui.Model)
+			if cmd == nil {
+				t.Fatalf("Update(sshExit) cmd = nil, want re-probe")
+			}
+			got := strings.Contains(m.View(), "ssh: ")
+			if got != tt.wantNotice {
+				t.Errorf("View() ssh notice = %v, want %v", got, tt.wantNotice)
+			}
+		})
 	}
 }
 

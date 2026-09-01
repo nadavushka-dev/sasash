@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	// os/exec appears here ONLY to build the *exec.Cmd that tea.ExecProcess
@@ -82,6 +83,16 @@ func sshCommand(alias string) []string {
 	return []string{"ssh", alias}
 }
 
+// sshExec builds the process the handoff gives the terminal to.
+func sshExec(alias string) *exec.Cmd {
+	argv := sshCommand(alias)
+	return exec.Command(argv[0], argv[1:]...)
+}
+
+// clipTimeout bounds a clipboard write: a wedged pasteboard server must
+// surface as a "copy failed" notice, not as silence.
+const clipTimeout = 2 * time.Second
+
 // clipArgv builds the pbcopy invocation (decision R2). run.Runner has no
 // stdin, so the text travels as a positional shell argument — never spliced
 // into the script, so no quoting is needed and no injection is possible.
@@ -93,7 +104,9 @@ func clipArgv(text string) []string {
 // thread.
 func clipCmd(r run.Runner, text string) tea.Cmd {
 	return func() tea.Msg {
-		res, err := r.Run(context.Background(), clipArgv(text)...)
+		ctx, cancel := context.WithTimeout(context.Background(), clipTimeout)
+		defer cancel()
+		res, err := r.Run(ctx, clipArgv(text)...)
 		if err == nil && !res.OK() {
 			err = fmt.Errorf("pbcopy exited %d: %s", res.Code, strings.TrimSpace(string(res.Stderr)))
 		}
@@ -232,7 +245,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, probeCmd(m.prober, m.hosts)
 
 	case sshExitMsg:
-		if msg.err != nil {
+		// A non-zero ssh exit is not news — ssh printed its own diagnosis
+		// to the real terminal during the handoff. Only a failure to start
+		// (missing binary) needs surfacing here.
+		var exitErr *exec.ExitError
+		if msg.err != nil && !errors.As(msg.err, &exitErr) {
 			m.notice = "ssh: " + msg.err.Error()
 		}
 		// The world may have changed while the terminal was handed away.
@@ -261,8 +278,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				argv := sshCommand(host.Alias)
-				return m, tea.ExecProcess(exec.Command(argv[0], argv[1:]...), func(err error) tea.Msg {
+				return m, tea.ExecProcess(sshExec(host.Alias), func(err error) tea.Msg {
 					return sshExitMsg{err: err}
 				})
 			case key.Matches(msg, m.keys.CopyAddr):
@@ -272,6 +288,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				// The active address, bare — the clipboard twin of
 				// `sasash addr`: data for other tools, not a dial target.
+				if m.statuses == nil {
+					m.notice = "still probing — nothing copied"
+					return m, nil
+				}
 				s, ok := probe.Select(m.statuses[host.Alias])
 				if !ok {
 					m.notice = "no alive path — nothing copied"
@@ -362,7 +382,12 @@ func (m Model) View() string {
 	// Same width clamp as the panes: a long alias (or notice) must not
 	// wrap the preview line and push the alt screen around.
 	preview = m.styles.Clamp.MaxWidth(m.width).Render(preview)
-	return strings.Join([]string{header, "", body, preview, " " + m.help.View(m.keys)}, "\n")
+	// help.Width makes bubbles truncate with an ellipsis, but its
+	// truncation has an off-by-a-few edge (an item landing within two
+	// cells of the limit is added anyway, and everything after it too),
+	// so the line gets the same hard clamp as the rest of the chrome.
+	helpLine := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(m.keys))
+	return strings.Join([]string{header, "", body, preview, helpLine}, "\n")
 }
 
 // detailView renders the right pane for the selected host: one line per

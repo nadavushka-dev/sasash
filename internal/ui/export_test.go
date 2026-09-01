@@ -15,3 +15,7 @@ func SSHExit(err error) tea.Msg { return sshExitMsg{err: err} }
 // SSHCommand and ClipArgv expose the argv builders for exact-string tests.
 func SSHCommand(alias string) []string { return sshCommand(alias) }
 func ClipArgv(text string) []string    { return clipArgv(text) }
+
+// SSHExec exposes the handoff process builder so tests can assert the
+// built argv actually reaches the *exec.Cmd.
+var SSHExec = sshExec

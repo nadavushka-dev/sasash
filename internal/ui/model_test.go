@@ -204,8 +204,11 @@ func TestModel_Update_RefreshTick(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("Update(refreshTick) cmd = nil, want probe cmd")
 	}
-	next, _ = m.Update(cmd())
+	next, rearm2 := m.Update(cmd())
 	m = next.(ui.Model)
+	if rearm2 == nil {
+		t.Errorf("Update(probeDoneMsg) after a tick cmd = nil, want the refresh chain re-armed")
+	}
 	if view := m.View(); !strings.Contains(view, "7ms") {
 		t.Errorf("View() after refresh = %q, want recovered 7ms status", view)
 	}
@@ -276,6 +279,18 @@ func TestModel_View_NeverWiderThanTerminal(t *testing.T) {
 	for i, line := range strings.Split(m.View(), "\n") {
 		if w := lipgloss.Width(line); w > 80 {
 			t.Errorf("View() line %d width = %v, want <= 80", i, w)
+		}
+	}
+
+	// The preview line must stay clamped with a notice appended too: the
+	// only path here is down, so y produces the nothing-copied notice.
+	m = update(t, m, keyMsg("y"))
+	if view := m.View(); !strings.Contains(view, "nothing copied") {
+		t.Fatalf("View() = %q, want a notice on the preview line", view)
+	}
+	for i, line := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("View() with notice, line %d width = %v, want <= 80", i, w)
 		}
 	}
 }

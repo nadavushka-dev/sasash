@@ -30,7 +30,7 @@ func DefaultKeyMap() KeyMap {
 		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("ctrl+d", "½ page down")),
 		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
 		Connect:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
-		CopyAddr:  key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank address")),
+		CopyAddr:  key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
 		CopyCmd:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
