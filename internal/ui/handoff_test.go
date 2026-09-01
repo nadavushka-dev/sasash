@@ -80,7 +80,7 @@ func probedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 		Down("192.0.2.10:22").
 		Up("198.51.100.5:22", 20*time.Millisecond).
 		Up("192.0.2.30:22", 5*time.Millisecond)
-	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner)
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner, ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	return update(t, m, m.Init()())
 }
@@ -111,7 +111,7 @@ func TestModel_Update_CopyAddr_NoAlivePath(t *testing.T) {
 	t.Parallel()
 	runner := fakerun.New()
 	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}}}
-	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New().Down("192.0.2.10:22"), Timeout: 50 * time.Millisecond}, runner)
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New().Down("192.0.2.10:22"), Timeout: 50 * time.Millisecond}, runner, ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = update(t, m, m.Init()())
 
@@ -193,7 +193,7 @@ func TestModel_Update_CopyAddr_BeforeFirstProbe(t *testing.T) {
 	t.Parallel()
 	runner := fakerun.New()
 	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}}}
-	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, runner)
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, runner, ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	// No probe result yet: the pane says pending, so y must not claim the

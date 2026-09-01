@@ -27,7 +27,7 @@ func taggedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 	dialer := fakedial.New().
 		Up("192.0.2.10:22", 20*time.Millisecond).
 		Up("192.0.2.20:22", 5*time.Millisecond)
-	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner)
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner, ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	return update(t, m, m.Init()())
 }

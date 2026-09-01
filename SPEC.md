@@ -188,6 +188,7 @@ The command line at the bottom always shows what the highlighted action will run
 | `X` | `ssh -O exit` |
 | `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
 | `c` | copy the displayed command instead of running it |
+| `t` | cycle theme (choice persists) |
 | `/` `?` `q` | filter, help, quit |
 
 **Handoff:** use `tea.ExecProcess` to suspend the TUI and give the terminal fully to `ssh`.

@@ -34,7 +34,7 @@ func testHosts(n int) []hostmodel.Host {
 // ever dials or executes, and delivers the initial window size.
 func sized(t *testing.T, hosts []hostmodel.Host) ui.Model {
 	t.Helper()
-	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, fakerun.New())
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
 	return update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 }
 
@@ -141,7 +141,7 @@ func TestModel_Update_ProbeFlow(t *testing.T) {
 		Down("192.0.2.10:22").
 		Up("198.51.100.5:22", 20*time.Millisecond).
 		Up("192.0.2.30:22", 5*time.Millisecond)
-	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, fakerun.New())
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	if view := m.View(); !strings.Contains(view, "◌") {
@@ -187,7 +187,7 @@ func TestModel_Update_RefreshTick(t *testing.T) {
 	hosts := testHosts(1)
 	addr := hosts[0].Paths[0].Addr()
 	dialer := fakedial.New().Down(addr)
-	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, fakerun.New())
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	next, rearm := m.Update(m.Init()())
@@ -253,7 +253,7 @@ func TestModel_Init_ProbeFanOutBounded(t *testing.T) {
 	t.Parallel()
 	dialer := &peakDialer{}
 	hosts := testHosts(2*ui.ProbeChunk + 3)
-	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: time.Second}, fakerun.New())
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: time.Second}, fakerun.New(), ui.Config{})
 	msg := m.Init()()
 
 	if dialer.peak > ui.ProbeChunk {
@@ -293,6 +293,15 @@ func TestModel_View_NeverWiderThanTerminal(t *testing.T) {
 	for i, line := range strings.Split(m.View(), "\n") {
 		if w := lipgloss.Width(line); w > 80 {
 			t.Errorf("View() with notice, line %d width = %v, want <= 80", i, w)
+		}
+	}
+
+	// At width 30 the bare "$ ssh <alias>" preview line itself overflows
+	// unless clamped — the long alias makes the preview clamp load-bearing.
+	m = update(t, m, tea.WindowSizeMsg{Width: 30, Height: 24})
+	for i, line := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(line); w > 30 {
+			t.Errorf("View() at width 30, line %d width = %v, want <= 30", i, w)
 		}
 	}
 }

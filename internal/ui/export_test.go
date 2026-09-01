@@ -27,6 +27,15 @@ var SSHExec = sshExec
 // FilterState exposes the list's filter state for the filter-flow tests.
 func FilterState(m Model) list.FilterState { return m.list.FilterState() }
 
+// ThemeName exposes the active theme for the cycle/selection tests.
+func ThemeName(m Model) string { return Themes[m.themeIdx].Name }
+
+// WithSaveTheme swaps the persistence hook so tests can observe it.
+func WithSaveTheme(m Model, f func(string) error) Model {
+	m.saveTheme = f
+	return m
+}
+
 // StaticCursor turns off the filter input's cursor blink so the key-path
 // tests never produce blink tick cmds (which sleep when executed).
 func StaticCursor(m Model) Model {

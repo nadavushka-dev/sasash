@@ -76,6 +76,9 @@ type sshExitMsg struct{ err error }
 // copyDoneMsg reports the outcome of a clipboard write.
 type copyDoneMsg struct{ err error }
 
+// themeSavedMsg reports the outcome of persisting a theme choice.
+type themeSavedMsg struct{ err error }
+
 // sshCommand is the argv `enter` runs and the command line previews; one
 // builder so the preview can never drift from the handoff (SPEC §5: the
 // bottom line always shows what the highlighted action will run).
@@ -154,6 +157,9 @@ type Model struct {
 	prober probe.Prober
 	runner run.Runner
 
+	themeIdx  int                     // index into Themes
+	saveTheme func(name string) error // nil -> theme choice not persisted
+
 	// notice is a transient one-line message (copy feedback, ssh start
 	// failure); any next keypress clears it.
 	notice string
@@ -164,17 +170,27 @@ type Model struct {
 	width, height int
 }
 
+// Config carries the theme selection into the model. The zero value is
+// valid: default theme, no persistence.
+type Config struct {
+	// Theme is the initial theme name; unknown or empty falls back to
+	// Themes[0] (gruvbox).
+	Theme string
+	// SaveTheme persists a theme name when `t` cycles to it; nil disables
+	// persistence.
+	SaveTheme func(name string) error
+}
+
 // New builds the root model. The prober's zero value probes for real and
 // runner should be run.OS{} outside tests; tests inject fakes.
-func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner) Model {
-	styles := NewStyles(Gruvbox)
+func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Config) Model {
 	keys := DefaultKeyMap()
 
 	items := make([]list.Item, len(hosts))
 	for i, h := range hosts {
 		items[i] = hostItem{host: h}
 	}
-	l := list.New(items, hostDelegate{styles: styles}, 0, 0)
+	l := list.New(items, hostDelegate{}, 0, 0)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -199,23 +215,32 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner) Model {
 		AcceptWhileFiltering: key.NewBinding(key.WithKeys("enter")),
 	}
 
-	hm := help.New()
-	hm.Styles.ShortKey = styles.HelpKey
-	hm.Styles.ShortDesc = styles.HelpDesc
-	hm.Styles.ShortSeparator = styles.HelpSep
-	hm.Styles.FullKey = styles.HelpKey
-	hm.Styles.FullDesc = styles.HelpDesc
-	hm.Styles.FullSeparator = styles.HelpSep
-
-	return Model{
-		hosts:  hosts,
-		list:   l,
-		help:   hm,
-		keys:   keys,
-		styles: styles,
-		prober: prober,
-		runner: runner,
+	m := Model{
+		hosts:     hosts,
+		list:      l,
+		help:      help.New(),
+		keys:      keys,
+		prober:    prober,
+		runner:    runner,
+		saveTheme: cfg.SaveTheme,
 	}
+	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
+	return m.applyTheme(idx)
+}
+
+// applyTheme is the whole theme switch (crush pattern): rebuild Styles
+// from the palette and hand them to every component that holds any.
+func (m Model) applyTheme(idx int) Model {
+	m.themeIdx = idx
+	m.styles = NewStyles(Themes[idx].Palette)
+	m.list.SetDelegate(hostDelegate{styles: m.styles})
+	m.help.Styles.ShortKey = m.styles.HelpKey
+	m.help.Styles.ShortDesc = m.styles.HelpDesc
+	m.help.Styles.ShortSeparator = m.styles.HelpSep
+	m.help.Styles.FullKey = m.styles.HelpKey
+	m.help.Styles.FullDesc = m.styles.HelpDesc
+	m.help.Styles.FullSeparator = m.styles.HelpSep
+	return m
 }
 
 // Selected returns the host under the cursor; ok is false when the list is
@@ -270,6 +295,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case themeSavedMsg:
+		if msg.err != nil {
+			m.notice = "theme not saved: " + msg.err.Error()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.ForceQuit) {
 			return m, tea.Quit
@@ -313,6 +344,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, clipCmd(m.runner, strings.Join(sshCommand(host.Alias), " "))
+			case key.Matches(msg, m.keys.Theme):
+				m = m.applyTheme((m.themeIdx + 1) % len(Themes))
+				m.notice = "theme: " + Themes[m.themeIdx].Name
+				if m.saveTheme == nil {
+					return m, nil
+				}
+				save, name := m.saveTheme, Themes[m.themeIdx].Name
+				return m, func() tea.Msg { return themeSavedMsg{err: save(name)} }
 			case key.Matches(msg, m.keys.Help):
 				m.help.ShowAll = !m.help.ShowAll
 				m.list.SetSize(m.listWidth(), m.contentHeight())

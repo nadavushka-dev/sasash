@@ -16,6 +16,7 @@ type KeyMap struct {
 	CopyCmd     key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
+	Theme       key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 	ForceQuit   key.Binding
@@ -37,6 +38,7 @@ func DefaultKeyMap() KeyMap {
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
+		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
@@ -46,7 +48,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Help, k.CopyAddr, k.CopyCmd, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Help, k.CopyAddr, k.CopyCmd, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions;
@@ -57,7 +59,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
-		{k.Connect, k.CopyAddr, k.CopyCmd},
+		{k.Connect, k.CopyAddr, k.CopyCmd, k.Theme},
 	}
 }
 
