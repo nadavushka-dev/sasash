@@ -300,6 +300,119 @@ Host web.ts
 	}
 }
 
+// Contract A2: a new Port line goes DIRECTLY after HostName, not at the end
+// of the block's directives.
+func TestCycle_PortInsertedDirectlyAfterHostName(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 192.0.2.10
+  User dev
+  IdentityFile ~/.ssh/id_ed25519
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 198.51.100.5
+  Port 2222
+  User dev
+  IdentityFile ~/.ssh/id_ed25519
+
+# pinned variants, generated — for when you want to force one path
+Host web.lan
+  HostName 192.0.2.10
+  User dev
+Host web.ts
+  HostName 198.51.100.5
+  User dev
+  Port 2222
+`
+	if got := read(t, path); got != want {
+		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A2 pinned as deliberate: when every named path carries an explicit port,
+// there is no port-less meta to hold the user's baseline Port, so it is
+// overwritten — its value was the wrong-port bug itself.
+func TestCycle_AllExplicitPortsDropUserBaseline(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path a 192.0.2.10:2201
+# @sasash path b 198.51.100.5:2222
+Host web
+  HostName 192.0.2.10
+  Port 2200
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	got := read(t, path)
+	if !strings.Contains(got, "Host web\n  HostName 198.51.100.5\n  Port 2222\n") {
+		t.Errorf("Cycle() file =\n%q\nwant Port following path b", got)
+	}
+	if strings.Contains(got, "2200") {
+		t.Errorf("Cycle() file =\n%q\nwant the 2200 baseline gone (deliberate, no port-less holder)", got)
+	}
+}
+
+// A malformed duplicate meta (skipped by hostmodel) is left verbatim; only
+// the meta hostmodel accepted is normalized.
+func TestCycle_MalformedDuplicateMetaLeftAlone(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10:
+# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 192.0.2.10
+  Port 2200
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	got := read(t, path)
+	if !strings.Contains(got, "# @sasash path lan 192.0.2.10:\n") {
+		t.Errorf("Cycle() file =\n%q\nwant the malformed meta verbatim", got)
+	}
+	if !strings.Contains(got, "# @sasash path lan 192.0.2.10:2200\n") {
+		t.Errorf("Cycle() file =\n%q\nwant the accepted meta normalized", got)
+	}
+}
+
+// The Port line ending the file without a newline is terminated exactly once
+// and rewritten; the same-range fix and rewrite edits compose.
+func TestCycle_PortRewriteOnUnterminatedLastLine(t *testing.T) {
+	t.Parallel()
+	in := "# @sasash path lan 192.0.2.10\n# @sasash path ts 198.51.100.5:2222\nHost web\n  HostName 192.0.2.10\n  Port 2200"
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10:2200
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 198.51.100.5
+  Port 2222
+
+# pinned variants, generated — for when you want to force one path
+Host web.lan
+  HostName 192.0.2.10
+  Port 2200
+Host web.ts
+  HostName 198.51.100.5
+  Port 2222
+`
+	if got := read(t, path); got != want {
+		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
 // The documented A2 coincidence hazard, pinned: a user-authored Port equal to
 // the active path's explicit port reads as owned and is removed on the way to
 // a port-less path.
@@ -343,6 +456,32 @@ Host web
 		}
 		if got := read(t, path); !strings.Contains(got, "# @sasash path lan 192.0.2.10:2200 fastest fallback\n") {
 			t.Errorf("Cycle() file =\n%q\nwant normalized meta keeping extra tokens", got)
+		}
+	})
+
+	t.Run("bracketed bare ipv6", func(t *testing.T) {
+		t.Parallel()
+		// "[2001:db8::1]" with no port is a legal port-less spelling; it
+		// must be recognized and normalized, or the baseline Port would be
+		// silently overwritten with the other path's port.
+		in := `# @sasash path v6 [2001:db8::1]
+# @sasash path ts 198.51.100.5:2222
+Host web
+  HostName 2001:db8::1
+  Port 2200
+`
+		path := write(t, in)
+		if _, err := pathswitch.Cycle(path, "web"); err != nil {
+			t.Fatalf("Cycle() failed: %v", err)
+		}
+		if got := read(t, path); !strings.Contains(got, "# @sasash path v6 [2001:db8::1]:2200\n") {
+			t.Errorf("Cycle() file =\n%q\nwant bracketed meta normalized", got)
+		}
+		if _, err := pathswitch.Cycle(path, "web"); err != nil {
+			t.Fatalf("second Cycle() failed: %v", err)
+		}
+		if got := read(t, path); !strings.Contains(got, "Host web\n  HostName 2001:db8::1\n  Port 2200\n") {
+			t.Errorf("second Cycle() file =\n%q\nwant baseline 2200 restored", got)
 		}
 	})
 

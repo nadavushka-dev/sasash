@@ -109,6 +109,12 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 	// path. Inherited ports never count — a user baseline Port is always
 	// "explained" by an active port-less path via inheritance, and that is
 	// exactly the line that must never be clobbered silently.
+	// Known gap: a hand-edited HostName matching no path leaves no active
+	// path and thus no witness, so a sasash-owned Port reads as user
+	// baseline for one cycle and rides along stale to the new path — the
+	// W2 symptom, one cycle wide, self-healing on the next switch.
+	// Widening the witness to any path's explicit port would trade this
+	// for a larger coincidence hazard and needs re-ratification.
 	explicit := explicitPorts(h, named)
 	portVal, portOk := h.Get("Port")
 	owned := false
@@ -175,8 +181,10 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 	case portOk && portVal == needed:
 		// Already right — byte-identity.
 	case needed == "":
-		// Reachable only with an owned Port line: with an un-owned one, a
-		// port-less To inherits its value, so needed equals it above.
+		// An owned Port line is removed. The un-owned ways here — a
+		// non-numeric Port that hostmodel dropped (nothing inherited), or
+		// no Port at all — leave the file alone: with a valid un-owned
+		// Port, a port-less To inherits its value, so needed equals it.
 		if owned {
 			plan.op = portRemove
 		}
@@ -213,7 +221,12 @@ type portPlan struct {
 	value string
 	// metaPorts: port-less named paths whose meta must gain an explicit
 	// :port (their inherited baseline) before the baseline Port directive
-	// is overwritten — contract A2's normalization step.
+	// is overwritten — contract A2's normalization step. The baseline is
+	// preserved ONLY while a port-less path exists to hold it: when every
+	// named path already carries an explicit port, a user Port is simply
+	// overwritten (its value was the wrong-port bug). A Port whose value
+	// is invalid (rejected by ssh and hostmodel alike) is likewise
+	// overwritten without preservation — repair, not loss.
 	metaPorts map[string]probe.Path
 }
 
