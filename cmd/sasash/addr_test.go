@@ -30,7 +30,7 @@ Host plain
 		dialer     probe.Dialer
 		wantCode   int
 		wantStdout string   // exact
-		wantStderr []string // substrings; nil skips the check
+		wantStderr []string // substrings; nil means stderr must be EMPTY
 	}{
 		{
 			name:       "first path alive",
@@ -73,6 +73,19 @@ Host plain
 			dialer:     fakedial.New().Up("192.0.2.5:2222", 20*time.Millisecond),
 			wantCode:   0,
 			wantStdout: "192.0.2.5\n",
+		},
+		{
+			// The derived fallback path has no name; the diagnostic line
+			// must render without a stray leading space.
+			name:       "fallback path dead renders unnamed label",
+			args:       []string{"plain"},
+			dialer:     fakedial.New().Down("192.0.2.5:2222"),
+			wantCode:   1,
+			wantStdout: "",
+			wantStderr: []string{
+				`all 1 path(s) to "plain" are down`,
+				"\n  192.0.2.5:2222:",
+			},
 		},
 		{
 			name:       "unknown host",
@@ -120,6 +133,10 @@ Host plain
 			}
 			if stdout.String() != tt.wantStdout {
 				t.Errorf("runAddr(%v) stdout = %q, want %q", tt.args, stdout.String(), tt.wantStdout)
+			}
+			// Quiet success is a contract: no expectations means no output.
+			if len(tt.wantStderr) == 0 && stderr.String() != "" {
+				t.Errorf("runAddr(%v) stderr = %q, want empty", tt.args, stderr.String())
 			}
 			for _, want := range tt.wantStderr {
 				if !strings.Contains(stderr.String(), want) {
