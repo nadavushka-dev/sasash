@@ -14,6 +14,7 @@ type KeyMap struct {
 	Connect     key.Binding
 	CopyAddr    key.Binding
 	CopyCmd     key.Binding
+	Adhoc       key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
 	Theme       key.Binding
@@ -36,6 +37,7 @@ func DefaultKeyMap() KeyMap {
 		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
 		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
+		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
@@ -48,7 +50,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Help, k.CopyAddr, k.CopyCmd, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions;
@@ -59,8 +61,26 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
-		{k.Connect, k.CopyAddr, k.CopyCmd, k.Theme},
+		{k.Connect, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Theme},
 	}
+}
+
+// promptKeys is the help shown while a prompt owns the keyboard.
+type promptKeys struct{ save bool }
+
+func (p promptKeys) ShortHelp() []key.Binding {
+	enter, esc := "connect", "cancel"
+	if p.save {
+		enter, esc = "save", "skip"
+	}
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enter)),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", esc)),
+	}
+}
+
+func (p promptKeys) FullHelp() [][]key.Binding {
+	return [][]key.Binding{p.ShortHelp()}
 }
 
 // filterKeys is the help shown while the filter input is focused: only

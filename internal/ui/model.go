@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -88,7 +89,11 @@ func sshCommand(alias string) []string {
 
 // sshExec builds the process the handoff gives the terminal to.
 func sshExec(alias string) *exec.Cmd {
-	argv := sshCommand(alias)
+	return execCommand(sshCommand(alias))
+}
+
+// execCommand adapts a built argv to the *exec.Cmd tea.ExecProcess needs.
+func execCommand(argv []string) *exec.Cmd {
 	return exec.Command(argv[0], argv[1:]...)
 }
 
@@ -160,6 +165,16 @@ type Model struct {
 	themeIdx  int                     // index into Themes
 	saveTheme func(name string) error // nil -> theme choice not persisted
 
+	// Ad-hoc connect (SPEC §5 `a`): a prompt takes over the preview line;
+	// while it is focused, action keys are inert exactly as while
+	// filtering. pending holds the parsed target between the handoff and
+	// the save offer.
+	mode      promptMode
+	prompt    textinput.Model
+	pending   adhocTarget
+	saveHost  func(AdhocEntry) error // nil -> no save offer after connect
+	loadHosts func() ([]hostmodel.Host, error)
+
 	// notice is a transient one-line message (copy feedback, ssh start
 	// failure); any next keypress clears it.
 	notice string
@@ -179,7 +194,22 @@ type Config struct {
 	// SaveTheme persists a theme name when `t` cycles to it; nil disables
 	// persistence.
 	SaveTheme func(name string) error
+	// SaveHost persists an ad-hoc connection the user chose to keep; nil
+	// disables the save offer after an ad-hoc connect.
+	SaveHost func(AdhocEntry) error
+	// LoadHosts re-reads the config after a save so the new entry appears
+	// in the list; nil skips the reload.
+	LoadHosts func() ([]hostmodel.Host, error)
 }
+
+// promptMode says which prompt, if any, owns the keyboard.
+type promptMode int
+
+const (
+	promptNone promptMode = iota
+	promptConnect
+	promptAlias
+)
 
 // New builds the root model. The prober's zero value probes for real and
 // runner should be run.OS{} outside tests; tests inject fakes.
@@ -215,6 +245,10 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		AcceptWhileFiltering: key.NewBinding(key.WithKeys("enter")),
 	}
 
+	prompt := textinput.New()
+	prompt.Prompt = "" // the label renders separately, palette-styled
+	prompt.CharLimit = 128
+
 	m := Model{
 		hosts:     hosts,
 		list:      l,
@@ -223,6 +257,9 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		prober:    prober,
 		runner:    runner,
 		saveTheme: cfg.SaveTheme,
+		prompt:    prompt,
+		saveHost:  cfg.SaveHost,
+		loadHosts: cfg.LoadHosts,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
 	return m.applyTheme(idx)
@@ -263,6 +300,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.help.Width = msg.Width
+		// The prompt needs an explicit width to get textinput's horizontal
+		// viewport: without one, long input silently loses its tail and
+		// cursor past the terminal edge.
+		m.prompt.Width = max(10, msg.Width-14)
 		m.list.SetSize(m.listWidth(), m.contentHeight())
 		return m, nil
 
@@ -301,11 +342,74 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case adhocExitMsg:
+		var exitErr *exec.ExitError
+		if msg.err != nil && !errors.As(msg.err, &exitErr) {
+			// ssh never started; there is nothing worth saving.
+			m.notice = "ssh: " + msg.err.Error()
+			return m, probeCmd(m.prober, m.hosts)
+		}
+		if m.saveHost == nil {
+			return m, probeCmd(m.prober, m.hosts)
+		}
+		// Offer to keep the connection: the alias prompt takes the line.
+		m.mode = promptAlias
+		m.prompt.Reset()
+		m.prompt.Placeholder = "alias to save as — esc to skip"
+		return m, tea.Batch(m.prompt.Focus(), probeCmd(m.prober, m.hosts))
+
+	case adhocSavedMsg:
+		if msg.err != nil {
+			m.notice = "not saved: " + msg.err.Error()
+			return m, nil
+		}
+		m.notice = "saved " + msg.alias
+		if m.loadHosts == nil {
+			return m, nil
+		}
+		load := m.loadHosts
+		return m, func() tea.Msg {
+			hosts, err := load()
+			return hostsReloadedMsg{hosts: hosts, err: err}
+		}
+
+	case hostsReloadedMsg:
+		if msg.err != nil {
+			m.notice = "reload failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.hosts = msg.hosts
+		items := make([]list.Item, len(msg.hosts))
+		for i, h := range msg.hosts {
+			items[i] = hostItem{host: h}
+		}
+		return m, tea.Batch(m.list.SetItems(items), probeCmd(m.prober, m.hosts))
+
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.ForceQuit) {
 			return m, tea.Quit
 		}
 		m.notice = ""
+		// A focused prompt owns the keyboard the way the filter input
+		// does: esc cancels (declining the save writes nothing), enter
+		// submits, everything else is typed text.
+		if m.mode != promptNone {
+			switch {
+			case key.Matches(msg, m.keys.ClearFilter):
+				declined := m.mode == promptAlias
+				m.mode = promptNone
+				m.prompt.Blur()
+				if declined {
+					m.notice = "not saved"
+				}
+				return m, nil
+			case msg.Type == tea.KeyEnter:
+				return m.promptSubmit()
+			}
+			var cmd tea.Cmd
+			m.prompt, cmd = m.prompt.Update(msg)
+			return m, cmd
+		}
 		// Action keys must never fire while the filter input is focused
 		// (SPEC §5 addendum): everything below is typed text then, and
 		// only the list — which owns the input — sees the key.
@@ -344,6 +448,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, clipCmd(m.runner, strings.Join(sshCommand(host.Alias), " "))
+			case key.Matches(msg, m.keys.Adhoc):
+				m.mode = promptConnect
+				m.prompt.Reset()
+				m.prompt.Placeholder = "[user@]host[:port] [-L local:host:port]"
+				return m, m.prompt.Focus()
 			case key.Matches(msg, m.keys.Theme):
 				m = m.applyTheme((m.themeIdx + 1) % len(Themes))
 				m.notice = "theme: " + Themes[m.themeIdx].Name
@@ -427,7 +536,10 @@ func (m Model) contentHeight() int {
 // pushing the alt screen around.
 func (m Model) helpView() string {
 	var k help.KeyMap = m.keys
-	if m.list.FilterState() == list.Filtering {
+	switch {
+	case m.mode != promptNone:
+		k = promptKeys{save: m.mode == promptAlias}
+	case m.list.FilterState() == list.Filtering:
 		k = filterKeys{}
 	}
 	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
@@ -481,6 +593,16 @@ func (m Model) View() string {
 	body = clampHeight(body, m.contentHeight())
 
 	preview := m.previewView()
+	if m.mode != promptNone {
+		label := "connect:"
+		if m.mode == promptAlias {
+			label = "save as:"
+		}
+		// textinput pads its value to Width; trim the raw padding so a
+		// notice (a rejection message, typically) still fits the line.
+		field := strings.TrimRight(m.prompt.View(), " ")
+		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
+	}
 	if m.notice != "" {
 		preview += "  " + m.styles.Notice.Render(m.notice)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/sshconf"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -48,7 +49,8 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	hosts, warnings, err := hostmodel.Load(filepath.Join(home, ".ssh", "config"), home)
+	root := filepath.Join(home, ".ssh", "config")
+	hosts, warnings, err := hostmodel.Load(root, home)
 	if err != nil {
 		fmt.Fprintln(stderr, "sasash:", err)
 		return 1
@@ -57,7 +59,17 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
-	m := ui.New(hosts, probe.Prober{}, run.OS{}, ui.Config{Theme: theme, SaveTheme: saveThemeTo(statePath)})
+	m := ui.New(hosts, probe.Prober{}, run.OS{}, ui.Config{
+		Theme:     theme,
+		SaveTheme: saveThemeTo(statePath),
+		SaveHost:  saveHostTo(filepath.Join(home, ".ssh", "config.d", "sasash.conf")),
+		LoadHosts: func() ([]hostmodel.Host, error) {
+			// Reload warnings are dropped: they already printed at startup
+			// and stderr is invisible under the alt screen.
+			hosts, _, err := hostmodel.Load(root, home)
+			return hosts, err
+		},
+	})
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(stderr, "sasash:", err)
@@ -89,6 +101,44 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 		}
 	}
 	return "", warn, false
+}
+
+// saveHostTo persists an ad-hoc connection as a Host block appended to
+// sasash.conf (SPEC §2: the one file sasash writes). The existing content
+// rides through the lossless parser untouched — appending cannot reflow
+// it — and the write is atomic. A missing sasash.conf means setup has not
+// run; the error says so instead of creating a file setup owns.
+func saveHostTo(confPath string) func(ui.AdhocEntry) error {
+	return func(e ui.AdhocEntry) error {
+		f, err := sshconf.ParseFile(confPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("no %s — run `sasash setup` first", filepath.Base(confPath))
+			}
+			return err
+		}
+		var b strings.Builder
+		text := f.String()
+		b.WriteString(text)
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		if len(e.Forwards) > 0 {
+			b.WriteString("# @sasash forwards adhoc " + strings.Join(e.Forwards, " ") + "\n")
+		}
+		b.WriteString("Host " + e.Alias + "\n")
+		b.WriteString("  HostName " + e.Host + "\n")
+		if e.User != "" {
+			b.WriteString("  User " + e.User + "\n")
+		}
+		if e.Port != "" {
+			b.WriteString("  Port " + e.Port + "\n")
+		}
+		nf := sshconf.Parse(confPath, []byte(b.String()))
+		nf.Perm = f.Perm
+		return nf.WriteAtomic(confPath)
+	}
 }
 
 // themeStatePath is where the `t` key persists the choice — state, not

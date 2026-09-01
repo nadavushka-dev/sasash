@@ -189,6 +189,7 @@ The command line at the bottom always shows what the highlighted action will run
 | `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
 | `c` | copy the displayed command instead of running it |
 | `t` | cycle theme (choice persists) |
+| `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
 | `/` `?` `q` | filter, help, quit |
 
 **Handoff:** use `tea.ExecProcess` to suspend the TUI and give the terminal fully to `ssh`.
@@ -200,7 +201,7 @@ Vim-style navigation is required alongside the action keys above: `j`/`k` (and a
 move, `g`/`G` jump to first/last host, `ctrl+d`/`ctrl+u` half-page, `esc` goes back /
 clears the filter. Every binding is a named bubbles `key.Binding` so the help view is
 generated from the bindings, never hand-maintained. Single-letter action keys must not
-fire while the filter input is focused.
+fire while the filter input or a prompt is focused.
 
 The UI is dark-only. Every lipgloss style derives from a semantic palette struct — no
 hex literal outside the palette layer. Four shipped themes: gruvbox dark (default),
