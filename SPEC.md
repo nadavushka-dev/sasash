@@ -224,6 +224,29 @@ sasash status             # one line per host, scriptable
 
 `sasash addr` is what replaces "searching for the IP for other needs."
 
+### `status` output format
+
+One line per host in config order, always exactly five whitespace-separated fields:
+
+```
+<alias> <active-name|-> <active-addr|-> <latency|down> down:<names|->
+```
+
+- Active path = first alive in config order (`probe.Select`); `-` as the name marks
+  the derived HostName-fallback path.
+- The address is the full dial target (`host:port`, IPv6 bracketed) — status reports
+  what was probed. `sasash addr` deliberately differs: it prints the bare host, as
+  data for `{addr}`-style substitution.
+- Latency is integer milliseconds; `down` when no path answered.
+- Field 5 lists dead path names (dial address when unnamed), `down:-` when all alive —
+  so `NF` is always 5 for awk.
+
+### Exit codes (`addr` and `status`)
+
+`0` success (`status`: even with hosts down — it reports, it doesn't judge) ·
+`1` `addr` only: all paths down, retryable · `2` usage · `3` config problem
+(unknown host, unreadable config).
+
 ---
 
 ## 8. Layout

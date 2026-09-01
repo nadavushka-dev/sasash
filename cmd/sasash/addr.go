@@ -20,7 +20,7 @@ func cmdAddr(args []string, stdout, stderr io.Writer) int {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(stderr, "sasash addr: %v\n", err)
-		return 1
+		return 3 // config problem, not retryable — matches runAddr's contract
 	}
 	root := filepath.Join(home, ".ssh", "config")
 	return runAddr(args, stdout, stderr, root, home, probe.Net{})
