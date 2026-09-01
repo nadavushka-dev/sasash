@@ -308,6 +308,122 @@ Host web.staging
 	}
 }
 
+// A minimal hand-written host (HostName+User only) is byte-shaped like a
+// generated variant; only header anchoring tells them apart. It must survive
+// the first cycle (no generated region exists yet) AND the second (a header
+// now exists above the generated group, but the chain must not reach it).
+func TestCycle_MinimalForeignPrefixHostSurvives(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 192.0.2.10
+
+# the staging box, unrelated to sasash
+Host web.staging
+  HostName 203.0.113.44
+  User deploy
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("first Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host web.lan
+  HostName 192.0.2.10
+Host web.ts
+  HostName 198.51.100.5
+# the staging box, unrelated to sasash
+Host web.staging
+  HostName 203.0.113.44
+  User deploy
+`
+	if got := read(t, path); got != want {
+		t.Errorf("first Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("second Cycle() failed: %v", err)
+	}
+	wantSecond := strings.Replace(want, "Host web\n  HostName 198.51.100.5\n", "Host web\n  HostName 192.0.2.10\n", 1)
+	if got := read(t, path); got != wantSecond {
+		t.Errorf("second Cycle() file =\n%q\nwant\n%q", got, wantSecond)
+	}
+}
+
+// A variant-named Host line carrying extra patterns is not generator-shaped;
+// it must survive untouched with all its aliases.
+func TestCycle_MultiPatternVariantNotOwned(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 192.0.2.10
+
+Host web.lan web-lan
+  HostName 203.0.113.44
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host web.ts
+  HostName 198.51.100.5
+Host web.lan web-lan
+  HostName 203.0.113.44
+`
+	if got := read(t, path); got != want {
+		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A newly generated variant lands inside the generated group, not below a
+// user note that trails it.
+func TestCycle_AppendStaysInsideGroup(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host ubuntu
+  HostName 192.0.2.10
+
+# pinned variants, generated — for when you want to force one path
+Host ubuntu.lan
+  HostName 192.0.2.10
+
+# unrelated note the user keeps at the bottom of the file
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "ubuntu"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host ubuntu
+  HostName 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host ubuntu.lan
+  HostName 192.0.2.10
+Host ubuntu.ts
+  HostName 198.51.100.5
+
+# unrelated note the user keeps at the bottom of the file
+`
+	if got := read(t, path); got != want {
+		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
 // A user block that shadows a live path name is authoritative: it is left
 // verbatim and no duplicate variant is generated for that name.
 func TestCycle_ForeignBlockShadowingPathName(t *testing.T) {

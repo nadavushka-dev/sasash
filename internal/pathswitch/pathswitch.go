@@ -40,6 +40,9 @@ type Result struct {
 // Cycle advances alias to its next named path: the one after the path whose
 // addr equals the current HostName, wrapping. If no path matches (the file
 // was hand-edited to an unknown addr), the first named path becomes active.
+// When several named paths share the current addr, Result.From reports the
+// last of them — the file stores only the addr, so the specific twin is
+// unknowable; callers should not render From as authoritative in that case.
 func Cycle(confPath, alias string) (Result, error) {
 	return switchPath(confPath, alias, "")
 }
@@ -89,6 +92,9 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 	// name never succeeds silently.
 	setIdx := -1
 	if pathName != "" {
+		if len(named) == 0 {
+			return Result{}, fmt.Errorf("host %q has no named paths", alias)
+		}
 		for i, p := range named {
 			if p.Name == pathName {
 				setIdx = i
@@ -127,13 +133,14 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 
 // regenVariants rebuilds the pinned "<alias>.<name>" blocks on a reparse of f
 // (f's line indexes moved if Set inserted a HostName line). Only blocks the
-// generator provably owns — nothing in them but HostName, User and Port —
-// are rewritten in place or, when their path name is gone, removed; a real
-// host that merely shares the "<alias>." prefix is left verbatim, and if it
-// shadows a live path name no duplicate block is generated for it (the
-// user's block is authoritative under first-value-wins). Missing variants
-// are inserted at the end of the host's block, stopping short of a comment
-// run that leads into a following Host line so that host keeps its meta.
+// generator provably wrote — generated shape AND anchored to its own Header
+// line, see anchoredStarts — are rewritten in place or, when their path name
+// is gone, removed; every other block is left verbatim, and one that shadows
+// a live path name also suppresses the duplicate (the user's block is
+// authoritative under first-value-wins). A fresh group is inserted at the
+// end of the host's block, stopping short of a comment run that leads into a
+// following Host line so that host keeps its meta; appends to an existing
+// group stay contiguous with it.
 func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.File {
 	f2 := sshconf.Parse(f.Path, f.Bytes())
 	main, ok := f2.Host(alias)
@@ -176,6 +183,7 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 	var edits []edit
 	have := make(map[string]bool)
 	prefix := alias + "."
+	anchored := anchoredStarts(f2, prefix)
 	lastOwnedEnd := -1
 	for _, b := range f2.Hosts() {
 		suffix := strings.TrimPrefix(b.Name(), prefix)
@@ -189,10 +197,12 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 				break
 			}
 		}
-		if !generatorOwned(f2, &b) {
-			// A real host that happens to share the prefix, or a variant the
-			// user extended by hand: never rewrite, never delete. When it
-			// shadows a live path name, skip generating a duplicate.
+		if !anchored[b.Start] {
+			// A real host that happens to share the prefix, a variant the
+			// user extended by hand, or any block outside the region the
+			// generator provably wrote: never rewrite, never delete. When
+			// it shadows a live path name, skip generating a duplicate —
+			// first-value-wins makes the user's block authoritative.
 			if live {
 				have[suffix] = true
 			}
@@ -209,7 +219,10 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 			have[suffix] = true
 		}
 		edits = append(edits, edit{b.Start, directivesEnd(f2, &b), repl})
-		if e := insertEnd(f2, &b); e > lastOwnedEnd {
+		// Append point for missing variants: right after this block's last
+		// directive, so the generated group stays contiguous and a user note
+		// below it stays below.
+		if e := directivesEnd(f2, &b); e > lastOwnedEnd {
 			lastOwnedEnd = e
 		}
 	}
@@ -270,13 +283,12 @@ func directivesEnd(f *sshconf.File, h *sshconf.Host) int {
 	return end
 }
 
-// insertEnd returns where generated blocks may be inserted after h: the end
-// of its block, minus a trailing comment run that leads straight into a
-// following Host line — that run is the next host's meta (the boundary
+// insertEnd returns where a freshly created variant group is inserted: the
+// end of the host's block, minus a trailing comment run that leads straight
+// into a following Host line — that run is the next host's meta (the boundary
 // sshconf.OwnMeta draws), and in-block meta above it stays with h. A run
 // glued to a following Match line is not walked back over (a Match owns no
-// meta); meta sitting at the very bottom of a block directly against a Match
-// line is a known residual edge.
+// meta, so the run stays with its host either way).
 func insertEnd(f *sshconf.File, h *sshconf.Host) int {
 	end := h.End
 	if end < f.Len() {
@@ -294,11 +306,50 @@ func insertEnd(f *sshconf.File, h *sshconf.Host) int {
 	return end
 }
 
-// generatorOwned reports whether a "<alias>.<name>" block is provably the
-// generator's to rewrite or remove: its directives are nothing but HostName,
-// User and Port, no comment sits between them, and no "# @sasash" meta lives
-// anywhere in the block. Anything else means the user's hand has been in it.
+// anchoredStarts returns the Start indexes of the blocks the generator
+// provably wrote: runs of owned "<prefix><name>" blocks sitting exactly where
+// the generator puts them — the first immediately below a Header comment
+// line, each next immediately after the previous block's last directive. A
+// generated shape alone is not enough (a hand-written minimal host is
+// indistinguishable from one); position is the second witness. Any user
+// insertion breaks the chain, demoting the blocks below it to unmanaged —
+// fail-safe: a stale variant left behind, never a deleted user block.
+func anchoredStarts(f *sshconf.File, prefix string) map[int]bool {
+	hosts := f.Hosts()
+	byStart := make(map[int]*sshconf.Host, len(hosts))
+	for i := range hosts {
+		byStart[hosts[i].Start] = &hosts[i]
+	}
+	out := make(map[int]bool)
+	for i := 0; i < f.Len(); i++ {
+		line := f.Line(i)
+		if line.Kind != sshconf.KindComment || strings.TrimSpace(strings.TrimRight(line.Raw, "\r\n")) != Header {
+			continue
+		}
+		for next := i + 1; ; {
+			b, ok := byStart[next]
+			if !ok {
+				break
+			}
+			suffix := strings.TrimPrefix(b.Name(), prefix)
+			if suffix == b.Name() || suffix == "" || !generatorOwned(f, b) {
+				break
+			}
+			out[b.Start] = true
+			next = directivesEnd(f, b)
+		}
+	}
+	return out
+}
+
+// generatorOwned reports whether a "<alias>.<name>" block has exactly the
+// shape the generator emits: a single host pattern, directives that are
+// nothing but HostName, User and Port, no comment between them, and no
+// "# @sasash" meta anywhere in the block.
 func generatorOwned(f *sshconf.File, h *sshconf.Host) bool {
+	if len(h.Patterns) != 1 {
+		return false
+	}
 	dirEnd := directivesEnd(f, h)
 	for i := h.Start + 1; i < h.End; i++ {
 		switch line := f.Line(i); line.Kind {
