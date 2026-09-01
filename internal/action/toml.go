@@ -229,11 +229,15 @@ func trailingOK(s string) bool {
 	return s == "" || s[0] == '#'
 }
 
-// lineOfTable finds the header line for the missing-cmd error. Parsing has
-// already succeeded structurally, so the header is guaranteed to exist.
+// lineOfTable finds the header line for the missing-cmd error, recognizing
+// the same header shape parseActions accepts (including trailing comments).
+// Parsing has already succeeded structurally, so the header exists.
 func lineOfTable(data, name string) int {
 	for n, line := range strings.Split(data, "\n") {
 		s := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if i := strings.IndexByte(s, '#'); i >= 0 {
+			s = strings.TrimSpace(s[:i])
+		}
 		if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") && strings.TrimSpace(s[1:len(s)-1]) == name {
 			return n + 1
 		}

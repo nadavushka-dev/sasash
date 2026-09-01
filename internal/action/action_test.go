@@ -157,6 +157,7 @@ func TestLoad_Malformed(t *testing.T) {
 		{name: "empty table name", content: "[]\ncmd = 'x'\n", wantLine: 1, wantMsg: `unsupported table name ""`},
 		{name: "env unterminated value", content: "[a]\ncmd = 'x'\nenv = { A = '\n", wantLine: 3, wantMsg: "unterminated ' string"},
 		{name: "missing cmd", content: "[a]\nenv = { A = \"1\" }\n[b]\ncmd = 'x'\n", wantLine: 1, wantMsg: "table [a] has no cmd"},
+		{name: "commented header without cmd", content: "[rdp] # remote desktop\n", wantLine: 1, wantMsg: "has no cmd"},
 		{name: "env not inline table", content: "[a]\ncmd = 'x'\nenv = \"1\"\n", wantLine: 3, wantMsg: "inline table"},
 		{name: "env unterminated table", content: "[a]\ncmd = 'x'\nenv = { A = \"1\"\n", wantLine: 3, wantMsg: "unterminated inline table"},
 		{name: "env missing equals", content: "[a]\ncmd = 'x'\nenv = { A }\n", wantLine: 3, wantMsg: "expected KEY"},
@@ -273,6 +274,12 @@ func TestAction_Expand_Valid(t *testing.T) {
 			s:    subst,
 			want: action.Invocation{Argv: []string{"tool", "a}b"}},
 		},
+		{
+			name: "double closing brace collapses without a placeholder",
+			a:    action.Action{Name: "a", Cmd: `sed 's/}}/x/'`},
+			s:    subst,
+			want: action.Invocation{Argv: []string{"sed", "s/}/x/"}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -299,7 +306,7 @@ func TestAction_Expand_Errors(t *testing.T) {
 	}{
 		{name: "empty cmd", a: action.Action{Name: "a", Cmd: ""}, s: full, wantMsg: "empty cmd"},
 		{name: "whitespace cmd", a: action.Action{Name: "a", Cmd: "  \t "}, s: full, wantMsg: "empty cmd"},
-		{name: "unknown placeholder", a: action.Action{Name: "a", Cmd: "tool {dpi}"}, s: full, wantMsg: "unknown placeholder {dpi}"},
+		{name: "unknown placeholder", a: action.Action{Name: "a", Cmd: "tool {dpi}"}, s: full, wantMsg: `unknown placeholder {dpi} in "{dpi}"`},
 		{name: "case-sensitive placeholder", a: action.Action{Name: "a", Cmd: "tool {Host}"}, s: full, wantMsg: "unknown placeholder {Host}"},
 		{name: "empty subst value", a: action.Action{Name: "a", Cmd: "tool /p:{port}"}, s: action.Subst{Host: "h", User: "u", Addr: "a"}, wantMsg: `placeholder {port} is empty in "/p:{port}"`},
 		{name: "empty placeholder name", a: action.Action{Name: "a", Cmd: "tool {}"}, s: full, wantMsg: "unknown placeholder {}"},
