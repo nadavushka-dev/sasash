@@ -328,6 +328,8 @@ changes and catch nothing.
 
 Targets: `internal/sshconf` ~100%, `internal/probe` / `internal/tunnel` / `internal/action` ≥95%,
 `internal/ui` smoke only. `go test -race ./...` in CI.
+UI behavior tests may use teatest; assertions are conditions and model state, never
+full-frame goldens. vhs artifacts are review aids, not gates.
 
 ### Seams
 
