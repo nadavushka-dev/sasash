@@ -28,15 +28,18 @@ func cmdStatus(args []string, stdout, stderr io.Writer) int {
 	return runStatus(args, stdout, stderr, root, home, probe.Net{})
 }
 
-// runStatus prints one line per host in config order, with a stable field
-// order so awk and grep can parse it:
+// runStatus prints one line per host in config order, with exactly five
+// fields per line so awk and grep can parse it:
 //
-//	<alias> <active-name|-> <active-addr|-> <latency|down> [down:<name>,...]
+//	<alias> <active-name|-> <active-addr|-> <latency|down> down:<names|->
 //
 // The active path is the first alive one in config order (probe.Select); a
-// derived, unnamed fallback path shows "-" for its name. Dead paths are
-// listed by name (address, when unnamed) in the trailing down: field, which
-// is omitted when every path answered.
+// derived, unnamed fallback path shows "-" for its name. The address is the
+// full dial target (host:port, IPv6 bracketed) because status reports what
+// was actually probed — deliberately unlike `sasash addr`, which prints the
+// bare host as data for {addr}-style substitution. Latency is integer
+// milliseconds. Dead paths are listed by name (dial address, when unnamed)
+// in the down: field, "-" when every path answered, so NF is always 5.
 //
 // status reports, it does not judge: hosts being down is a normal answer, so
 // the exit code is 0. Non-zero only when status cannot report at all —
@@ -52,6 +55,8 @@ func runStatus(args []string, stdout, stderr io.Writer, root, home string, diale
 		fmt.Fprintf(stderr, "sasash status: %v\n", err)
 		return 3
 	}
+	// Unlike addr, warnings print on every run: stdout is the data channel
+	// here, so stderr is free, and status IS the diagnostic surface.
 	for _, w := range warnings {
 		fmt.Fprintf(stderr, "sasash status: warning: %v\n", w)
 	}
@@ -81,8 +86,8 @@ func statusLine(alias string, statuses []probe.Status) string {
 		if s.Path.Name != "" {
 			name = s.Path.Name
 		}
-		addr = s.Path.Host
-		latency = s.Latency.Round(time.Millisecond).String()
+		addr = s.Path.Addr()
+		latency = fmt.Sprintf("%dms", s.Latency.Round(time.Millisecond)/time.Millisecond)
 	}
 
 	var dead []string
@@ -93,13 +98,13 @@ func statusLine(alias string, statuses []probe.Status) string {
 		if s.Path.Name != "" {
 			dead = append(dead, s.Path.Name)
 		} else {
-			dead = append(dead, s.Path.Host)
+			dead = append(dead, s.Path.Addr())
 		}
 	}
 
-	line := alias + " " + name + " " + addr + " " + latency
+	down := "-"
 	if len(dead) > 0 {
-		line += " down:" + strings.Join(dead, ",")
+		down = strings.Join(dead, ",")
 	}
-	return line
+	return alias + " " + name + " " + addr + " " + latency + " down:" + down
 }
