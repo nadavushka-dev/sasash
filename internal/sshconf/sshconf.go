@@ -83,9 +83,9 @@ func (f *File) Len() int { return len(f.lines) }
 //
 // A path that is a symlink is resolved first, so the rename lands on the real
 // file and the link survives — dotfiles repos symlink ssh configs, and a
-// write must not sever that. A path that does not resolve (a new file, or a
-// dangling link) is used as given; a dangling link is thus replaced by a
-// regular file.
+// write must not sever that. A path that does not resolve (a new file, a
+// dangling link, or a symlink cycle) is used as given; a dangling link is
+// thus replaced by a regular file.
 func (f *File) WriteAtomic(path string) error {
 	perm := f.Perm
 	if perm == 0 {

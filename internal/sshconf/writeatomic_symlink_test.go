@@ -19,6 +19,16 @@ func TestWriteAtomic_WritesThroughSymlink(t *testing.T) {
 		// absolute path (relative targets resolve against the link's dir).
 		target func(real string) string
 		chain  bool // interpose a second link
+		// otherDir puts the real file in a sibling directory, as a dotfiles
+		// repo would, and makes the LINK's directory read-only. This pins
+		// the ordering invariant: the resolve must happen BEFORE the temp
+		// directory is derived, or the temp is created next to the LINK —
+		// which fails here (read-only dir), and in the real world abandons
+		// the same-directory guarantee that makes the rename atomic and
+		// fails outright across mounts. A plain leftovers check cannot
+		// catch the reorder: on one filesystem the misplaced temp still
+		// renames away cleanly (verified by mutation).
+		otherDir bool
 	}{
 		{
 			name:   "absolute link",
@@ -33,12 +43,24 @@ func TestWriteAtomic_WritesThroughSymlink(t *testing.T) {
 			target: func(real string) string { return real },
 			chain:  true,
 		},
+		{
+			name:     "link into another directory",
+			target:   func(real string) string { return real },
+			otherDir: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			real := filepath.Join(dir, "real.conf")
+			realDir := dir
+			if tt.otherDir {
+				realDir = filepath.Join(dir, "dotfiles")
+				if err := os.Mkdir(realDir, 0o700); err != nil {
+					t.Fatalf("Mkdir(%q) err = %v", realDir, err)
+				}
+			}
+			real := filepath.Join(realDir, "real.conf")
 			if err := os.WriteFile(real, []byte("Host a\n  HostName 192.0.2.1\n"), 0o644); err != nil {
 				t.Fatalf("WriteFile() err = %v", err)
 			}
@@ -52,6 +74,16 @@ func TestWriteAtomic_WritesThroughSymlink(t *testing.T) {
 				if err := os.Symlink(link, path); err != nil {
 					t.Fatalf("Symlink(outer) err = %v", err)
 				}
+			}
+			if tt.otherDir {
+				// Read-only link dir: only a temp misplaced beside the
+				// link (the reorder defect) would need to write here.
+				// Root ignores the chmod, which merely blunts the mutant
+				// detection; the test stays green on correct code.
+				if err := os.Chmod(dir, 0o500); err != nil {
+					t.Fatalf("Chmod(%q) err = %v", dir, err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 			}
 
 			f, err := sshconf.ParseFile(path)
@@ -90,12 +122,16 @@ func TestWriteAtomic_WritesThroughSymlink(t *testing.T) {
 			if got := info.Mode().Perm(); got != 0o644 {
 				t.Errorf("target perm = %o, want %o (preserved through the link)", got, 0o644)
 			}
-			leftovers, err := filepath.Glob(filepath.Join(dir, ".sasash-*"))
-			if err != nil {
-				t.Fatalf("Glob() err = %v", err)
-			}
-			if len(leftovers) != 0 {
-				t.Errorf("temp files left behind: %v", leftovers)
+			// Both directories: a temp beside the LINK would mean the
+			// resolve ran after the temp dir was derived.
+			for _, d := range []string{dir, realDir} {
+				leftovers, err := filepath.Glob(filepath.Join(d, ".sasash-*"))
+				if err != nil {
+					t.Fatalf("Glob(%q) err = %v", d, err)
+				}
+				if len(leftovers) != 0 {
+					t.Errorf("temp files left behind in %q: %v", d, leftovers)
+				}
 			}
 		})
 	}
