@@ -96,3 +96,21 @@ func TestCmdTUI_UnknownThemeFlag(t *testing.T) {
 		t.Errorf("stderr = %q, want the valid theme list", stderr.String())
 	}
 }
+
+func TestDispatch_LeadingFlagRoutesToTUI(t *testing.T) {
+	t.Parallel()
+	// `sasash -theme x` must reach the tui subcommand, not the dispatch
+	// unknown-subcommand error; the typoed theme proves it got there.
+	var stdout, stderr strings.Builder
+	if got := dispatch([]string{"-theme", "solarized"}, &stdout, &stderr); got != 2 {
+		t.Errorf("dispatch(-theme solarized) = %v, want 2 from the tui flag check", got)
+	}
+	if !strings.Contains(stderr.String(), "unknown theme") {
+		t.Errorf("stderr = %q, want the tui unknown-theme error", stderr.String())
+	}
+	// -h stays help, never tui.
+	stdout.Reset()
+	if got := dispatch([]string{"-h"}, &stdout, &stderr); got != 0 || !strings.Contains(stdout.String(), "usage: sasash") {
+		t.Errorf("dispatch(-h) = %v stdout %q, want usage", got, stdout.String())
+	}
+}

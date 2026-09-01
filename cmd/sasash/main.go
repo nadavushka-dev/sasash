@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 )
 
 type command struct {
@@ -35,6 +36,8 @@ func main() {
 func dispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		args = []string{"tui"} // the default entry is the TUI (tui.go)
+	} else if args[0] != "-h" && args[0] != "--help" && strings.HasPrefix(args[0], "-") {
+		args = append([]string{"tui"}, args...) // leading flags belong to the default entry
 	}
 	switch name := args[0]; name {
 	case "help", "-h", "--help":
