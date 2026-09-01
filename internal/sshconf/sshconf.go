@@ -80,10 +80,20 @@ func (f *File) Len() int { return len(f.lines) }
 
 // WriteAtomic writes the file to path via a temporary file and a rename, so a
 // crash or a full disk can never leave a half-written ssh config behind.
+//
+// A path that is a symlink is resolved first, so the rename lands on the real
+// file and the link survives — dotfiles repos symlink ssh configs, and a
+// write must not sever that. A path that does not resolve (a new file, or a
+// dangling link) is used as given; a dangling link is thus replaced by a
+// regular file.
 func (f *File) WriteAtomic(path string) error {
 	perm := f.Perm
 	if perm == 0 {
 		perm = DefaultPerm
+	}
+
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
 	}
 
 	dir := filepath.Dir(path)
