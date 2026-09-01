@@ -76,11 +76,31 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 	res := Result{Alias: alias}
 	cur, _ := h.Get("HostName")
 	curIdx := -1
+	// Last match, not first: when several named paths share the current addr,
+	// cycling must advance past the whole run instead of stalling inside it.
 	for i, p := range named {
-		if p.Host == cur {
+		if strings.EqualFold(p.Host, cur) {
 			curIdx = i
 			res.From = p
-			break
+		}
+	}
+
+	// Validate Set's argument before the small-host no-op so a bogus path
+	// name never succeeds silently.
+	setIdx := -1
+	if pathName != "" {
+		for i, p := range named {
+			if p.Name == pathName {
+				setIdx = i
+				break
+			}
+		}
+		if setIdx < 0 {
+			names := make([]string, len(named))
+			for i, p := range named {
+				names[i] = p.Name
+			}
+			return Result{}, fmt.Errorf("host %q has no path %q (have %s)", alias, pathName, strings.Join(names, ", "))
 		}
 	}
 
@@ -92,21 +112,7 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 	if pathName == "" {
 		res.To = named[(curIdx+1)%len(named)] // curIdx -1 (no match) lands on 0
 	} else {
-		idx := -1
-		for i, p := range named {
-			if p.Name == pathName {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			names := make([]string, len(named))
-			for i, p := range named {
-				names[i] = p.Name
-			}
-			return Result{}, fmt.Errorf("host %q has no path %q (have %s)", alias, pathName, strings.Join(names, ", "))
-		}
-		res.To = named[idx]
+		res.To = named[setIdx]
 	}
 
 	h.Set("HostName", res.To.Host)
@@ -120,14 +126,22 @@ func switchPath(confPath, alias, pathName string) (Result, error) {
 }
 
 // regenVariants rebuilds the pinned "<alias>.<name>" blocks on a reparse of f
-// (f's line indexes moved if Set inserted a HostName line). Existing variant
-// blocks are rewritten in place, blocks for dropped path names are removed,
-// and missing ones are inserted directly after the host's last directive (or
-// after the last existing variant), so comment runs that lead into a later
-// Host line keep leading into it.
+// (f's line indexes moved if Set inserted a HostName line). Only blocks the
+// generator provably owns — nothing in them but HostName, User and Port —
+// are rewritten in place or, when their path name is gone, removed; a real
+// host that merely shares the "<alias>." prefix is left verbatim, and if it
+// shadows a live path name no duplicate block is generated for it (the
+// user's block is authoritative under first-value-wins). Missing variants
+// are inserted at the end of the host's block, stopping short of a comment
+// run that leads into a following Host line so that host keeps its meta.
 func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.File {
 	f2 := sshconf.Parse(f.Path, f.Bytes())
-	main, _ := f2.Host(alias) // present: switchPath found it before the rewrite
+	main, ok := f2.Host(alias)
+	if !ok {
+		// Unreachable: switchPath found the block before the rewrite. Keep
+		// the HostName edit rather than dereferencing nil if that changes.
+		return f
+	}
 
 	term := "\n"
 	if f2.Len() > 0 && strings.HasSuffix(f2.Line(0).Raw, "\r\n") {
@@ -162,24 +176,41 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 	var edits []edit
 	have := make(map[string]bool)
 	prefix := alias + "."
-	lastVariantEnd := -1
+	lastOwnedEnd := -1
 	for _, b := range f2.Hosts() {
 		suffix := strings.TrimPrefix(b.Name(), prefix)
 		if suffix == b.Name() || suffix == "" {
 			continue
 		}
-		end := directivesEnd(f2, &b)
-		var repl []string // nil removes a stale variant
+		live := false
 		for _, p := range named {
 			if p.Name == suffix {
-				repl = gen(p)
-				have[suffix] = true
+				live = true
 				break
 			}
 		}
-		edits = append(edits, edit{b.Start, end, repl})
-		if end > lastVariantEnd {
-			lastVariantEnd = end
+		if !generatorOwned(f2, &b) {
+			// A real host that happens to share the prefix, or a variant the
+			// user extended by hand: never rewrite, never delete. When it
+			// shadows a live path name, skip generating a duplicate.
+			if live {
+				have[suffix] = true
+			}
+			continue
+		}
+		var repl []string // nil removes a stale variant
+		if live {
+			for _, p := range named {
+				if p.Name == suffix {
+					repl = gen(p)
+					break
+				}
+			}
+			have[suffix] = true
+		}
+		edits = append(edits, edit{b.Start, directivesEnd(f2, &b), repl})
+		if e := insertEnd(f2, &b); e > lastOwnedEnd {
+			lastOwnedEnd = e
 		}
 	}
 
@@ -191,12 +222,15 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 	}
 	if len(missing) > 0 {
 		var block []string
-		insertAt := lastVariantEnd
+		insertAt := lastOwnedEnd
 		if insertAt < 0 {
-			// First variants for this host: a separating blank line and the
-			// SPEC §2 header, straight after the block's directives.
-			insertAt = directivesEnd(f2, main)
-			block = append(block, term, Header+term)
+			// First variants for this host: the SPEC §2 header at the end of
+			// the block, with a separating blank unless one is already there.
+			insertAt = insertEnd(f2, main)
+			if insertAt > 0 && f2.Line(insertAt-1).Kind != sshconf.KindBlank {
+				block = append(block, term)
+			}
+			block = append(block, Header+term)
 		}
 		if insertAt > 0 && !strings.HasSuffix(raw[insertAt-1], "\n") {
 			// The line above the insertion point ends the file without a
@@ -223,9 +257,9 @@ func regenVariants(f *sshconf.File, alias string, named []probe.Path) *sshconf.F
 	return out
 }
 
-// directivesEnd returns the index just past the block's last directive line —
-// the point where generated content may be inserted without crossing comment
-// runs that belong to whatever follows.
+// directivesEnd returns the index just past the block's last directive line:
+// the range a generated variant may be rewritten or removed over. Trailing
+// comments and blanks are never part of it.
 func directivesEnd(f *sshconf.File, h *sshconf.Host) int {
 	end := h.Start + 1
 	for i := h.Start + 1; i < h.End; i++ {
@@ -234,4 +268,53 @@ func directivesEnd(f *sshconf.File, h *sshconf.Host) int {
 		}
 	}
 	return end
+}
+
+// insertEnd returns where generated blocks may be inserted after h: the end
+// of its block, minus a trailing comment run that leads straight into a
+// following Host line — that run is the next host's meta (the boundary
+// sshconf.OwnMeta draws), and in-block meta above it stays with h. A run
+// glued to a following Match line is not walked back over (a Match owns no
+// meta); meta sitting at the very bottom of a block directly against a Match
+// line is a known residual edge.
+func insertEnd(f *sshconf.File, h *sshconf.Host) int {
+	end := h.End
+	if end < f.Len() {
+		next := f.Line(end)
+		if next.Kind == sshconf.KindDirective && strings.EqualFold(next.Keyword, "Host") {
+			for end > h.Start+1 {
+				k := f.Line(end - 1).Kind
+				if k != sshconf.KindComment && k != sshconf.KindMeta {
+					break
+				}
+				end--
+			}
+		}
+	}
+	return end
+}
+
+// generatorOwned reports whether a "<alias>.<name>" block is provably the
+// generator's to rewrite or remove: its directives are nothing but HostName,
+// User and Port, no comment sits between them, and no "# @sasash" meta lives
+// anywhere in the block. Anything else means the user's hand has been in it.
+func generatorOwned(f *sshconf.File, h *sshconf.Host) bool {
+	dirEnd := directivesEnd(f, h)
+	for i := h.Start + 1; i < h.End; i++ {
+		switch line := f.Line(i); line.Kind {
+		case sshconf.KindMeta:
+			return false
+		case sshconf.KindComment:
+			if i < dirEnd {
+				return false
+			}
+		case sshconf.KindDirective:
+			switch strings.ToLower(line.Keyword) {
+			case "hostname", "user", "port":
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }

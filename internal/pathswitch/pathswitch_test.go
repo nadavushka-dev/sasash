@@ -257,13 +257,205 @@ Host ubuntu.lan
   HostName 192.0.2.10
 Host ubuntu.ts
   HostName 198.51.100.5
-
 # @sasash path lan 192.0.2.20
 Host other
   HostName 192.0.2.20
 `
 	if got := read(t, path); got != want {
 		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A real host that merely shares the "<alias>." prefix is not a variant: it
+// must survive a cycle byte-for-byte, comment and all.
+func TestCycle_ForeignPrefixHostSurvives(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 192.0.2.10
+
+# a completely unrelated production host
+Host web.staging
+  HostName 203.0.113.44
+  User deploy
+  IdentityFile ~/.ssh/deploy_ed25519
+  ProxyJump bastion
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host web.lan
+  HostName 192.0.2.10
+Host web.ts
+  HostName 198.51.100.5
+# a completely unrelated production host
+Host web.staging
+  HostName 203.0.113.44
+  User deploy
+  IdentityFile ~/.ssh/deploy_ed25519
+  ProxyJump bastion
+`
+	if got := read(t, path); got != want {
+		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// A user block that shadows a live path name is authoritative: it is left
+// verbatim and no duplicate variant is generated for that name.
+func TestCycle_ForeignBlockShadowingPathName(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 192.0.2.10
+
+Host web.lan
+  HostName 203.0.113.44
+  IdentityFile ~/.ssh/special_ed25519
+`
+	path := write(t, in)
+	if _, err := pathswitch.Cycle(path, "web"); err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	want := `# @sasash path lan 192.0.2.10
+# @sasash path ts 198.51.100.5
+Host web
+  HostName 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host web.ts
+  HostName 198.51.100.5
+Host web.lan
+  HostName 203.0.113.44
+  IdentityFile ~/.ssh/special_ed25519
+`
+	if got := read(t, path); got != want {
+		t.Errorf("Cycle() file =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// In-block "# @sasash" meta stays inside its host's block; generated variants
+// land after it, and the host's paths survive so a second cycle still works.
+func TestCycle_InBlockMetaStaysWithHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "mid file",
+			in: `Host ubuntu
+  HostName 192.0.2.10
+  # @sasash path lan 192.0.2.10
+  # @sasash path ts 198.51.100.5
+
+Host other
+  HostName 192.0.2.20
+`,
+			want: `Host ubuntu
+  HostName 198.51.100.5
+  # @sasash path lan 192.0.2.10
+  # @sasash path ts 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host ubuntu.lan
+  HostName 192.0.2.10
+Host ubuntu.ts
+  HostName 198.51.100.5
+Host other
+  HostName 192.0.2.20
+`,
+		},
+		{
+			name: "last block in file",
+			in: `Host ubuntu
+  HostName 192.0.2.10
+  # @sasash path lan 192.0.2.10
+  # @sasash path ts 198.51.100.5
+`,
+			want: `Host ubuntu
+  HostName 198.51.100.5
+  # @sasash path lan 192.0.2.10
+  # @sasash path ts 198.51.100.5
+
+# pinned variants, generated — for when you want to force one path
+Host ubuntu.lan
+  HostName 192.0.2.10
+Host ubuntu.ts
+  HostName 198.51.100.5
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := write(t, tt.in)
+			if _, err := pathswitch.Cycle(path, "ubuntu"); err != nil {
+				t.Fatalf("first Cycle() failed: %v", err)
+			}
+			if got := read(t, path); got != tt.want {
+				t.Errorf("Cycle() file =\n%q\nwant\n%q", got, tt.want)
+			}
+			second, err := pathswitch.Cycle(path, "ubuntu")
+			if err != nil {
+				t.Fatalf("second Cycle() failed: %v", err)
+			}
+			if !second.Changed || second.To.Name != "lan" {
+				t.Errorf("second Cycle() = %+v, want Changed back to lan (paths must survive)", second)
+			}
+		})
+	}
+}
+
+// Two named paths sharing an addr: cycling matches the LAST of the run so it
+// advances past the group instead of stalling between the twins.
+func TestCycle_SharedAddrAdvances(t *testing.T) {
+	t.Parallel()
+	in := `# @sasash path direct 192.0.2.10:22
+# @sasash path jump 192.0.2.10:2222
+# @sasash path ts 198.51.100.5
+Host u
+  HostName 192.0.2.10
+`
+	path := write(t, in)
+	got, err := pathswitch.Cycle(path, "u")
+	if err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	if got.From.Name != "jump" || got.To.Name != "ts" {
+		t.Errorf("Cycle() = %s->%s, want jump->ts", got.From.Name, got.To.Name)
+	}
+}
+
+func TestCycle_NoopDoesNotWrite(t *testing.T) {
+	t.Parallel()
+	path := write(t, "# @sasash path lan 192.0.2.10\nHost ubuntu\n  HostName 192.0.2.10\n")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() failed: %v", err)
+	}
+	got, err := pathswitch.Cycle(path, "ubuntu")
+	if err != nil {
+		t.Fatalf("Cycle() failed: %v", err)
+	}
+	if got.Changed {
+		t.Errorf("Cycle() = %+v, want Changed false", got)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() failed: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Error("no-op Cycle() rewrote the file (mtime changed)")
 	}
 }
 
@@ -420,6 +612,18 @@ func TestSet_Errors(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "lan, ts") {
 			t.Errorf("Set() err = %q, want the known path names", err)
+		}
+	})
+
+	t.Run("unknown path name errors even on a single-path host", func(t *testing.T) {
+		t.Parallel()
+		path := write(t, "# @sasash path lan 192.0.2.10\nHost ubuntu\n  HostName 192.0.2.10\n")
+		_, err := pathswitch.Set(path, "ubuntu", "bogus")
+		if err == nil {
+			t.Fatal("Set() err = nil, want error")
+		}
+		if !strings.Contains(err.Error(), "lan") {
+			t.Errorf("Set() err = %q, want the known path name", err)
 		}
 	})
 
