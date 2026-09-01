@@ -68,6 +68,20 @@ func ParseAdhocArgv(input string) ([]string, error) {
 // AdhocExit replays the terminal returning from an ad-hoc handoff.
 func AdhocExit(err error) tea.Msg { return adhocExitMsg{err: err} }
 
+// EditorExit replays the terminal returning from the editor; EditorArgv
+// exposes the exact invocation `e` builds.
+func EditorExit(err error) tea.Msg { return editorExitMsg{err: err} }
+
+var EditorArgv = editorArgv
+
+// WithEditor configures the `e` key for tests.
+func WithEditor(m Model, editor []string, hint, confPath string) Model {
+	m.editor = editor
+	m.editorHint = hint
+	m.confPath = confPath
+	return m
+}
+
 // WithSaveHost and WithLoadHosts swap the ad-hoc persistence hooks so
 // tests can observe them.
 func WithSaveHost(m Model, f func(AdhocEntry) error) Model {

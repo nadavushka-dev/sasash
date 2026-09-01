@@ -15,6 +15,7 @@ type KeyMap struct {
 	CopyAddr    key.Binding
 	CopyCmd     key.Binding
 	Adhoc       key.Binding
+	Edit        key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
 	Theme       key.Binding
@@ -38,6 +39,7 @@ func DefaultKeyMap() KeyMap {
 		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
+		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
@@ -61,7 +63,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
-		{k.Connect, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Theme},
+		{k.Connect, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme},
 	}
 }
 

@@ -91,6 +91,33 @@ func TestThemeStatePath(t *testing.T) {
 	}
 }
 
+func TestResolveEditor(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		env      string
+		want     []string
+		wantHint bool
+	}{
+		{name: "plain editor", env: "nvim", want: []string{"nvim"}},
+		{name: "editor with args", env: "code -w", want: []string{"code", "-w"}},
+		{name: "unset falls back to vi with a hint", env: "", want: []string{"vi"}, wantHint: true},
+		{name: "whitespace only is unset", env: "   ", want: []string{"vi"}, wantHint: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, hint := resolveEditor(tt.env)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("resolveEditor(%q) = %v, want %v", tt.env, got, tt.want)
+			}
+			if (hint != "") != tt.wantHint {
+				t.Errorf("resolveEditor(%q) hint = %q, want hint %v", tt.env, hint, tt.wantHint)
+			}
+		})
+	}
+}
+
 func TestCmdTUI_UnknownThemeFlag(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr strings.Builder

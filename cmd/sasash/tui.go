@@ -59,10 +59,15 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
+	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
+	editor, editorHint := resolveEditor(os.Getenv("EDITOR"))
 	m := ui.New(hosts, probe.Prober{}, run.OS{}, ui.Config{
-		Theme:     theme,
-		SaveTheme: saveThemeTo(statePath),
-		SaveHost:  saveHostTo(filepath.Join(home, ".ssh", "config.d", "sasash.conf")),
+		Theme:      theme,
+		SaveTheme:  saveThemeTo(statePath),
+		SaveHost:   saveHostTo(confPath),
+		Editor:     editor,
+		EditorHint: editorHint,
+		ConfPath:   confPath,
 		LoadHosts: func() ([]hostmodel.Host, error) {
 			// Reload warnings are dropped: they already printed at startup
 			// and stderr is invisible under the alt screen.
@@ -101,6 +106,16 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 		}
 	}
 	return "", warn, false
+}
+
+// resolveEditor turns $EDITOR into the argv prefix `e` launches.
+// Fields-splitting keeps EDITOR="code -w" working; unset falls back to vi
+// with a hint the TUI shows once the editor returns.
+func resolveEditor(env string) (argv []string, hint string) {
+	if fields := strings.Fields(env); len(fields) > 0 {
+		return fields, ""
+	}
+	return []string{"vi"}, "opened with vi — set $EDITOR to change"
 }
 
 // saveHostTo persists an ad-hoc connection as a Host block appended to

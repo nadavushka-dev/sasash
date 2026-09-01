@@ -92,6 +92,14 @@ func sshExec(alias string) *exec.Cmd {
 	return execCommand(sshCommand(alias))
 }
 
+// editorArgv is the exact invocation `e` hands the terminal to.
+func editorArgv(editor []string, confPath string) []string {
+	return append(append([]string{}, editor...), confPath)
+}
+
+// editorExitMsg arrives when the terminal returns from the editor.
+type editorExitMsg struct{ err error }
+
 // execCommand adapts a built argv to the *exec.Cmd tea.ExecProcess needs.
 func execCommand(argv []string) *exec.Cmd {
 	return exec.Command(argv[0], argv[1:]...)
@@ -175,6 +183,10 @@ type Model struct {
 	saveHost  func(AdhocEntry) error // nil -> no save offer after connect
 	loadHosts func() ([]hostmodel.Host, error)
 
+	editor     []string // argv prefix for `e`; empty disables the key
+	editorHint string
+	confPath   string
+
 	// notice is a transient one-line message (copy feedback, ssh start
 	// failure); any next keypress clears it.
 	notice string
@@ -200,6 +212,14 @@ type Config struct {
 	// LoadHosts re-reads the config after a save so the new entry appears
 	// in the list; nil skips the reload.
 	LoadHosts func() ([]hostmodel.Host, error)
+	// Editor is the argv prefix `e` launches on ConfPath (resolved from
+	// $EDITOR by the cmd layer); empty disables the key.
+	Editor []string
+	// EditorHint, when non-empty, shows as a notice after the editor
+	// returns (e.g. the $EDITOR-unset fallback explanation).
+	EditorHint string
+	// ConfPath is the file `e` edits: sasash.conf.
+	ConfPath string
 }
 
 // promptMode says which prompt, if any, owns the keyboard.
@@ -250,16 +270,19 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 	prompt.CharLimit = 128
 
 	m := Model{
-		hosts:     hosts,
-		list:      l,
-		help:      help.New(),
-		keys:      keys,
-		prober:    prober,
-		runner:    runner,
-		saveTheme: cfg.SaveTheme,
-		prompt:    prompt,
-		saveHost:  cfg.SaveHost,
-		loadHosts: cfg.LoadHosts,
+		hosts:      hosts,
+		list:       l,
+		help:       help.New(),
+		keys:       keys,
+		prober:     prober,
+		runner:     runner,
+		saveTheme:  cfg.SaveTheme,
+		prompt:     prompt,
+		saveHost:   cfg.SaveHost,
+		loadHosts:  cfg.LoadHosts,
+		editor:     cfg.Editor,
+		editorHint: cfg.EditorHint,
+		confPath:   cfg.ConfPath,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
 	return m.applyTheme(idx)
@@ -341,6 +364,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "theme not saved: " + msg.err.Error()
 		}
 		return m, nil
+
+	case editorExitMsg:
+		var exitErr *exec.ExitError
+		if msg.err != nil && !errors.As(msg.err, &exitErr) {
+			m.notice = "editor: " + msg.err.Error()
+			return m, probeCmd(m.prober, m.hosts)
+		}
+		// Hand-edits win (SPEC §2): re-read and re-render, never fight.
+		m.notice = m.editorHint
+		if m.loadHosts == nil {
+			return m, probeCmd(m.prober, m.hosts)
+		}
+		load := m.loadHosts
+		return m, func() tea.Msg {
+			hosts, err := load()
+			return hostsReloadedMsg{hosts: hosts, err: err}
+		}
 
 	case adhocExitMsg:
 		var exitErr *exec.ExitError
@@ -448,6 +488,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, clipCmd(m.runner, strings.Join(sshCommand(host.Alias), " "))
+			case key.Matches(msg, m.keys.Edit):
+				if len(m.editor) == 0 || m.confPath == "" {
+					return m, nil
+				}
+				return m, tea.ExecProcess(execCommand(editorArgv(m.editor, m.confPath)), func(err error) tea.Msg {
+					return editorExitMsg{err: err}
+				})
 			case key.Matches(msg, m.keys.Adhoc):
 				m.mode = promptConnect
 				m.prompt.Reset()
