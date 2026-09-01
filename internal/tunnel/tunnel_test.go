@@ -3,6 +3,8 @@ package tunnel_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -590,17 +592,29 @@ func TestEngine_Status_InvalidHostHasNoState(t *testing.T) {
 }
 
 // Zero-value Dialer and Timeout fall back to the real net dialer with the
-// default timeout: a dial to a closed local port reads as Down.
+// default timeout: a dial to a just-freed local port reads as Down.
 func TestEngine_Status_DefaultDialer(t *testing.T) {
 	t.Parallel()
+	// A port the OS just handed out and we closed is guaranteed refused,
+	// unlike a fixed low port that a firewall might silently drop.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() err = %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close() err = %v", err)
+	}
+
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	e := tunnel.Engine{Runner: r, StateDir: t.TempDir()}
-	got, err := e.Status(context.Background(), "ubuntu", []hostmodel.ForwardSet{{Name: "web", Specs: []string{"1:localhost:1"}}})
+	spec := fmt.Sprintf("%d:localhost:%d", port, port)
+	got, err := e.Status(context.Background(), "ubuntu", []hostmodel.ForwardSet{{Name: "web", Specs: []string{spec}}})
 	if err != nil {
 		t.Fatalf("Status() err = %v", err)
 	}
 	if len(got.Forwards) != 1 || got.Forwards[0].State != tunnel.Down {
-		t.Errorf("Status().Forwards = %+v, want the closed port Down", got.Forwards)
+		t.Errorf("Status().Forwards = %+v, want the freed port Down", got.Forwards)
 	}
 }
 

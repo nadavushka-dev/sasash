@@ -83,6 +83,12 @@ type HostStatus struct {
 // The zero values of Runner, Dialer and Timeout mean run.OS{}, probe.Net{}
 // and probe.DefaultTimeout. StateDir is required: the cmd layer passes
 // ~/.local/state/sasash, tests pass a t.TempDir().
+//
+// Concurrency: state updates are unlocked read-modify-write over a plain
+// file — callers must serialize mutating calls per host (the TUI's render
+// loop and the CLI both do naturally). Concurrent mutators can lose records
+// and a reader racing a write can see a transient CorruptState; both degrade
+// honestly (reality still decides every status), but don't do it.
 type Engine struct {
 	Runner   run.Runner
 	Dialer   probe.Dialer
@@ -160,7 +166,7 @@ func (e Engine) Forward(ctx context.Context, host, set, spec string) error {
 // the cache is never truth).
 func (e Engine) Cancel(ctx context.Context, host, spec string) error {
 	err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host)
-	if serr := e.mutateState(host, func(st *hostState) {
+	if serr := e.mutateState(host, "cancel attempted", func(st *hostState) {
 		st.remove(func(f stateForward) bool { return f.Spec == spec })
 	}); serr != nil && err == nil {
 		err = serr
@@ -173,7 +179,7 @@ func (e Engine) Cancel(ctx context.Context, host, spec string) error {
 // no forwards either way.
 func (e Engine) Exit(ctx context.Context, host string) error {
 	err := e.exec(ctx, "ssh", "-O", "exit", host)
-	if serr := e.mutateState(host, func(st *hostState) {
+	if serr := e.mutateState(host, "master exit requested", func(st *hostState) {
 		st.Forwards = nil
 	}); serr != nil && err == nil {
 		err = serr
@@ -229,7 +235,7 @@ func (e Engine) DownSet(ctx context.Context, host, set string, specs []string) e
 			errs = append(errs, err)
 		}
 	}
-	if serr := e.mutateState(host, func(st *hostState) {
+	if serr := e.mutateState(host, "set cancelled", func(st *hostState) {
 		st.remove(func(f stateForward) bool { return f.Set == set })
 	}); serr != nil {
 		errs = append(errs, serr)
@@ -245,7 +251,7 @@ func (e Engine) DownSet(ctx context.Context, host, set string, specs []string) e
 func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.ForwardSet) (HostStatus, error) {
 	master, err := e.CheckMaster(ctx, host)
 	if err != nil {
-		return HostStatus{}, err
+		return HostStatus{Host: host}, err
 	}
 	st, corrupt := e.loadState(host)
 	out := HostStatus{Host: host, Master: master, CorruptState: corrupt}
@@ -273,6 +279,12 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 
 // verdict is the whole reconciliation matrix: port accepting AND master
 // alive => Up; port accepting alone => Listening; anything else => Down.
+//
+// Known limits (ratified contract §5; revisit with 3.4's port-conflict
+// work): the dial is always to 127.0.0.1, so a spec bound to a specific
+// non-loopback interface is judged by whoever holds the loopback port; and
+// two different specs sharing a local port are each judged by that one
+// port, so a stale recorded spec can ride a live desired one's listener.
 func (e Engine) verdict(ctx context.Context, master bool, port string) Status {
 	if port == "" {
 		return Down
@@ -292,6 +304,9 @@ func (e Engine) verdict(ctx context.Context, master bool, port string) Status {
 // among the spec's first two fields ("3000:localhost:3000" -> 3000,
 // "127.0.0.1:3000:localhost:3000" -> 3000). No match means the forward
 // cannot be verified, so it must not be claimed: Port "" reads as Down.
+// Bracketed or bare IPv6 bind addresses therefore always read as Down
+// (fail-safe under-claim), and spec validation itself is M3's, not ours —
+// a malformed spec ssh would reject can still yield a dialable port here.
 func localPort(spec string) string {
 	fields := strings.SplitN(spec, ":", 3)
 	for i, f := range fields {
@@ -364,7 +379,7 @@ func (e Engine) loadState(host string) (st hostState, corrupt bool) {
 
 // record adds one injected forward to the cache (idempotent per set+spec).
 func (e Engine) record(host, set, spec string) error {
-	return e.mutateState(host, func(st *hostState) {
+	return e.mutateState(host, "forward added", func(st *hostState) {
 		for _, f := range st.Forwards {
 			if f.Set == set && f.Spec == spec {
 				return
@@ -374,24 +389,28 @@ func (e Engine) record(host, set, spec string) error {
 	})
 }
 
-// mutateState is load-modify-save; any failure wraps ErrStateWrite because
-// by the time state changes, the ssh side has already done its part.
-func (e Engine) mutateState(host string, mutate func(*hostState)) error {
+// mutateState is load-modify-save; any failure wraps ErrStateWrite, prefixed
+// with what the ssh side already accomplished — by the time state changes,
+// the action is real and the caller deserves to know that.
+func (e Engine) mutateState(host, action string, mutate func(*hostState)) error {
+	fail := func(err error) error {
+		return fmt.Errorf("%s but %w: %v", action, ErrStateWrite, err)
+	}
 	path, err := e.statePath(host)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStateWrite, err)
+		return fail(err)
 	}
 	st, _ := e.loadState(host)
 	mutate(&st)
 	if err := os.MkdirAll(e.StateDir, 0o700); err != nil {
-		return fmt.Errorf("%w: %v", ErrStateWrite, err)
+		return fail(err)
 	}
 	data, err := json.Marshal(st)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStateWrite, err)
+		return fail(err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("%w: %v", ErrStateWrite, err)
+		return fail(err)
 	}
 	return nil
 }
