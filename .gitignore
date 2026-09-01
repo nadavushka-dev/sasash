@@ -6,3 +6,6 @@ coverage.out
 # cross-session task board (local only, never published)
 .pin-board/
 .squad/
+
+# nested git worktrees for parallel agent lanes
+.worktrees/
