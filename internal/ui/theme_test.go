@@ -49,6 +49,69 @@ func TestThemes_Palettes(t *testing.T) {
 	}
 }
 
+// TestThemes_CanonicalTokens pins name -> palette wiring with exact
+// upstream values: the Ascii test profile renders all themes identically,
+// so a palette swapped behind the wrong name is invisible to View tests.
+func TestThemes_CanonicalTokens(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		accent string
+		bg     string
+	}{
+		{name: "gruvbox", accent: "#fe8019", bg: "#282828"},
+		{name: "mocha", accent: "#cba6f7", bg: "#1e1e2e"},
+		{name: "tokyonight", accent: "#7aa2f7", bg: "#1a1b26"},
+		{name: "nord", accent: "#88c0d0", bg: "#2e3440"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			th := ui.Themes[i]
+			if th.Name != tt.name {
+				t.Fatalf("Themes[%d].Name = %v, want %v", i, th.Name, tt.name)
+			}
+			if got := string(th.Palette.Accent); got != tt.accent {
+				t.Errorf("%s Accent = %v, want %v", tt.name, got, tt.accent)
+			}
+			if got := string(th.Palette.Bg); got != tt.bg {
+				t.Errorf("%s Bg = %v, want %v", tt.name, got, tt.bg)
+			}
+		})
+	}
+}
+
+// TestModel_ApplyTheme_StylesFollowPalette pins the switch wiring at the
+// style layer: the model's own styles and the help component must carry
+// the selected palette after New and after every `t`.
+//
+// Known residual: the list delegate holds its own styles copy and bubbles
+// exposes no delegate getter, so the SetDelegate line in applyTheme is
+// pinned only by review.
+func TestModel_ApplyTheme_StylesFollowPalette(t *testing.T) {
+	t.Parallel()
+
+	m := ui.New(nil, probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{Theme: "nord"})
+	if got := ui.StylesOf(m).Title.GetForeground(); got != ui.Nord.Accent {
+		t.Errorf("Title foreground with Config{nord} = %v, want %v", got, ui.Nord.Accent)
+	}
+
+	m = taggedModel(t, fakerun.New()) // default: gruvbox
+	if got := ui.StylesOf(m).Title.GetForeground(); got != ui.Gruvbox.Accent {
+		t.Fatalf("Title foreground at start = %v, want gruvbox %v", got, ui.Gruvbox.Accent)
+	}
+	m = press(t, m, "t") // -> mocha
+	if got := ui.StylesOf(m).Title.GetForeground(); got != ui.Mocha.Accent {
+		t.Errorf("Title foreground after t = %v, want mocha %v", got, ui.Mocha.Accent)
+	}
+	if got := ui.StylesOf(m).StatusUp.GetForeground(); got != ui.Mocha.Success {
+		t.Errorf("StatusUp foreground after t = %v, want mocha %v", got, ui.Mocha.Success)
+	}
+	if got := ui.HelpStyles(m).ShortKey.GetForeground(); got != ui.Mocha.FgDim {
+		t.Errorf("help ShortKey foreground after t = %v, want mocha %v", got, ui.Mocha.FgDim)
+	}
+}
+
 func TestThemeIndex_Lookup(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

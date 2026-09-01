@@ -2,6 +2,7 @@ package ui
 
 import (
 	"github.com/charmbracelet/bubbles/cursor"
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -35,6 +36,13 @@ func WithSaveTheme(m Model, f func(string) error) Model {
 	m.saveTheme = f
 	return m
 }
+
+// StylesOf and HelpStyles expose the LIVE style state for theme-switch
+// assertions: tests run under the Ascii color profile, where every theme
+// renders identically, so wiring must be asserted at the style layer
+// (GetForeground needs no rendering and no profile).
+func StylesOf(m Model) Styles        { return m.styles }
+func HelpStyles(m Model) help.Styles { return m.help.Styles }
 
 // StaticCursor turns off the filter input's cursor blink so the key-path
 // tests never produce blink tick cmds (which sleep when executed).
