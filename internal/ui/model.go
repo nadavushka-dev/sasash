@@ -307,7 +307,10 @@ func (m Model) detailView() string {
 		if nameWidth > 0 {
 			b.WriteString(" " + m.styles.PathName.Render(fmt.Sprintf("%-*s", nameWidth, p.Name)))
 		}
-		b.WriteString(" " + m.styles.PathAddr.Render(p.Host) + " " + extra)
+		// Full dial target, port included: the pane reports what was probed
+		// (ratified: diagnostic surfaces match `sasash status`; only `addr`
+		// stays bare, as data for scripting).
+		b.WriteString(" " + m.styles.PathAddr.Render(p.Addr()) + " " + extra)
 		if i == active {
 			b.WriteString(" " + m.styles.ActiveMark.Render("← active"))
 		}

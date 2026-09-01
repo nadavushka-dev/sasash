@@ -155,8 +155,9 @@ func TestModel_Update_ProbeFlow(t *testing.T) {
 
 	view := m.View()
 	// Selected host is web: lan down, ts up 20ms and therefore the first
-	// alive path in config order — the active one.
-	for _, want := range []string{"web", "db", "○", "down", "●", "20ms", "← active", "$", "ssh web"} {
+	// alive path in config order — the active one. Addresses render as the
+	// full dial target, port included (parity with `sasash status`).
+	for _, want := range []string{"web", "db", "○", "down", "●", "20ms", "← active", "$", "ssh web", "198.51.100.5:22"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() after probe missing %q\nview:\n%s", want, view)
 		}
