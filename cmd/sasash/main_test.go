@@ -25,10 +25,10 @@ func TestDispatch(t *testing.T) {
 		wantStderr string // substring; "" skips the check
 	}{
 		{
-			name:       "no args points at help",
+			name:       "no args routes to the tui, which refuses a non-terminal stdout",
 			args:       nil,
 			wantCode:   1,
-			wantStderr: "TUI not built yet",
+			wantStderr: "needs a terminal",
 		},
 		{
 			name:       "unknown subcommand",
