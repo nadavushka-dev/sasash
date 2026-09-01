@@ -4,6 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	// os/exec appears here ONLY to build the *exec.Cmd that tea.ExecProcess
+	// requires for the ssh handoff (SPEC §5): tea must own the tty itself,
+	// so this one invocation cannot go through run.Runner. Every other
+	// process start stays behind the run seam.
+	"os/exec"
 	"strings"
 	"time"
 
@@ -15,6 +20,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/run"
 )
 
 // refreshEvery is how often paths are re-probed. One refresh dials every
@@ -62,6 +68,39 @@ type probeDoneMsg struct{ statuses map[string][]probe.Status }
 // refreshTickMsg asks for the next probe round.
 type refreshTickMsg struct{}
 
+// sshExitMsg arrives when the terminal comes back from an ssh handoff.
+// err reports only a failure to start; ssh's own exit code is not news.
+type sshExitMsg struct{ err error }
+
+// copyDoneMsg reports the outcome of a clipboard write.
+type copyDoneMsg struct{ err error }
+
+// sshCommand is the argv `enter` runs and the command line previews; one
+// builder so the preview can never drift from the handoff (SPEC §5: the
+// bottom line always shows what the highlighted action will run).
+func sshCommand(alias string) []string {
+	return []string{"ssh", alias}
+}
+
+// clipArgv builds the pbcopy invocation (decision R2). run.Runner has no
+// stdin, so the text travels as a positional shell argument — never spliced
+// into the script, so no quoting is needed and no injection is possible.
+func clipArgv(text string) []string {
+	return []string{"sh", "-c", `printf %s "$1" | pbcopy`, "sh", text}
+}
+
+// clipCmd writes text to the clipboard through the run seam, off the UI
+// thread.
+func clipCmd(r run.Runner, text string) tea.Cmd {
+	return func() tea.Msg {
+		res, err := r.Run(context.Background(), clipArgv(text)...)
+		if err == nil && !res.OK() {
+			err = fmt.Errorf("pbcopy exited %d: %s", res.Code, strings.TrimSpace(string(res.Stderr)))
+		}
+		return copyDoneMsg{err: err}
+	}
+}
+
 // probeCmd dials every path of every host, in parallel ProbeAll rounds of
 // at most probeChunk paths. It runs on bubbletea's command goroutine, so
 // the UI never blocks on the network; the result comes back as a
@@ -100,13 +139,21 @@ type Model struct {
 	keys   KeyMap
 	styles Styles
 	prober probe.Prober
+	runner run.Runner
+
+	// notice is a transient one-line message (copy feedback, ssh start
+	// failure); any next keypress clears it.
+	notice string
+	// tickArmed dedupes the refresh loop: extra probe rounds (an ssh
+	// handoff returning) must not each arm their own tick chain.
+	tickArmed bool
 
 	width, height int
 }
 
-// New builds the root model. The prober's zero value probes for real;
-// tests inject a fakedial-backed one.
-func New(hosts []hostmodel.Host, prober probe.Prober) Model {
+// New builds the root model. The prober's zero value probes for real and
+// runner should be run.OS{} outside tests; tests inject fakes.
+func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner) Model {
 	styles := NewStyles(Gruvbox)
 	keys := DefaultKeyMap()
 
@@ -145,6 +192,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober) Model {
 		keys:   keys,
 		styles: styles,
 		prober: prober,
+		runner: runner,
 	}
 }
 
@@ -173,15 +221,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case probeDoneMsg:
 		m.statuses = msg.statuses
+		if m.tickArmed {
+			return m, nil
+		}
+		m.tickArmed = true
 		return m, tea.Tick(refreshEvery, func(time.Time) tea.Msg { return refreshTickMsg{} })
 
 	case refreshTickMsg:
+		m.tickArmed = false
 		return m, probeCmd(m.prober, m.hosts)
+
+	case sshExitMsg:
+		if msg.err != nil {
+			m.notice = "ssh: " + msg.err.Error()
+		}
+		// The world may have changed while the terminal was handed away.
+		return m, probeCmd(m.prober, m.hosts)
+
+	case copyDoneMsg:
+		if msg.err != nil {
+			m.notice = "copy failed: " + msg.err.Error()
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.ForceQuit) {
 			return m, tea.Quit
 		}
+		m.notice = ""
 		// Action keys must never fire while the filter input is focused
 		// (SPEC §5 addendum). Filtering arrives in 1.5; the guard is
 		// structural from day one so keys added later inherit it.
@@ -189,6 +256,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, m.keys.Quit):
 				return m, tea.Quit
+			case key.Matches(msg, m.keys.Connect):
+				host, ok := m.Selected()
+				if !ok {
+					return m, nil
+				}
+				argv := sshCommand(host.Alias)
+				return m, tea.ExecProcess(exec.Command(argv[0], argv[1:]...), func(err error) tea.Msg {
+					return sshExitMsg{err: err}
+				})
+			case key.Matches(msg, m.keys.CopyAddr):
+				host, ok := m.Selected()
+				if !ok {
+					return m, nil
+				}
+				// The active address, bare — the clipboard twin of
+				// `sasash addr`: data for other tools, not a dial target.
+				s, ok := probe.Select(m.statuses[host.Alias])
+				if !ok {
+					m.notice = "no alive path — nothing copied"
+					return m, nil
+				}
+				return m, clipCmd(m.runner, s.Path.Host)
+			case key.Matches(msg, m.keys.CopyCmd):
+				host, ok := m.Selected()
+				if !ok {
+					return m, nil
+				}
+				return m, clipCmd(m.runner, strings.Join(sshCommand(host.Alias), " "))
 			case key.Matches(msg, m.keys.HalfDown):
 				for i := 0; i < m.halfPage(); i++ {
 					m.list.CursorDown()
@@ -260,7 +355,14 @@ func (m Model) View() string {
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panes)
 	}
 
-	return strings.Join([]string{header, "", body, m.previewView(), " " + m.help.View(m.keys)}, "\n")
+	preview := m.previewView()
+	if m.notice != "" {
+		preview += "  " + m.styles.Notice.Render(m.notice)
+	}
+	// Same width clamp as the panes: a long alias (or notice) must not
+	// wrap the preview line and push the alt screen around.
+	preview = m.styles.Clamp.MaxWidth(m.width).Render(preview)
+	return strings.Join([]string{header, "", body, preview, " " + m.help.View(m.keys)}, "\n")
 }
 
 // detailView renders the right pane for the selected host: one line per
@@ -325,5 +427,5 @@ func (m Model) previewView() string {
 	if !ok {
 		return ""
 	}
-	return " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render("ssh "+host.Alias)
+	return " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(sshCommand(host.Alias), " "))
 }

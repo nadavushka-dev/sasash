@@ -11,6 +11,9 @@ type KeyMap struct {
 	Bottom    key.Binding
 	HalfDown  key.Binding
 	HalfUp    key.Binding
+	Connect   key.Binding
+	CopyAddr  key.Binding
+	CopyCmd   key.Binding
 	Quit      key.Binding
 	ForceQuit key.Binding
 }
@@ -26,6 +29,9 @@ func DefaultKeyMap() KeyMap {
 		Bottom:    key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G", "last")),
 		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("ctrl+d", "½ page down")),
 		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
+		Connect:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
+		CopyAddr:  key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank address")),
+		CopyCmd:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Quit:      key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit: key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
 	}
@@ -33,14 +39,15 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp implements help.KeyMap; the help bar truncates by width.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.CopyAddr, k.CopyCmd, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
-// FullHelp implements help.KeyMap, grouped navigation / general. The full
-// help view itself arrives with the help slice (SASASH.1.5).
+// FullHelp implements help.KeyMap, grouped navigation / actions / general.
+// The full help view itself arrives with the help slice (SASASH.1.5).
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
+		{k.Connect, k.CopyAddr, k.CopyCmd},
 		{k.Quit},
 	}
 }

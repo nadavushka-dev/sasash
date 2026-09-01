@@ -26,6 +26,7 @@ type Styles struct {
 	// Bottom chrome.
 	CmdPrompt  lipgloss.Style // the "$"
 	CmdPreview lipgloss.Style // ghost text of the command to run
+	Notice     lipgloss.Style // transient feedback on the preview line
 	HelpKey    lipgloss.Style
 	HelpDesc   lipgloss.Style
 	HelpSep    lipgloss.Style
@@ -53,6 +54,7 @@ func NewStyles(p Palette) Styles {
 
 		CmdPrompt:  lipgloss.NewStyle().Foreground(p.Accent),
 		CmdPreview: lipgloss.NewStyle().Foreground(p.FgDim).Italic(true),
+		Notice:     lipgloss.NewStyle().Foreground(p.Warning),
 		HelpKey:    lipgloss.NewStyle().Foreground(p.FgDim),
 		HelpDesc:   lipgloss.NewStyle().Foreground(p.FgDim).Faint(true),
 		HelpSep:    lipgloss.NewStyle().Foreground(p.BgSubtle),

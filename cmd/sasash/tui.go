@@ -10,6 +10,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -37,7 +38,7 @@ func cmdTUI(_ []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
-	p := tea.NewProgram(ui.New(hosts, probe.Prober{}), tea.WithAltScreen(), tea.WithOutput(out))
+	p := tea.NewProgram(ui.New(hosts, probe.Prober{}, run.OS{}), tea.WithAltScreen(), tea.WithOutput(out))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(stderr, "sasash:", err)
 		return 1
