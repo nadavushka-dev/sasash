@@ -255,6 +255,7 @@ const (
 	promptNone promptMode = iota
 	promptConnect
 	promptAlias
+	promptForward // `+`: an ad-hoc forward spec for the selected host
 )
 
 // New builds the root model. The prober's zero value probes for real and
@@ -383,6 +384,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.tinflight, msg.host)
 		m.tstatus[msg.host] = tunnelState{status: msg.status, err: msg.err}
 		return m, nil
+
+	case forwardConflictMsg:
+		return m.forwardConflict(msg)
 
 	case tunnelDoneMsg:
 		switch {
@@ -518,6 +522,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case msg.Type == tea.KeyEnter:
+				if m.mode == promptForward {
+					return m.submitForward()
+				}
 				return m.promptSubmit()
 			}
 			var cmd tea.Cmd
@@ -591,6 +598,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, m.toggleCmd(host, row)
+			case key.Matches(msg, m.keys.AddFwd):
+				if _, ok := m.Selected(); !ok || m.tunnels == nil {
+					return m, nil
+				}
+				m.mode = promptForward
+				m.prompt.Reset()
+				m.prompt.Placeholder = "local:host:port  e.g. 8080:localhost:80"
+				return m, m.prompt.Focus()
+			case key.Matches(msg, m.keys.CancelFwd):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				row, ok := m.highlighted(host)
+				if !ok {
+					m.notice = "no forward highlighted — tab picks one"
+					return m, nil
+				}
+				return m, m.cancelCmd(host, row)
 			case key.Matches(msg, m.keys.Restart):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {
@@ -709,7 +735,7 @@ func (m Model) helpView() string {
 	var k help.KeyMap = m.keys
 	switch {
 	case m.mode != promptNone:
-		k = promptKeys{save: m.mode == promptAlias}
+		k = promptKeys{mode: m.mode}
 	case m.list.FilterState() == list.Filtering:
 		k = filterKeys{}
 	}
@@ -766,8 +792,11 @@ func (m Model) View() string {
 	preview := m.previewView()
 	if m.mode != promptNone {
 		label := "connect:"
-		if m.mode == promptAlias {
+		switch m.mode {
+		case promptAlias:
 			label = "save as:"
+		case promptForward:
+			label = "forward:"
 		}
 		// textinput pads its value to Width; trim the raw padding so a
 		// notice (a rejection message, typically) still fits the line.

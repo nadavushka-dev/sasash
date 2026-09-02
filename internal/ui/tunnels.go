@@ -21,6 +21,7 @@ type Tunneler interface {
 	Status(ctx context.Context, host string, desired []hostmodel.ForwardSet) (tunnel.HostStatus, error)
 	Up(ctx context.Context, host, set string, specs []string) error
 	DownSet(ctx context.Context, host, set string, specs []string) error
+	Cancel(ctx context.Context, host, spec string) error
 	Exit(ctx context.Context, host string) error
 }
 
@@ -111,11 +112,12 @@ func (m Model) hostByAlias(alias string) (hostmodel.Host, bool) {
 }
 
 // forwardRows are the rows the tunnels section shows for host: the last
-// Status result's forwards, or — before one lands — the declared sets,
-// flagged pending so they render as unknown rather than down.
+// Status result's forwards (shared-port claimants demoted), or — before
+// one lands — the declared sets, flagged pending so they render as
+// unknown rather than down.
 func (m Model) forwardRows(host hostmodel.Host) (rows []tunnel.Forward, pending bool) {
 	if ts, ok := m.tstatus[host.Alias]; ok && ts.err == nil {
-		return ts.status.Forwards, false
+		return demoteShared(ts.status.Forwards), false
 	}
 	for _, fs := range host.Forwards {
 		for _, spec := range fs.Specs {
@@ -123,6 +125,38 @@ func (m Model) forwardRows(host hostmodel.Host) (rows []tunnel.Forward, pending 
 		}
 	}
 	return rows, true
+}
+
+// demoteShared resolves the shared-local-port ambiguity (SASASH.3.4 added
+// scope): the engine judges every spec by its local port alone, so a stale
+// recorded spec riding a live desired spec's listener reads up. Only the
+// first claimant of a port — desired sets come first, in meta order — can
+// be the one answering; every later claimant is capped at listening, the
+// contract's own word for "port answers, not verified end-to-end".
+func demoteShared(rows []tunnel.Forward) []tunnel.Forward {
+	out := append([]tunnel.Forward(nil), rows...)
+	seen := make(map[string]bool)
+	for i := range out {
+		p := out[i].Port
+		if p == "" {
+			continue
+		}
+		if seen[p] && out[i].State == tunnel.Up {
+			out[i].State = tunnel.Listening
+		}
+		seen[p] = true
+	}
+	return out
+}
+
+// sharedWith names the earlier claimant of row i's local port, or "".
+func sharedWith(rows []tunnel.Forward, i int) string {
+	for j := 0; j < i; j++ {
+		if rows[i].Port != "" && rows[j].Port == rows[i].Port {
+			return setLabel(rows[j].Set)
+		}
+	}
+	return ""
 }
 
 // highlighted returns the forward row tab has moved onto, if any. The
@@ -266,6 +300,15 @@ func oneLine(err error, host string) string {
 	return strings.Join(lines, "; ")
 }
 
+// cancelCmd is x: `ssh -O cancel` for the one highlighted forward. A
+// forward that is already gone fails with ssh's own reason.
+func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
+	eng, alias, spec := m.tunnels, host.Alias, row.Spec
+	return tunnelActionCmd(alias, "cancel", "cancelled "+spec, func(ctx context.Context) error {
+		return eng.Cancel(ctx, alias, spec)
+	})
+}
+
 // exitCmd is X: `ssh -O exit`, the master and every forward with it.
 func (m Model) exitCmd(host hostmodel.Host) tea.Cmd {
 	eng, alias := m.tunnels, host.Alias
@@ -325,6 +368,11 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 			m.styles.PathName.Render(fmt.Sprintf("%-*s", nameWidth, setLabel(f.Set))),
 			m.styles.PathAddr.Render(fmt.Sprintf("%-*s", specWidth, f.Spec)),
 			m.styles.PathExtra.Render(word)))
+		if !pending {
+			if with := sharedWith(rows, i); with != "" {
+				b.WriteString(" " + m.styles.Notice.Render("shares :"+f.Port+" with "+with))
+			}
+		}
 	}
 	return b.String()
 }

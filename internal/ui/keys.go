@@ -19,6 +19,8 @@ type KeyMap struct {
 	NextFwd     key.Binding
 	PrevFwd     key.Binding
 	Toggle      key.Binding
+	AddFwd      key.Binding
+	CancelFwd   key.Binding
 	Restart     key.Binding
 	Exit        key.Binding
 	Filter      key.Binding
@@ -48,6 +50,8 @@ func DefaultKeyMap() KeyMap {
 		NextFwd:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next forward")),
 		PrevFwd:     key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev forward")),
 		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
+		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward")),
+		CancelFwd:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel forward")),
 		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart master")),
 		Exit:        key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "exit master")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
@@ -62,7 +66,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.NextFwd, k.Toggle, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.NextFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /
@@ -75,17 +79,20 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
 		{k.Connect, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme},
-		{k.NextFwd, k.PrevFwd, k.Toggle, k.Restart, k.Exit},
+		{k.NextFwd, k.PrevFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit},
 	}
 }
 
 // promptKeys is the help shown while a prompt owns the keyboard.
-type promptKeys struct{ save bool }
+type promptKeys struct{ mode promptMode }
 
 func (p promptKeys) ShortHelp() []key.Binding {
 	enter, esc := "connect", "cancel"
-	if p.save {
+	switch p.mode {
+	case promptAlias:
 		enter, esc = "save", "skip"
+	case promptForward:
+		enter = "add"
 	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enter)),

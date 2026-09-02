@@ -117,6 +117,13 @@ var (
 	ExitArgv    = exitArgv
 )
 
+// LocalPort and WithLocalPort expose the forward-spec port rule so it can
+// be pinned to the engine's and to exact rewrites.
+var (
+	LocalPort     = localPort
+	WithLocalPort = withLocalPort
+)
+
 // Prompting and PromptingSave expose which prompt, if any, owns the keys.
 func Prompting(m Model) bool     { return m.mode != promptNone }
 func PromptingSave(m Model) bool { return m.mode == promptAlias }
