@@ -418,6 +418,14 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 			if h := strings.Count(view, "\n") + 1; h > 30 {
 				t.Errorf("View() height = %d, want <= 30 (a notice must never add a line)", h)
 			}
+			// ssh's reason must survive an 80-column terminal too: the
+			// argv the engine echoes ahead of it was on the preview line.
+			narrow := update(t, m, tea.WindowSizeMsg{Width: 80, Height: 30}).View()
+			for _, w := range tt.want {
+				if !strings.Contains(narrow, w) {
+					t.Errorf("View() at 80 cols missing %q:\n%s", w, narrow)
+				}
+			}
 		})
 	}
 }
@@ -571,6 +579,43 @@ func TestModel_Update_SelectionChangeFetchesStatus(t *testing.T) {
 	}
 	if view := m.View(); !strings.Contains(view, "◌ master …") || strings.Contains(view, "● web") {
 		t.Errorf("View() shows ubuntu's stale status as live:\n%s", view)
+	}
+}
+
+func TestModel_Update_OnePollInFlightPerHost(t *testing.T) {
+	t.Parallel()
+	// Moving the cursor issues a poll for the new host; moving onto it
+	// again while that poll is still out must not spawn another `-O
+	// check` — one process per host at a time, however fast j/k go.
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(255, "ssh", "-O", "check", "bare")
+	m := polled(t, r, fakedial.New())
+	next, first := m.Update(keyMsg("j")) // bare: poll issued, not delivered
+	m = next.(ui.Model)
+	if first == nil {
+		t.Fatalf("Update(j) cmd = nil, want bare's poll")
+	}
+	m = press(t, m, "k") // back to ubuntu: its own re-poll, left in flight
+	next, again := m.Update(keyMsg("j"))
+	m = next.(ui.Model)
+	if again != nil {
+		t.Errorf("Update(j) with bare's poll in flight cmd = %v, want nil", again)
+	}
+	// The tick skips it too; only the path probe runs.
+	before := len(r.CallKeys())
+	_, tick := m.Update(ui.RefreshTick())
+	m = feed(t, m, tick)
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("tick calls with a poll in flight = %v, want none", got)
+	}
+	// Once it lands the host polls again.
+	m = feed(t, m, first)
+	if view := m.View(); !strings.Contains(view, "○ master down") {
+		t.Errorf("View() after bare's poll landed missing its master row:\n%s", view)
+	}
+	if _, cmd := m.Update(ui.RefreshTick()); cmd == nil {
+		t.Errorf("Update(tick) after the poll landed cmd = nil, want a re-poll")
 	}
 }
 

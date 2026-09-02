@@ -173,7 +173,9 @@ Two panes. Left: filterable host list. Right: detail for the selected host.
                    $ ssh -fN ubuntu
 ```
 
-The command line at the bottom always shows what the highlighted action will run.
+The command line at the bottom always shows what the highlighted action will run, except
+while a transient notice (an action's outcome, ssh's own message) holds the line — the
+next keypress clears it.
 
 | key | action |
 |---|---|

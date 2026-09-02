@@ -64,11 +64,15 @@ func cancelArgv(host, spec string) []string { return []string{"ssh", "-O", "canc
 func exitArgv(host string) []string         { return []string{"ssh", "-O", "exit", host} }
 
 // tunnelStatusCmd polls one host's tunnel status off the UI thread; nil
-// when the section is off.
+// when the section is off or a poll for the host is already in flight —
+// one `ssh -O check` per host at a time, so holding j across a fleet
+// cannot fan out a process per keystroke, and results cannot land out of
+// order.
 func (m Model) tunnelStatusCmd(host hostmodel.Host) tea.Cmd {
-	if m.tunnels == nil {
+	if m.tunnels == nil || m.tinflight[host.Alias] {
 		return nil
 	}
+	m.tinflight[host.Alias] = true
 	eng := m.tunnels
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelStatusTimeout)
@@ -246,9 +250,20 @@ func stateWriteOnly(err error) bool {
 
 // oneLine folds a joined error onto the notice line: errors.Join
 // separates with newlines, and a second line would push the frame off
-// the terminal and truncate the message that matters.
-func oneLine(err error) string {
-	return strings.ReplaceAll(err.Error(), "\n", "; ")
+// the terminal and truncate the message that matters. The engine echoes
+// the argv ahead of ssh's reason ("ssh -O cancel -L … host: reason"); the
+// user just read that argv on the preview line, so it is dropped here to
+// keep the reason inside 80 columns.
+func oneLine(err error, host string) string {
+	lines := strings.Split(err.Error(), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "ssh ") {
+			if j := strings.Index(line, " "+host+": "); j >= 0 {
+				lines[i] = line[j+len(host)+3:]
+			}
+		}
+	}
+	return strings.Join(lines, "; ")
 }
 
 // exitCmd is X: `ssh -O exit`, the master and every forward with it.

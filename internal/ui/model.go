@@ -192,9 +192,10 @@ type Model struct {
 	// Tunnels section (SPEC §5): tunnels is the engine seam, nil = off.
 	// tstatus is the last Status per alias; fwdIdx is the forward row tab
 	// has moved onto, -1 for none (then the preview is enter's ssh).
-	tunnels Tunneler
-	tstatus map[string]tunnelState
-	fwdIdx  int
+	tunnels   Tunneler
+	tstatus   map[string]tunnelState
+	tinflight map[string]bool // a Status poll is running for the alias
+	fwdIdx    int
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -315,6 +316,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		confPath:   cfg.ConfPath,
 		tunnels:    cfg.Tunnels,
 		tstatus:    make(map[string]tunnelState),
+		tinflight:  make(map[string]bool),
 		fwdIdx:     -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
@@ -378,6 +380,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
 	case tunnelStatusMsg:
+		delete(m.tinflight, msg.host)
 		m.tstatus[msg.host] = tunnelState{status: msg.status, err: msg.err}
 		return m, nil
 
@@ -387,9 +390,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = msg.done
 		case stateWriteOnly(msg.err):
 			// The ssh side succeeded; only the cache write failed.
-			m.notice = "warning: " + oneLine(msg.err)
+			m.notice = "warning: " + oneLine(msg.err, msg.host)
 		default:
-			m.notice = msg.label + ": " + oneLine(msg.err)
+			m.notice = msg.label + ": " + oneLine(msg.err, msg.host)
 		}
 		// Reality may have changed either way: re-derive it.
 		if host, ok := m.hostByAlias(msg.host); ok {
