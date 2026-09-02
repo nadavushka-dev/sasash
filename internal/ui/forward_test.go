@@ -65,6 +65,7 @@ func TestWithLocalPort_ExactStrings(t *testing.T) {
 		{name: "bare local port", spec: "8080:localhost:80", port: "8081", want: "8081:localhost:80"},
 		{name: "bind address kept", spec: "127.0.0.1:8080:localhost:80", port: "8081", want: "127.0.0.1:8081:localhost:80"},
 		{name: "remote port untouched", spec: "8080:localhost:8080", port: "8081", want: "8081:localhost:8080"},
+		{name: "no local port leaves the spec alone", spec: "nonsense", port: "8081", want: "nonsense"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -409,8 +410,11 @@ func TestModel_Update_ConflictYieldsToKeyboardOwner(t *testing.T) {
 			m, check := typeSpec(t, m, "8080:localhost:80")
 			m = tt.setup(t, m)
 			before := len(r.CallKeys())
-			next, _ := m.Update(check())
+			next, cmd := m.Update(check())
 			m = next.(ui.Model)
+			if cmd != nil {
+				t.Errorf("yield returned a cmd: nothing may run while another input owns the keyboard")
+			}
 			tt.check(t, m)
 			view := m.View()
 			if !strings.Contains(view, "8080 is in use on ubuntu") || !strings.Contains(view, "8081:localhost:80") {
@@ -418,6 +422,58 @@ func TestModel_Update_ConflictYieldsToKeyboardOwner(t *testing.T) {
 			}
 			if got := r.CallKeys()[before:]; len(got) != 0 {
 				t.Errorf("calls = %v, want none", got)
+			}
+		})
+	}
+}
+
+func TestModel_Update_ForwardHostEditedAway(t *testing.T) {
+	t.Parallel()
+	// An `e` reload can drop the bound host while the prompt is open or
+	// the check is out: both paths close with a notice and add nothing.
+	tests := []struct {
+		name string
+		run  func(t *testing.T, m ui.Model) ui.Model
+	}{
+		{
+			name: "before enter",
+			run: func(t *testing.T, m ui.Model) ui.Model {
+				m = press(t, m, "+")
+				m = editReload(t, m, tunnelHosts()[1:]) // ubuntu gone
+				m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8080:localhost:80")})
+				next, cmd := m.Update(keyMsg("enter"))
+				if cmd != nil {
+					t.Errorf("enter on a gone host returned a cmd, want none")
+				}
+				return next.(ui.Model)
+			},
+		},
+		{
+			name: "while the check is out",
+			run: func(t *testing.T, m ui.Model) ui.Model {
+				m, check := typeSpec(t, m, "8080:localhost:80")
+				m = editReload(t, m, tunnelHosts()[1:])
+				next, cmd := m.Update(check())
+				if cmd != nil {
+					t.Errorf("conflict for a gone host returned a cmd, want none")
+				}
+				return next.(ui.Model)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().
+				StubExit(0, "ssh", "-O", "check", "ubuntu").
+				StubExit(0, "ssh", "-O", "check", "bare")
+			m := polled(t, r, fakedial.New().Up("127.0.0.1:8080", time.Millisecond))
+			m = tt.run(t, m)
+			if ui.Prompting(m) {
+				t.Errorf("Prompting() = true, want the prompt closed")
+			}
+			if view := m.View(); !strings.Contains(view, "host ubuntu is gone") {
+				t.Errorf("View() missing the gone notice:\n%s", view)
 			}
 		})
 	}
