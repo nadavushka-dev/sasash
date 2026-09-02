@@ -137,6 +137,13 @@ var (
 // SettingsOpen reports whether the `o` panel owns the keyboard.
 func SettingsOpen(m Model) bool { return m.settings.pane != settingsOff }
 
+// WithSaveForwardSet swaps the tunnel-declaration hook so tests can
+// observe it.
+func WithSaveForwardSet(m Model, f func(alias, name string, specs []string) error) Model {
+	m.saveForwardSet = f
+	return m
+}
+
 // WithHome sets the directory the settings panel bootstraps.
 func WithHome(m Model, home string) Model {
 	m.home = home

@@ -1,6 +1,7 @@
 package ui_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -71,7 +72,7 @@ func TestModel_Update_SettingsCursor(t *testing.T) {
 		t.Errorf("View() after j j should highlight theme:\n%s", view)
 	}
 	m = press(t, m, "G", "j", "j") // clamps at the last entry
-	if view := m.View(); !strings.Contains(view, "› add new connection") {
+	if view := m.View(); !strings.Contains(view, "› add new tunnel") {
 		t.Errorf("View() after G should highlight the last entry:\n%s", view)
 	}
 	m = press(t, m, "g", "k")
@@ -319,7 +320,7 @@ func TestModel_Update_SettingsAddConnection(t *testing.T) {
 		saved = append(saved, e)
 		return nil
 	})
-	m = press(t, m, "G", "enter") // add new connection
+	m = press(t, m, "G", "k", "enter") // add new connection
 	if ui.SettingsOpen(m) || !ui.Prompting(m) || !strings.Contains(m.View(), "new connection:") {
 		t.Fatalf("enter on add new connection: open %v, prompting %v, view:\n%s", ui.SettingsOpen(m), ui.Prompting(m), m.View())
 	}
@@ -331,7 +332,7 @@ func TestModel_Update_SettingsAddConnection(t *testing.T) {
 		t.Fatalf("enter on a bad target moved on: cmd %v, prompting %v, save %v", cmd != nil, ui.Prompting(m), ui.PromptingSave(m))
 	}
 	// Save FIRST: the alias prompt follows, no ssh yet.
-	m = press(t, m, "esc", "o", "G", "enter")
+	m = press(t, m, "esc", "o", "G", "k", "enter")
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("root@192.0.2.99:2222")})
 	next, cmd = m.Update(keyMsg("enter"))
 	m = next.(ui.Model)
@@ -383,7 +384,7 @@ func TestModel_Update_SettingsAddConnectionDeclined(t *testing.T) {
 			t.Parallel()
 			saved := 0
 			m := ui.WithSaveHost(settingsModel(t, fakerun.New()), func(ui.AdhocEntry) error { saved++; return nil })
-			m = press(t, m, "G", "enter")
+			m = press(t, m, "G", "k", "enter")
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("192.0.2.99")})
 			m = press(t, m, append([]string{"enter"}, tt.decline...)...)
 			if saved != 0 || ui.Prompting(m) || !strings.Contains(m.View(), "not saved") {
@@ -404,7 +405,7 @@ func TestModel_Update_SettingsAddConnectionDeclined(t *testing.T) {
 
 func TestModel_Update_SettingsAddConnectionNeedsSave(t *testing.T) {
 	t.Parallel()
-	m := press(t, settingsModel(t, fakerun.New()), "G", "enter") // no save hook
+	m := press(t, settingsModel(t, fakerun.New()), "G", "k", "enter") // no save hook
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("192.0.2.99")})
 	m = press(t, m, "enter")
 	if ui.Prompting(m) || !strings.Contains(m.View(), "not available") {
@@ -451,6 +452,103 @@ func TestModel_Update_SettingsHelpToggle(t *testing.T) {
 	m = press(t, m, "?")
 	if view := m.View(); !ui.SettingsOpen(m) || !strings.Contains(view, "back / close") {
 		t.Errorf("View() after ? in the panel: open %v:\n%s", ui.SettingsOpen(m), view)
+	}
+}
+
+func TestModel_Update_SettingsAddTunnel(t *testing.T) {
+	t.Parallel()
+	type call struct {
+		alias, name string
+		specs       []string
+	}
+	var calls []call
+	m := ui.WithSaveForwardSet(settingsModel(t, fakerun.New()), func(alias, name string, specs []string) error {
+		calls = append(calls, call{alias, name, specs})
+		return nil
+	})
+	loaded := false
+	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) {
+		loaded = true
+		return nil, nil, nil
+	})
+	m = press(t, m, "G", "enter") // add new tunnel
+	view := m.View()
+	if ui.SettingsOpen(m) || !ui.Prompting(m) || !strings.Contains(view, "tunnel host: web") {
+		t.Fatalf("enter on add new tunnel: open %v, prompting %v, view:\n%s", ui.SettingsOpen(m), ui.Prompting(m), view)
+	}
+	// An unknown host stays in the prompt.
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = press(t, m, "enter")
+	if !strings.Contains(m.View(), "no host") || !strings.Contains(m.View(), "tunnel host:") {
+		t.Fatalf("enter on an unknown host should stay in the prompt:\n%s", m.View())
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+	m = press(t, m, "enter")
+	if !strings.Contains(m.View(), "set name:") {
+		t.Fatalf("View() after the host should ask the set name:\n%s", m.View())
+	}
+	// A bad name stays.
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("my db")})
+	m = press(t, m, "enter")
+	if !strings.Contains(m.View(), "single word") {
+		t.Fatalf("enter on a bad name should stay in the prompt:\n%s", m.View())
+	}
+	m = press(t, m, "esc", "o", "G", "enter", "enter")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("db")})
+	m = press(t, m, "enter")
+	if !strings.Contains(m.View(), "specs:") {
+		t.Fatalf("View() after the name should ask the specs:\n%s", m.View())
+	}
+	// No specs stays; specs declare — through the hook, nothing started.
+	m = press(t, m, "enter")
+	if !strings.Contains(m.View(), "at least one spec") {
+		t.Fatalf("enter with no specs should stay in the prompt:\n%s", m.View())
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5432:localhost:5432  5433:localhost:5433")})
+	next, save := m.Update(keyMsg("enter"))
+	m = next.(ui.Model)
+	if save == nil || ui.Prompting(m) {
+		t.Fatalf("enter on the specs: cmd %v, prompting %v; want the save and the prompt closed", save != nil, ui.Prompting(m))
+	}
+	if len(calls) != 0 {
+		t.Fatalf("hook called before the cmd ran")
+	}
+	next, reload := m.Update(save())
+	m = next.(ui.Model)
+	want := []call{{"web", "db", []string{"5432:localhost:5432", "5433:localhost:5433"}}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("hook calls = %+v, want %+v", calls, want)
+	}
+	if view := m.View(); !strings.Contains(view, "declared db on web") || !strings.Contains(view, "space starts it") {
+		t.Errorf("View() missing the declared notice:\n%s", view)
+	}
+	if reload == nil {
+		t.Fatalf("Update(tunnelSaved) cmd = nil, want a reload")
+	}
+	feed(t, m, reload)
+	if !loaded {
+		t.Errorf("LoadHosts not called after declaring a set")
+	}
+}
+
+func TestModel_Update_SettingsAddTunnelOutcomes(t *testing.T) {
+	t.Parallel()
+	// A write failure is the notice; no hook means the entry says so.
+	m := ui.WithSaveForwardSet(settingsModel(t, fakerun.New()), func(string, string, []string) error {
+		return errors.New(`forward set "db" already declared for "web"`)
+	})
+	m = press(t, m, "G", "enter", "enter")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("db")})
+	m = press(t, m, "enter")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5432:localhost:5432")})
+	next, save := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), save())
+	if view := m.View(); !strings.Contains(view, "not declared: ") || !strings.Contains(view, "already declared") {
+		t.Errorf("View() missing the write failure:\n%s", view)
+	}
+	plain := press(t, settingsModel(t, fakerun.New()), "G", "enter")
+	if !ui.SettingsOpen(plain) || ui.Prompting(plain) || !strings.Contains(plain.View(), "not available") {
+		t.Errorf("enter on add new tunnel without a hook: open %v, prompting %v, view:\n%s", ui.SettingsOpen(plain), ui.Prompting(plain), plain.View())
 	}
 }
 

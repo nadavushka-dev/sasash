@@ -224,6 +224,10 @@ type Model struct {
 	// connect instead of the ad-hoc flow's connect-first order.
 	saveThenConnect bool
 	offerAlias      string
+	// add new tunnel: the hook that writes the meta line, and the flow's
+	// collected answers.
+	saveForwardSet func(alias, name string, specs []string) error
+	tunnel         newTunnel
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -282,6 +286,10 @@ type Config struct {
 	// Home is the directory setup.Check/Ensure inspect and bootstrap from
 	// the settings panel; "" disables that entry.
 	Home string
+	// SaveForwardSet declares a named forward set for a host (the settings
+	// "add new tunnel" entry) — desire only, nothing is started; nil
+	// disables the entry. The cmd layer wires fwdset.Add on sasash.conf.
+	SaveForwardSet func(alias, name string, specs []string) error
 }
 
 // promptMode says which prompt, if any, owns the keyboard.
@@ -294,6 +302,9 @@ const (
 	promptForward // `+`: an ad-hoc forward spec for the selected host
 	promptNewConn // settings: a target to save first, then offer to connect
 	promptOffer   // settings: "connect now?" after the save
+	promptTunnelHost
+	promptTunnelName
+	promptTunnelSpecs
 )
 
 // New builds the root model. The prober's zero value probes for real and
@@ -358,8 +369,10 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		tinflight:  make(map[string]bool),
 		actions:    cfg.Actions,
 		home:       cfg.Home,
-		notice:     cfg.ActionsWarn,
-		fwdIdx:     -1,
+
+		saveForwardSet: cfg.SaveForwardSet,
+		notice:         cfg.ActionsWarn,
+		fwdIdx:         -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
 	return m.applyTheme(idx)
@@ -438,6 +451,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case tunnelSavedMsg:
+		if msg.err != nil {
+			m.notice = "not declared: " + msg.err.Error()
+			return m, nil
+		}
+		m.notice = "declared " + msg.name + " on " + msg.host + " — space starts it"
+		if m.loadHosts == nil {
+			return m, nil
+		}
+		return m, m.reloadCmd(false)
 
 	case setupDoneMsg:
 		if msg.err != nil {
@@ -618,6 +642,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.ExecProcess(sshExec(m.offerAlias), func(err error) tea.Msg {
 						return sshExitMsg{err: err}
 					})
+				case promptTunnelHost, promptTunnelName, promptTunnelSpecs:
+					return m.submitTunnel()
 				}
 				return m.promptSubmit()
 			}
@@ -916,6 +942,12 @@ func (m Model) View() string {
 			label = "new connection:"
 		case promptOffer:
 			label = "connect to " + m.offerAlias + " now? enter · esc skips"
+		case promptTunnelHost:
+			label = "tunnel host:"
+		case promptTunnelName:
+			label = "set name:"
+		case promptTunnelSpecs:
+			label = "specs:"
 		}
 		// textinput pads its value to Width; trim the raw padding so a
 		// notice (a rejection message, typically) still fits the line.

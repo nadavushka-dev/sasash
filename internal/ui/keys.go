@@ -115,6 +115,10 @@ func (p promptKeys) ShortHelp() []key.Binding {
 		enter = "next"
 	case promptOffer:
 		enter, esc = "connect", "skip"
+	case promptTunnelHost, promptTunnelName:
+		enter = "next"
+	case promptTunnelSpecs:
+		enter = "declare"
 	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enter)),

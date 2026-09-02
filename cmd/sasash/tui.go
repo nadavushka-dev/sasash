@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/action"
+	"github.com/nadavushka-dev/sasash/internal/fwdset"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
@@ -124,6 +125,9 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		// The same state dir as `up`/`down`, or the cache silently splits.
 		Tunnels: tunnel.Engine{StateDir: stateDir(home)},
 		Home:    home,
+		SaveForwardSet: func(alias, name string, specs []string) error {
+			return fwdset.Add(confPath, alias, name, specs)
+		},
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -26,6 +27,7 @@ const (
 	entryEdit
 	entryTheme
 	entryConnection
+	entryTunnel
 	entryCount
 )
 
@@ -34,6 +36,7 @@ var entryLabels = [entryCount]string{
 	entryEdit:       "edit config file",
 	entryTheme:      "theme",
 	entryConnection: "add new connection",
+	entryTunnel:     "add new tunnel",
 }
 
 // settingsState is the `o` panel: a discoverable surface over machinery
@@ -175,6 +178,13 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 			m.prompt.Reset()
 			m.prompt.Placeholder = "[user@]host[:port] [-L local:host:port]"
 			return m, m.prompt.Focus()
+		case entryTunnel:
+			if m.saveForwardSet == nil {
+				m.notice = "declaring tunnels is not available"
+				return m, nil
+			}
+			s.pane = settingsOff
+			return m.openTunnelPrompt()
 		}
 	case settingsSetup:
 		if s.checkErr != nil {
@@ -293,4 +303,70 @@ func (settingsKeys) ShortHelp() []key.Binding {
 
 func (k settingsKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{k.ShortHelp()}
+}
+
+// newTunnel is the settings "add new tunnel" flow: three prompts —
+// host (prefilled with the selection), set name, specs — then ONE write
+// through the SaveForwardSet hook. It declares desire only; the set is
+// started with space afterwards.
+type newTunnel struct {
+	host, name string
+}
+
+// tunnelSavedMsg reports the write outcome.
+type tunnelSavedMsg struct {
+	host, name string
+	err        error
+}
+
+// openTunnelPrompt starts the flow on the host under the cursor.
+func (m Model) openTunnelPrompt() (tea.Model, tea.Cmd) {
+	m.mode = promptTunnelHost
+	m.prompt.Reset()
+	m.prompt.Placeholder = "host alias"
+	if host, ok := m.Selected(); ok {
+		m.prompt.SetValue(host.Alias)
+		m.prompt.CursorEnd()
+	}
+	return m, m.prompt.Focus()
+}
+
+// submitTunnel is enter in any of the three prompts.
+func (m Model) submitTunnel() (tea.Model, tea.Cmd) {
+	v := strings.TrimSpace(m.prompt.Value())
+	switch m.mode {
+	case promptTunnelHost:
+		if _, ok := m.hostByAlias(v); !ok {
+			m.notice = "no host " + strconv.Quote(v) + " in the list"
+			return m, nil
+		}
+		m.tunnel.host = v
+		m.mode = promptTunnelName
+		m.prompt.Reset()
+		m.prompt.Placeholder = "set name, e.g. web"
+		return m, m.prompt.Focus()
+	case promptTunnelName:
+		if v == "" || strings.ContainsAny(v, " \t#") {
+			m.notice = "set name: want a single word"
+			return m, nil
+		}
+		m.tunnel.name = v
+		m.mode = promptTunnelSpecs
+		m.prompt.Reset()
+		m.prompt.Placeholder = "spec [spec…]  e.g. 3000:localhost:3000"
+		return m, m.prompt.Focus()
+	case promptTunnelSpecs:
+		specs := strings.Fields(v)
+		if len(specs) == 0 {
+			m.notice = "at least one spec"
+			return m, nil
+		}
+		m.mode = promptNone
+		m.prompt.Blur()
+		save, host, name := m.saveForwardSet, m.tunnel.host, m.tunnel.name
+		return m, func() tea.Msg {
+			return tunnelSavedMsg{host: host, name: name, err: save(host, name, specs)}
+		}
+	}
+	return m, nil
 }
