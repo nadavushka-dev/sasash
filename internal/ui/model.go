@@ -97,6 +97,12 @@ func editorArgv(editor []string, confPath string) []string {
 	return append(append([]string{}, editor...), confPath)
 }
 
+// editorExec is the ONE place the `e` handoff process is built, so a test
+// can pin the exact args that reach the *exec.Cmd.
+func (m Model) editorExec() *exec.Cmd {
+	return execCommand(editorArgv(m.editor, m.confPath))
+}
+
 // editorExitMsg arrives when the terminal returns from the editor.
 type editorExitMsg struct{ err error }
 
@@ -181,7 +187,7 @@ type Model struct {
 	prompt    textinput.Model
 	pending   adhocTarget
 	saveHost  func(AdhocEntry) error // nil -> no save offer after connect
-	loadHosts func() ([]hostmodel.Host, error)
+	loadHosts func() ([]hostmodel.Host, []error, error)
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -210,9 +216,12 @@ type Config struct {
 	// SaveHost persists an ad-hoc connection the user chose to keep; nil
 	// disables the save offer after an ad-hoc connect.
 	SaveHost func(AdhocEntry) error
-	// LoadHosts re-reads the config after a save so the new entry appears
-	// in the list; nil skips the reload.
-	LoadHosts func() ([]hostmodel.Host, error)
+	// LoadHosts re-reads the config after a save or an edit so the change
+	// appears in the list; nil skips the reload. Its warnings (malformed
+	// @sasash lines, hostmodel.Load's second result) are shown after an
+	// edit — under the alt screen they are the only feedback a hand-edit
+	// gets.
+	LoadHosts func() ([]hostmodel.Host, []error, error)
 	// Editor is the argv prefix `e` launches on ConfPath (resolved from
 	// $EDITOR by the cmd layer); empty disables the key.
 	Editor []string
@@ -256,6 +265,10 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 	// a deliberate trade: the selected host lines up with its path rows,
 	// at the cost of one row of list capacity.
 	l.SetFilteringEnabled(true)
+	// With a filter applied and nothing matching, the detail pane already
+	// says so and names the fix key; the list's own "No items." would
+	// double up beside it.
+	l.Styles.NoItems = lipgloss.NewStyle().Transform(func(string) string { return "" })
 	// Only navigation and filtering reach the list. The remaining default
 	// bindings — paging on bare b/f/u/d/h/l, esc/q quit, the full-help
 	// toggle — stay zero-valued, which never matches; quit and help are
@@ -388,11 +401,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loadHosts == nil {
 			return m, probeCmd(m.prober, m.hosts)
 		}
-		load := m.loadHosts
-		return m, func() tea.Msg {
-			hosts, err := load()
-			return hostsReloadedMsg{hosts: hosts, err: err}
-		}
+		return m, m.reloadCmd(true)
 
 	case adhocExitMsg:
 		var exitErr *exec.ExitError
@@ -419,23 +428,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loadHosts == nil {
 			return m, nil
 		}
-		load := m.loadHosts
-		return m, func() tea.Msg {
-			hosts, err := load()
-			return hostsReloadedMsg{hosts: hosts, err: err}
-		}
+		return m, m.reloadCmd(false)
 
 	case hostsReloadedMsg:
 		if msg.err != nil {
 			m.notice = "reload failed: " + msg.err.Error()
 			return m, nil
 		}
+		// A load warning after an edit outranks the editor hint: it is the
+		// only feedback a malformed hand-edit gets under the alt screen.
+		// After a save the "saved" notice stays — the saved block cannot
+		// be what is malformed.
+		if msg.edited && len(msg.warnings) > 0 {
+			m.notice = warningNotice(msg.warnings)
+		}
 		m.hosts = msg.hosts
 		items := make([]list.Item, len(msg.hosts))
 		for i, h := range msg.hosts {
 			items[i] = hostItem{host: h}
 		}
-		return m, tea.Batch(m.list.SetItems(items), probeCmd(m.prober, m.hosts))
+		cmd := m.list.SetItems(items)
+		// SetItems never moves the cursor: a list that shrank under it
+		// (the editor deleted the selected host) would otherwise show no
+		// selection at all. Under an applied filter the visible items are
+		// empty until the FilterMatchesMsg lands — that arm clamps too.
+		clampCursor(&m.list)
+		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts))
+
+	case list.FilterMatchesMsg:
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		clampCursor(&m.list)
+		return m, cmd
 
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.ForceQuit) {
@@ -504,7 +528,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.editor) == 0 || m.confPath == "" {
 					return m, nil
 				}
-				return m, tea.ExecProcess(execCommand(editorArgv(m.editor, m.confPath)), func(err error) tea.Msg {
+				return m, tea.ExecProcess(m.editorExec(), func(err error) tea.Msg {
 					return editorExitMsg{err: err}
 				})
 			case key.Matches(msg, m.keys.Adhoc):

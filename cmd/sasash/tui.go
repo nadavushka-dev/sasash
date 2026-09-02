@@ -60,29 +60,7 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
-	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
-	editor, editorHint := resolveEditor(os.Getenv("EDITOR"))
-	// An edit ssh cannot see (setup has not wired sasash.conf in) must
-	// come back with an explanation, not a silently unchanged list.
-	editorWarn := ""
-	if st, err := setup.Check(home); err == nil && !(st.IncludePresent && st.ConfPresent) {
-		editorWarn = "sasash.conf is not wired into ssh yet — run `sasash setup`"
-	}
-	m := ui.New(hosts, probe.Prober{}, run.OS{}, ui.Config{
-		Theme:      theme,
-		SaveTheme:  saveThemeTo(statePath),
-		SaveHost:   saveHostTo(confPath),
-		Editor:     editor,
-		EditorHint: editorHint,
-		EditorWarn: editorWarn,
-		ConfPath:   confPath,
-		LoadHosts: func() ([]hostmodel.Host, error) {
-			// Reload warnings are dropped: they already printed at startup
-			// and stderr is invisible under the alt screen.
-			hosts, _, err := hostmodel.Load(root, home)
-			return hosts, err
-		},
-	})
+	m := ui.New(hosts, probe.Prober{}, run.OS{}, tuiConfig(home, statePath, theme, os.Getenv("EDITOR")))
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(stderr, "sasash:", err)
@@ -114,6 +92,33 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 		}
 	}
 	return "", warn, false
+}
+
+// tuiConfig wires the model's hooks to the user's home: every path and
+// every `e` setting is decided here, in one testable place. sasash.conf
+// is the ONE file sasash writes (SPEC §2) — never ~/.ssh/config.
+func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
+	root := filepath.Join(home, ".ssh", "config")
+	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
+	editor, editorHint := resolveEditor(editorEnv)
+	// An edit ssh cannot see (setup has not wired sasash.conf in) must
+	// come back with an explanation, not a silently unchanged list.
+	editorWarn := ""
+	if st, err := setup.Check(home); err == nil && !(st.IncludePresent && st.ConfPresent) {
+		editorWarn = "sasash.conf is not wired into ssh yet — run `sasash setup`"
+	}
+	return ui.Config{
+		Theme:      theme,
+		SaveTheme:  saveThemeTo(statePath),
+		SaveHost:   saveHostTo(confPath),
+		Editor:     editor,
+		EditorHint: editorHint,
+		EditorWarn: editorWarn,
+		ConfPath:   confPath,
+		LoadHosts: func() ([]hostmodel.Host, []error, error) {
+			return hostmodel.Load(root, home)
+		},
+	}
 }
 
 // resolveEditor turns $EDITOR into the argv prefix `e` launches.

@@ -118,6 +118,84 @@ func TestResolveEditor(t *testing.T) {
 	}
 }
 
+// wiredHome builds a home where setup has run: ~/.ssh/config includes
+// sasash.conf, and sasash.conf holds conf.
+func wiredHome(t *testing.T, conf string) string {
+	t.Helper()
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(filepath.Join(sshDir, "config.d"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "config"), []byte("Include ~/.ssh/config.d/sasash.conf\n"), 0o600); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sshDir, "config.d", "sasash.conf"), []byte(conf), 0o600); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	return home
+}
+
+func TestTuiConfig(t *testing.T) {
+	t.Parallel()
+	wired := wiredHome(t, "# managed\n")
+	bare := t.TempDir()
+	tests := []struct {
+		name       string
+		home       string
+		editorEnv  string
+		wantEditor []string
+		wantHint   bool
+		wantWarn   bool
+	}{
+		{name: "wired home with editor", home: wired, editorEnv: "code -w", wantEditor: []string{"code", "-w"}},
+		{name: "bare home falls back and warns", home: bare, editorEnv: "", wantEditor: []string{"vi"}, wantHint: true, wantWarn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := tuiConfig(tt.home, filepath.Join(tt.home, "theme"), "nord", tt.editorEnv)
+			// SPEC §2: `e` edits sasash.conf, the one file sasash writes —
+			// never ~/.ssh/config.
+			if want := filepath.Join(tt.home, ".ssh", "config.d", "sasash.conf"); cfg.ConfPath != want {
+				t.Errorf("tuiConfig().ConfPath = %q, want %q", cfg.ConfPath, want)
+			}
+			if cfg.Theme != "nord" {
+				t.Errorf("tuiConfig().Theme = %q, want %q", cfg.Theme, "nord")
+			}
+			if !reflect.DeepEqual(cfg.Editor, tt.wantEditor) {
+				t.Errorf("tuiConfig().Editor = %v, want %v", cfg.Editor, tt.wantEditor)
+			}
+			if (cfg.EditorHint != "") != tt.wantHint {
+				t.Errorf("tuiConfig().EditorHint = %q, want hint %v", cfg.EditorHint, tt.wantHint)
+			}
+			if (cfg.EditorWarn != "") != tt.wantWarn || (tt.wantWarn && !strings.Contains(cfg.EditorWarn, "sasash setup")) {
+				t.Errorf("tuiConfig().EditorWarn = %q, want setup warning %v", cfg.EditorWarn, tt.wantWarn)
+			}
+			if cfg.SaveTheme == nil || cfg.SaveHost == nil || cfg.LoadHosts == nil {
+				t.Errorf("tuiConfig() hooks = %v %v %v, want all wired", cfg.SaveTheme != nil, cfg.SaveHost != nil, cfg.LoadHosts != nil)
+			}
+		})
+	}
+}
+
+func TestTuiConfig_LoadHostsReportsWarnings(t *testing.T) {
+	t.Parallel()
+	// A malformed hand-edit must come back as a warning, not vanish: under
+	// the alt screen the TUI notice is the only place it can surface.
+	home := wiredHome(t, "# @sasash path lan\nHost edge\n  HostName 192.0.2.9\n")
+	hosts, warnings, err := tuiConfig(home, filepath.Join(home, "theme"), "", "vi").LoadHosts()
+	if err != nil {
+		t.Fatalf("LoadHosts() = %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].Alias != "edge" {
+		t.Errorf("LoadHosts() hosts = %+v, want the edge host", hosts)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "missing addr") {
+		t.Errorf("LoadHosts() warnings = %v, want one missing-addr warning", warnings)
+	}
+}
+
 func TestCmdTUI_UnknownThemeFlag(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr strings.Builder

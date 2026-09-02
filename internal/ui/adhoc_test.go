@@ -146,10 +146,10 @@ func TestModel_Update_AdhocSaveFlow(t *testing.T) {
 		saved = append(saved, e)
 		return nil
 	})
-	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, error) {
+	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) {
 		return []hostmodel.Host{
 			{Alias: "edge", Paths: []probe.Path{{Host: "192.0.2.99", Port: "2222"}}},
-		}, nil
+		}, nil, nil
 	})
 
 	m = connectPending(t, m, "root@192.0.2.99:2222 -L 8080:localhost:80")
@@ -187,11 +187,14 @@ func TestModel_Update_AdhocSaveReloadShowsEntry(t *testing.T) {
 	t.Parallel()
 	m := probedModel(t, fakerun.New())
 	m = ui.WithSaveHost(m, func(ui.AdhocEntry) error { return nil })
-	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, error) {
+	// The reload carries a pre-existing config warning: after a save it
+	// must NOT displace the "saved" confirmation (the saved block is not
+	// what is malformed) — only the editor path promotes warnings.
+	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) {
 		return []hostmodel.Host{
 			{Alias: "web", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}},
 			{Alias: "edge", Paths: []probe.Path{{Host: "192.0.2.99"}}},
-		}, nil
+		}, []error{errors.New(`host "web": @sasash path: missing addr (line 3)`)}, nil
 	})
 	m = connectPending(t, m, "192.0.2.99")
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
@@ -206,8 +209,12 @@ func TestModel_Update_AdhocSaveReloadShowsEntry(t *testing.T) {
 		t.Fatalf("Update(adhocSavedMsg) cmd = nil, want reload cmd")
 	}
 	m = update(t, m, reloadCmd())
-	if view := m.View(); !strings.Contains(view, "edge") {
+	view := m.View()
+	if !strings.Contains(view, "edge") {
 		t.Errorf("View() after reload missing the saved entry:\n%s", view)
+	}
+	if !strings.Contains(view, "saved edge") || strings.Contains(view, "config:") {
+		t.Errorf("View() after a save reload lost the saved notice to a config warning:\n%s", view)
 	}
 }
 

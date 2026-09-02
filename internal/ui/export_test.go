@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os/exec"
+
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
@@ -27,8 +29,10 @@ func ClipArgv(text string) []string    { return clipArgv(text) }
 // built argv actually reaches the *exec.Cmd.
 var SSHExec = sshExec
 
-// FilterState exposes the list's filter state for the filter-flow tests.
+// FilterState and FilterText expose the list's filter state and typed
+// term for the filter-flow tests.
 func FilterState(m Model) list.FilterState { return m.list.FilterState() }
+func FilterText(m Model) string            { return m.list.FilterValue() }
 
 // ThemeName exposes the active theme for the cycle/selection tests.
 func ThemeName(m Model) string { return Themes[m.themeIdx].Name }
@@ -74,6 +78,10 @@ func EditorExit(err error) tea.Msg { return editorExitMsg{err: err} }
 
 var EditorArgv = editorArgv
 
+// EditorExec exposes the one construction site of the `e` handoff process
+// so a test can pin the args that actually reach the *exec.Cmd.
+func EditorExec(m Model) *exec.Cmd { return m.editorExec() }
+
 // WithEditor configures the `e` key for tests.
 func WithEditor(m Model, editor []string, hint, confPath string) Model {
 	m.editor = editor
@@ -95,7 +103,7 @@ func WithSaveHost(m Model, f func(AdhocEntry) error) Model {
 	return m
 }
 
-func WithLoadHosts(m Model, f func() ([]hostmodel.Host, error)) Model {
+func WithLoadHosts(m Model, f func() ([]hostmodel.Host, []error, error)) Model {
 	m.loadHosts = f
 	return m
 }

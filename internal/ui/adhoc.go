@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 )
 
 // AdhocEntry is what the SaveHost hook persists after an ad-hoc connect:
@@ -132,12 +130,6 @@ type adhocExitMsg struct{ err error }
 // adhocSavedMsg reports the SaveHost outcome.
 type adhocSavedMsg struct {
 	alias string
-	err   error
-}
-
-// hostsReloadedMsg carries the re-read host list after a save.
-type hostsReloadedMsg struct {
-	hosts []hostmodel.Host
 	err   error
 }
 
