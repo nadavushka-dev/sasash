@@ -732,8 +732,11 @@ func TestModel_View_NoTunnelsWithoutEngine(t *testing.T) {
 	// ui.Config{} (every other fixture) must never shell out or render
 	// the section: the seam is nil, not a zero engine over run.OS{}.
 	m := sized(t, tunnelHosts())
-	if view := m.View(); strings.Contains(view, "master") {
-		t.Errorf("View() renders the tunnels section with no engine:\n%s", view)
+	// Scoped to the panes: the help line legitimately says "tunnels pane".
+	for _, line := range strings.Split(m.View(), "\n") {
+		if !strings.Contains(line, "•") && strings.Contains(line, "tunnels") {
+			t.Errorf("View() renders the tunnels section with no engine: %q", line)
+		}
 	}
 	if m = press(t, m, "l"); ui.TunnelsFocused(m) {
 		t.Errorf("l focused a tunnels pane that does not exist")

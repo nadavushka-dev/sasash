@@ -23,6 +23,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 // refreshEvery is how often paths are re-probed. One refresh dials every
@@ -44,8 +45,10 @@ func (i hostItem) FilterValue() string {
 }
 
 // hostDelegate renders one single-line row: "› alias" selected, "  alias"
-// otherwise. The prefix + bold keep the selection visible under NO_COLOR;
-// dim renders the selection dimmed while the tunnels pane holds focus.
+// otherwise — the prefix is what keeps the selection visible under
+// NO_COLOR (bold does not survive it). While the tunnels pane holds focus
+// (dim) the row keeps its fill but loses the prefix: the one "›" on
+// screen then marks the focused pane's selection, in colour or not.
 type hostDelegate struct {
 	styles Styles
 	dim    bool
@@ -61,11 +64,11 @@ func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return
 	}
 	if index == m.Index() {
-		style := d.styles.ItemSelected
 		if d.dim {
-			style = d.styles.ItemSelectedDim
+			fmt.Fprint(w, d.styles.ItemSelectedDim.MaxWidth(m.Width()).Render("  "+it.host.Alias))
+			return
 		}
-		fmt.Fprint(w, style.MaxWidth(m.Width()).Render("› "+it.host.Alias))
+		fmt.Fprint(w, d.styles.ItemSelected.MaxWidth(m.Width()).Render("› "+it.host.Alias))
 		return
 	}
 	fmt.Fprint(w, d.styles.Item.MaxWidth(m.Width()).Render(it.host.Alias))
@@ -424,6 +427,27 @@ func (m Model) setFocus(f paneFocus) Model {
 	return m
 }
 
+// dropEmptyFocus hands the list back when the tunnels pane holds focus
+// over no rows (a reload or a status shrink took them): focus with
+// nothing to highlight would show no focus at all.
+func (m Model) dropEmptyFocus() Model {
+	if m.focus != focusTunnels {
+		return m
+	}
+	host, ok := m.Selected()
+	if rows, _ := m.forwardRows(host); !ok || len(rows) == 0 {
+		return m.setFocus(focusList)
+	}
+	m.fwdIdx = min(m.fwdIdx, len(m.mustRows(host))-1)
+	return m
+}
+
+// mustRows is forwardRows without the pending flag.
+func (m Model) mustRows(host hostmodel.Host) []tunnel.Forward {
+	rows, _ := m.forwardRows(host)
+	return rows
+}
+
 // tunnelsFocusKey routes navigation while the tunnels pane holds focus:
 // j/k (tab/shift+tab) move the highlight, clamped; g/G jump; h/esc go
 // back to the list. Everything else is not handled here — action keys
@@ -433,8 +457,9 @@ func (m Model) tunnelsFocusKey(msg tea.KeyMsg) (Model, bool) {
 	rows, _ := m.forwardRows(host)
 	if !ok || len(rows) == 0 {
 		// The rows went away under the focus (a reload): nothing to
-		// move over, so the list has it again.
-		return m.setFocus(focusList), false
+		// move over, so the list has it again — and the key that found
+		// it out is spent on that, never on a second meaning.
+		return m.setFocus(focusList), true
 	}
 	move := func(d int) Model {
 		m.fwdIdx = min(max(m.fwdIdx+d, 0), len(rows)-1)
@@ -505,7 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tunnelStatusMsg:
 		delete(m.tinflight, msg.host)
 		m.tstatus[msg.host] = tunnelState{status: msg.status, err: msg.err}
-		return m, nil
+		return m.dropEmptyFocus(), nil
 
 	case forwardConflictMsg:
 		return m.forwardConflict(msg)
@@ -667,6 +692,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// selection at all. Under an applied filter the visible items are
 		// empty until the FilterMatchesMsg lands — that arm clamps too.
 		clampCursor(&m.list)
+		m = m.dropEmptyFocus()
 		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
 	case list.FilterMatchesMsg:
@@ -777,8 +803,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, clipCmd(m.runner, strings.Join(argv, " "))
 			case key.Matches(msg, m.keys.FocusRight):
 				host, ok := m.Selected()
-				if !ok || m.tunnels == nil {
-					return m, nil
+				if !ok || m.tunnels == nil || m.focus == focusTunnels {
+					return m, nil // already there: l is idempotent
 				}
 				if rows, _ := m.forwardRows(host); len(rows) == 0 {
 					m.notice = "no tunnels on " + host.Alias + " — + adds one"
@@ -874,12 +900,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
-	// A new host under the cursor: the forward highlight belonged to the
-	// old one, and whatever status the new one had is stale — the tick
+	// A new host under the cursor (the list acted — a filter accept, say):
+	// the focus is the list's, the forward highlight belonged to the old
+	// host, and whatever status the new one had is stale — the tick
 	// refreshes only the selected host — so its rows go back to pending
 	// while a fresh poll runs. Never show a stale state as live.
 	if after, ok := m.Selected(); ok && after.Alias != before.Alias {
-		m.fwdIdx = -1
+		m = m.setFocus(focusList)
 		delete(m.tstatus, after.Alias)
 		cmd = tea.Batch(cmd, m.tunnelStatusCmd(after))
 	}

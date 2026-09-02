@@ -142,8 +142,20 @@ func TestModel_View_HerdrPreviewAfterRowsShrink(t *testing.T) {
 	}
 	_, tick := m.Update(ui.RefreshTick())
 	m = feed(t, m, tick)
-	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H herdr --remote ubuntu") {
-		t.Errorf("View() after the rows shrank under the highlight should show the host row's two handoffs:\n%s", view)
+	// One row left: the highlight clamps onto it, H stays hidden.
+	if view := m.View(); !lineHas(view, "› ", "5000:localhost:5000") || strings.Contains(view, "herdr --remote") {
+		t.Errorf("View() after the rows shrank should clamp the highlight onto the last row:\n%s", view)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(`{"forwards":[]}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, tick = m.Update(ui.RefreshTick())
+	m = feed(t, m, tick)
+	// The recorded rows are gone; the declared ones remain, so the
+	// highlight clamps onto the last of those and H stays hidden. (Rows
+	// vanishing entirely is TestModel_Update_FocusDropsWhenRowsVanish.)
+	if view := m.View(); !ui.TunnelsFocused(m) || !lineHas(view, "› ", specAPI) || strings.Contains(view, "herdr --remote") {
+		t.Errorf("View() after the recorded rows vanished should clamp onto the last declared row:\n%s", view)
 	}
 }
 

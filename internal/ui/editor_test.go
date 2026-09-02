@@ -320,16 +320,21 @@ func TestModel_Update_EditorReloadShowsWarnings(t *testing.T) {
 func TestModel_View_HelpOmitsEditAndTheme(t *testing.T) {
 	t.Parallel()
 	// Deliberate inversion of the 4.2 presence pin (SASASH.4.5): e and t
-	// keep working but are NOT listed in either help — settings (o) is
-	// their discoverable home. Absence is checked at the widths where
-	// they used to fit, so a truncation cannot pass the test by accident.
+	// keep working and stay in the short help line, but are NOT listed
+	// in the ? panel — settings (o) is their discoverable home. Absence
+	// is checked at a width where they used to fit, so a truncation
+	// cannot pass the test by accident.
 	tests := []struct {
-		name  string
-		width int
-		full  bool
+		name    string
+		width   int
+		full    bool
+		entries []string
+		want    bool // listed?
 	}{
-		{name: "short help at 200", width: 200},
-		{name: "full help at 100", width: 100, full: true},
+		// t sits past the short line's reach at any width; e is pinned
+		// at the width the 4.2 review chose.
+		{name: "short help at 120 keeps e", width: 120, entries: []string{"edit config"}, want: true},
+		{name: "full help at 100 omits both", width: 100, full: true, entries: []string{"edit config", "theme"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -339,9 +344,9 @@ func TestModel_View_HelpOmitsEditAndTheme(t *testing.T) {
 				m = press(t, m, "?")
 			}
 			view := m.View()
-			for _, gone := range []string{"edit config", "theme"} {
-				if strings.Contains(view, gone) {
-					t.Errorf("View() at width %d (full help %v) still lists %q:\n%s", tt.width, tt.full, gone, view)
+			for _, entry := range tt.entries {
+				if got := strings.Contains(view, entry); got != tt.want {
+					t.Errorf("View() at width %d (full help %v) lists %q = %v, want %v:\n%s", tt.width, tt.full, entry, got, tt.want, view)
 				}
 			}
 			// The keys themselves still work.

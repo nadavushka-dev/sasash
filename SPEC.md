@@ -184,7 +184,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `H` | `herdr --remote <host>` |
 | `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
 | `p` | cycle path (rewrites `HostName`) |
-| `l` / `tab` | focus the tunnels pane: `j`/`k` (and `g`/`G`, `tab`/`shift+tab`) then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list. The focused pane's selection is lit, the other's dim |
+| `l` / `tab` | focus the tunnels pane (a host without tunnels says so instead): `j`/`k`, `ctrl+d`/`ctrl+u`, `g`/`G`, `tab`/`shift+tab` then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list, as does any host change. The focused pane's selection is lit and carries the `›` mark, the other's is dim and unmarked |
 | `space` | toggle highlighted forward set |
 | `+` | add ad-hoc forward (`-O forward`) |
 | `x` | cancel highlighted forward (`-O cancel`) |
@@ -197,7 +197,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
 | `/` `?` `q` | filter, help, quit |
 
-`e` and `t` keep working but are not listed in `?` — settings (`o`) is their discoverable home.
+`e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.
 
 The tunnels section renders the engine's three states verbatim, with one presentation
 cap: when two forwards claim the same local port, only the first claimant (declared sets

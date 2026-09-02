@@ -40,6 +40,83 @@ func TestModel_Update_FocusEscOrder(t *testing.T) {
 	}
 }
 
+func TestModel_Update_FocusFollowsHostChange(t *testing.T) {
+	t.Parallel()
+	// A host change made by the list (a filter accept) hands focus back
+	// and drops the highlight: x afterwards must not act on a row of the
+	// new host the user never highlighted.
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(0, "ssh", "-O", "check", "spare")
+	m := polled(t, r, fakedial.New())
+	m = press(t, m, "G") // spare
+	m = feed(t, m, m.Init())
+	m = press(t, m, "l") // spare's db row
+	m = press(t, m, "/", "u", "b", "u", "enter")
+	if host, _ := m.Selected(); host.Alias != "ubuntu" || ui.TunnelsFocused(m) {
+		t.Fatalf("after the filter accept: host %q, focused %v; want ubuntu, list focus", host.Alias, ui.TunnelsFocused(m))
+	}
+	before := len(r.CallKeys())
+	next, cmd := m.Update(keyMsg("x"))
+	m = next.(ui.Model)
+	if cmd != nil || len(r.CallKeys()) != before || !strings.Contains(m.View(), "no forward highlighted") {
+		t.Errorf("x after a host change acted: cmd %v, calls %v", cmd != nil, r.CallKeys()[before:])
+	}
+	// The list row carries the mark again; no tunnels row does.
+	if view := m.View(); !strings.Contains(view, "› ubuntu") || strings.Contains(view, "› ○") || strings.Contains(view, "› ●") {
+		t.Errorf("View() after the host change should mark the list, not a row:\n%s", view)
+	}
+}
+
+func TestModel_View_FocusMarkMovesWithFocus(t *testing.T) {
+	t.Parallel()
+	// The one › on screen marks the focused pane's selection — the
+	// signal that survives NO_COLOR, and the pin that the delegate is
+	// re-set on every focus change and theme cycle.
+	m, _ := aliveWeb0(t)
+	if view := m.View(); !strings.Contains(view, "› ubuntu") {
+		t.Fatalf("View() with list focus missing the list mark:\n%s", view)
+	}
+	m = press(t, m, "l")
+	view := m.View()
+	if strings.Contains(view, "› ubuntu") || !strings.Contains(view, "  ubuntu") || !lineHas(view, "› ", specWeb0) {
+		t.Errorf("View() with tunnels focus should move the mark to the row:\n%s", view)
+	}
+	m = press(t, m, "t") // a theme cycle rebuilds the delegate: focus must survive it
+	if view := m.View(); strings.Contains(view, "› ubuntu") || !lineHas(view, "› ", specWeb0) {
+		t.Errorf("View() after t lost the tunnels focus mark:\n%s", view)
+	}
+	m = press(t, m, "h")
+	if view := m.View(); !strings.Contains(view, "› ubuntu") || lineHas(view, "› ", specWeb0) {
+		t.Errorf("View() after h should mark the list again:\n%s", view)
+	}
+}
+
+func TestModel_Update_FocusPagingKeysStayInPane(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m := polled(t, r, fakedial.New())
+	m = press(t, m, "l", "ctrl+d")
+	if host, _ := m.Selected(); host.Alias != "ubuntu" {
+		t.Fatalf("ctrl+d under tunnels focus moved the host list to %q", host.Alias)
+	}
+	if view := m.View(); !lineHas(view, "› ", specAPI) {
+		t.Errorf("View() after ctrl+d should highlight the last row:\n%s", view)
+	}
+	m = press(t, m, "ctrl+u")
+	if host, _ := m.Selected(); host.Alias != "ubuntu" {
+		t.Fatalf("ctrl+u under tunnels focus moved the host list to %q", host.Alias)
+	}
+	if view := m.View(); !lineHas(view, "› ", specWeb0) {
+		t.Errorf("View() after ctrl+u should highlight the first row:\n%s", view)
+	}
+	// l while focused is idempotent: the highlight stays put.
+	m = press(t, m, "G", "l")
+	if view := m.View(); !lineHas(view, "› ", specAPI) {
+		t.Errorf("View() after G l moved the highlight:\n%s", view)
+	}
+}
+
 func TestModel_Update_FocusNeedsRows(t *testing.T) {
 	t.Parallel()
 	r := fakerun.New().
@@ -103,12 +180,13 @@ func TestModel_Update_FocusDropsWhenRowsVanish(t *testing.T) {
 	next, reload := m.Update(ui.EditorExit(nil))
 	next, after := next.(ui.Model).Update(reload())
 	m = feed(t, next.(ui.Model), after) // the reload's re-poll lands: no rows
-	m = press(t, m, "j")
+	// The focus is dropped as soon as the rows are gone — no key needed,
+	// so no key ever carries two meanings.
 	if ui.TunnelsFocused(m) {
 		t.Errorf("focus stayed on an empty tunnels pane")
 	}
-	if host, ok := m.Selected(); !ok || host.Alias != "ubuntu" {
-		t.Errorf("Selected() = %q, %v; want ubuntu (j was consumed by the unfocus)", host.Alias, ok)
+	if view := m.View(); !strings.Contains(view, "› ubuntu") {
+		t.Errorf("View() should mark the list again:\n%s", view)
 	}
 }
 
