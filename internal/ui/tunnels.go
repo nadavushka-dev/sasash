@@ -86,8 +86,13 @@ func (m Model) tunnelStatusCmd(host hostmodel.Host) tea.Cmd {
 	}
 }
 
-// tunnelActionCmd runs one action off the UI thread.
-func tunnelActionCmd(host, label, done string, act func(context.Context) error) tea.Cmd {
+// tunnelActionCmd runs one action off the UI thread. The host's
+// in-flight gate is held for the action's duration: an action writes the
+// state and stats caches, and the refresh tick must not poll — and
+// observe/write — the same host meanwhile (one writer per host). The
+// done arm releases the gate and re-polls.
+func (m Model) tunnelActionCmd(host, label, done string, act func(context.Context) error) tea.Cmd {
+	m.tinflight[host] = true
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 		defer cancel()
@@ -246,11 +251,11 @@ func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	specs, allUp := m.setSpecs(host, set)
 	name := setLabel(set)
 	if allUp {
-		return tunnelActionCmd(alias, name, name+" down", func(ctx context.Context) error {
+		return m.tunnelActionCmd(alias, name, name+" down", func(ctx context.Context) error {
 			return eng.DownSet(ctx, alias, set, specs)
 		})
 	}
-	return tunnelActionCmd(alias, name, name+" up", func(ctx context.Context) error {
+	return m.tunnelActionCmd(alias, name, name+" up", func(ctx context.Context) error {
 		return eng.Up(ctx, alias, set, specs)
 	})
 }
@@ -263,7 +268,7 @@ func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 // fails in Up.
 func (m Model) restartCmd(host hostmodel.Host) tea.Cmd {
 	eng, alias := m.tunnels, host.Alias
-	return tunnelActionCmd(alias, "restart", "master restarted", func(ctx context.Context) error {
+	return m.tunnelActionCmd(alias, "restart", "master restarted", func(ctx context.Context) error {
 		_ = eng.Exit(ctx, alias)
 		return eng.Up(ctx, alias, "", nil)
 	})
@@ -307,7 +312,7 @@ func oneLine(err error, host string) string {
 // forward that is already gone fails with ssh's own reason.
 func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	eng, alias, spec := m.tunnels, host.Alias, row.Spec
-	return tunnelActionCmd(alias, "cancel", "cancelled "+spec, func(ctx context.Context) error {
+	return m.tunnelActionCmd(alias, "cancel", "cancelled "+spec, func(ctx context.Context) error {
 		return eng.Cancel(ctx, alias, spec)
 	})
 }
@@ -315,7 +320,7 @@ func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 // exitCmd is X: `ssh -O exit`, the master and every forward with it.
 func (m Model) exitCmd(host hostmodel.Host) tea.Cmd {
 	eng, alias := m.tunnels, host.Alias
-	return tunnelActionCmd(alias, "exit", "master exited", func(ctx context.Context) error {
+	return m.tunnelActionCmd(alias, "exit", "master exited", func(ctx context.Context) error {
 		return eng.Exit(ctx, alias)
 	})
 }

@@ -329,8 +329,10 @@ type Config struct {
 	Clock stats.Clock
 	// RecordHandoff stamps the last interactive handoff (enter/H) for a
 	// managed host after the terminal comes back; nil disables. The cmd
-	// layer wires stats.Store.RecordHandoff. Best-effort: a failed stamp
-	// is a notice, never a blocked action.
+	// layer wires stats.Store.RecordHandoff. The stamp rides the host's
+	// next status poll (one writer per host), so it needs Tunnels too.
+	// Best-effort: a failed stamp is a notice, never a blocked action. A
+	// handoff that never started (ssh missing) is not stamped.
 	RecordHandoff func(alias string) error
 }
 
@@ -618,6 +620,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case tunnelDoneMsg:
+		delete(m.tinflight, msg.host) // the action is over: polls may run
 		switch {
 		case msg.err == nil:
 			m.notice = msg.done
@@ -635,26 +638,22 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case herdrExitMsg:
 		var exitErr *exec.ExitError
-		if msg.err != nil && !errors.As(msg.err, &exitErr) {
+		started := msg.err == nil || errors.As(msg.err, &exitErr)
+		if !started {
 			m.notice = "herdr: " + msg.err.Error()
 		}
-		m, stamp := m.stampHandoff(m.handoffHost)
-		m.handoffHost = ""
-		return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
+		return m.handoffReturned(started)
 
 	case sshExitMsg:
 		// A non-zero ssh exit is not news — ssh printed its own diagnosis
 		// to the real terminal during the handoff. Only a failure to start
 		// (missing binary) needs surfacing here.
 		var exitErr *exec.ExitError
-		if msg.err != nil && !errors.As(msg.err, &exitErr) {
+		started := msg.err == nil || errors.As(msg.err, &exitErr)
+		if !started {
 			m.notice = "ssh: " + msg.err.Error()
 		}
-		// The world may have changed while the terminal was handed away;
-		// and the handoff itself is worth remembering.
-		m, stamp := m.stampHandoff(m.handoffHost)
-		m.handoffHost = ""
-		return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
+		return m.handoffReturned(started)
 
 	case copyDoneMsg:
 		if msg.err != nil {
@@ -714,6 +713,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.offerSave()
 
 	case editFwdDoneMsg:
+		delete(m.tinflight, msg.host)
 		if msg.err != nil {
 			m.notice = msg.err.Error() // built with its own context and ssh's reason
 		} else {
@@ -759,12 +759,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.edited && len(msg.warnings) > 0 {
 			m.notice = warningNotice(msg.warnings)
 		}
+		before := pathList(m.hosts)
 		m.hosts = msg.hosts
 		m = m.pruneHist()
-		// The last probe round is index-aligned with the OLD paths: a
-		// reordered or edited host would read another path's state until
-		// the batched re-probe lands. Pending is the honest state.
-		m.statuses = nil
+		// The last probe round is index-aligned with the OLD paths: when
+		// they changed in any way — order included — a host would read
+		// another path's state until the batched re-probe lands, so
+		// pending is the honest state. Unchanged paths keep their round
+		// (the reloads tunnel actions trigger must not blank the pane).
+		if !samePaths(before, pathList(m.hosts)) {
+			m.statuses = nil
+		}
 		items := make([]list.Item, len(msg.hosts))
 		for i, h := range msg.hosts {
 			items[i] = hostItem{host: h}
@@ -1210,8 +1215,9 @@ func (m Model) detailView() string {
 		if i < len(sts) {
 			if s := sts[i]; s.Alive() {
 				glyph = m.styles.StatusUp.Render("●")
-				// Same latency spelling as `sasash status`: 20ms, 1.005s.
-				extra = m.styles.PathExtra.Render(s.Latency.Round(time.Millisecond).String())
+				// Milliseconds like `sasash status`; a sub-millisecond
+				// round trip keeps its real unit rather than reading 0s.
+				extra = m.styles.PathExtra.Render(spellLatency(s.Latency))
 			} else {
 				glyph = m.styles.StatusDown.Render("○")
 				extra = m.styles.PathExtra.Render("down")
@@ -1246,10 +1252,14 @@ func (m Model) detailView() string {
 			}
 			lineSoFar := lipgloss.Width(strings.TrimLeft(b.String()[strings.LastIndex(b.String(), "\n")+1:], "\n"))
 			room := m.width - m.listWidth() - 2 - lineSoFar - lipgloss.Width(tail) - 2
-			if shape := sparkline(newest(h.ring, room)); shape != "" {
-				b.WriteString("  " + m.styles.PathExtra.Render(shape))
+			// The tail is whole or absent: a count cut by the frame clamp
+			// would read as a smaller, plausible number.
+			if room >= 0 {
+				if shape := sparkline(newest(h.ring, room)); shape != "" {
+					b.WriteString("  " + m.styles.PathExtra.Render(shape))
+				}
+				b.WriteString(m.styles.PathExtra.Render(tail))
 			}
-			b.WriteString(m.styles.PathExtra.Render(tail))
 		}
 	}
 	if m.tunnels != nil {

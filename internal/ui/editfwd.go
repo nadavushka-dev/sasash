@@ -86,6 +86,7 @@ func (m Model) submitEditFwd() (tea.Model, tea.Cmd) {
 	m.prompt.Blur()
 	save, eng := m.saveForwardEdit, m.tunnels
 	configEdit := e.set != "" && save != nil
+	m.tinflight[e.host] = true // the surgery writes the caches: no poll meanwhile
 	return m, func() tea.Msg {
 		if configEdit {
 			if err := save(e.host, e.set, e.old, newSpec); err != nil {

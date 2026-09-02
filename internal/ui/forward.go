@@ -92,6 +92,7 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 // and the add — ssh's bind failure then comes back as the action error.
 func (m Model) addForwardCmd(host hostmodel.Host, spec, port string) tea.Cmd {
 	eng, prober, alias := m.tunnels, m.prober, host.Alias
+	m.tinflight[alias] = true // the add writes the caches: no poll meanwhile
 	return func() tea.Msg {
 		cctx, ccancel := context.WithTimeout(context.Background(), forwardCheckTimeout)
 		defer ccancel()
@@ -136,6 +137,7 @@ func nextFreePort(ctx context.Context, p probe.Prober, held string) string {
 // filter owns the keyboard by then, the offer degrades to a notice —
 // nothing runs, nothing typed is lost.
 func (m Model) forwardConflict(msg forwardConflictMsg) (Model, tea.Cmd) {
+	delete(m.tinflight, msg.host) // nothing was written: the gate opens
 	offer := msg.spec
 	notice := fmt.Sprintf("port %s is in use on %s — no free port within %d above it", msg.port, msg.host, portSearch)
 	if msg.next != "" {

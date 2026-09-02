@@ -540,3 +540,91 @@ func TestModel_View_LastSeenAfterEditPlan(t *testing.T) {
 func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
+
+func TestModel_Update_UnchangedReloadKeepsTheRound(t *testing.T) {
+	t.Parallel()
+	// A reload that leaves every path where it was (the reloads tunnel
+	// actions trigger) keeps the last round: no blank pane, no probing….
+	clock := &fakeClock{t: t0}
+	lan := probe.Path{Name: "lan", Host: "192.0.2.10"}
+	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{lan}}}
+	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = feed(t, m, m.Init())
+	m = ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf")
+	m = editReload(t, m, hosts) // same paths; re-probe not delivered
+	if view := m.View(); !lineHas(view, "● lan", "20ms") || strings.Contains(view, "probing…") {
+		t.Errorf("an unchanged reload blanked the round:\n%s", view)
+	}
+}
+
+func TestModel_Update_ActionHoldsThePollGate(t *testing.T) {
+	t.Parallel()
+	// While an action runs (it writes the state and stats caches), the
+	// tick must not poll the same host: one writer per host. The done
+	// arm releases the gate and re-polls.
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
+	m := polled(t, r, fakedial.New())
+	m = press(t, m, "l")
+	next, action := m.Update(keyMsg(" ")) // out, not delivered
+	m = next.(ui.Model)
+	before := len(r.CallKeys())
+	_, tick := m.Update(ui.RefreshTick())
+	m = feed(t, m, tick)
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("tick polled a host with an action in flight: %v", got)
+	}
+	next, after := m.Update(action())
+	m = next.(ui.Model)
+	before = len(r.CallKeys())
+	m = feed(t, m, after)
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check ubuntu"}) {
+		t.Errorf("after the action: calls %v, want the re-poll", got)
+	}
+}
+
+func TestModel_Update_FailedStartIsNotAHandoff(t *testing.T) {
+	t.Parallel()
+	// ssh (or herdr) that never started is not a handoff: no stamp, and
+	// no "last connected" that never happened.
+	var stamped []string
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m := polled(t, r, fakedial.New())
+	m = ui.WithRecordHandoff(m, func(alias string) error { stamped = append(stamped, alias); return nil })
+	next, _ := m.Update(keyMsg("enter"))
+	next, cmd := next.(ui.Model).Update(ui.SSHExit(errors.New(`exec: "ssh": executable file not found in $PATH`)))
+	m = feedAll(t, next.(ui.Model), cmd)
+	if len(stamped) != 0 || ui.HandoffHost(m) != "" {
+		t.Errorf("a failed start was stamped: %v (handoffHost %q)", stamped, ui.HandoffHost(m))
+	}
+}
+
+func TestModel_View_PathTailIsWholeOrAbsent(t *testing.T) {
+	t.Parallel()
+	// A count cut by the frame clamp would read as a smaller, plausible
+	// number: at a width where the tail cannot fit whole, it is absent.
+	clock := &fakeClock{t: t0}
+	lan := probe.Path{Name: "lan", Host: "192.0.2.10"}
+	hosts := []hostmodel.Host{{Alias: "production-bastion-eu-west", Paths: []probe.Path{lan}}}
+	d := fakedial.New().Up("192.0.2.10:22", 48*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 60, Height: 24})
+	for i := 0; i < 35; i++ {
+		m = feed(t, m, m.Init())
+	}
+	for _, line := range strings.Split(m.View(), "\n") {
+		if !strings.Contains(line, "● lan") {
+			continue
+		}
+		if strings.Contains(line, "/") && !strings.Contains(line, "35/35") {
+			t.Errorf("the count was cut mid-token: %q", line)
+		}
+		if w := lipgloss.Width(line); w > 60 {
+			t.Errorf("line wider than the frame (%d): %q", w, line)
+		}
+	}
+}

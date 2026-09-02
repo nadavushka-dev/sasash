@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/stats"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
@@ -300,4 +301,41 @@ func clockOr(c stats.Clock) stats.Clock {
 		return time.Now
 	}
 	return c
+}
+
+// handoffReturned is the common tail of enter/H coming back: re-probe,
+// and remember the handoff — only when one happened.
+func (m Model) handoffReturned(started bool) (tea.Model, tea.Cmd) {
+	host := m.handoffHost
+	m.handoffHost = ""
+	if !started {
+		return m, probeCmd(m.prober, m.hosts)
+	}
+	m, stamp := m.stampHandoff(host)
+	return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
+}
+
+// pathList is every path's identity in config order — order included,
+// because the probe round is index-aligned and a reorder is exactly what
+// makes it lie.
+func pathList(hosts []hostmodel.Host) []string {
+	var out []string
+	for _, h := range hosts {
+		for _, p := range h.Paths {
+			out = append(out, pathKey(h.Alias, p))
+		}
+	}
+	return out
+}
+
+func samePaths(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
