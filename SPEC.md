@@ -193,6 +193,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
 | `c` | copy the displayed `$` command instead of running it |
 | `t` | cycle theme (choice persists) |
+| `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
 | `/` `?` `q` | filter, help, quit |
 

@@ -31,6 +31,7 @@ type KeyMap struct {
 	Filter      key.Binding
 	ClearFilter key.Binding
 	Theme       key.Binding
+	Settings    key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 	ForceQuit   key.Binding
@@ -63,6 +64,7 @@ func DefaultKeyMap() KeyMap {
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		Settings:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
@@ -72,7 +74,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.NextFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.NextFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Theme, k.Settings, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /
@@ -82,7 +84,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 // comes first.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Filter, k.ClearFilter, k.Help, k.Quit},
+		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
 		{k.Connect, k.Herdr, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme},
 		{k.NextFwd, k.PrevFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit},
@@ -109,6 +111,10 @@ func (p promptKeys) ShortHelp() []key.Binding {
 		enter, esc = "save", "skip"
 	case promptForward:
 		enter = "add"
+	case promptNewConn:
+		enter = "next"
+	case promptOffer:
+		enter, esc = "connect", "skip"
 	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enter)),

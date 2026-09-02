@@ -150,6 +150,29 @@ func (m Model) aliasProblem(alias string) string {
 	return ""
 }
 
+// submitNewConn is enter in the settings "add new connection" prompt:
+// the target is parsed like an ad-hoc one, but saved FIRST — the alias
+// prompt follows, and a successful save offers the connect.
+func (m Model) submitNewConn() (Model, tea.Cmd) {
+	target, err := parseAdhoc(m.prompt.Value())
+	if err != nil {
+		m.notice = err.Error() // stay in the prompt for correction
+		return m, nil
+	}
+	if m.saveHost == nil {
+		m.mode = promptNone
+		m.prompt.Blur()
+		m.notice = "saving is not available"
+		return m, nil
+	}
+	m.pending = target
+	m.saveThenConnect = true
+	m.mode = promptAlias
+	m.prompt.Reset()
+	m.prompt.Placeholder = "alias to save as — esc to cancel"
+	return m, m.prompt.Focus()
+}
+
 // promptSubmit handles enter inside either prompt mode.
 func (m Model) promptSubmit() (Model, tea.Cmd) {
 	switch m.mode {

@@ -123,6 +123,7 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		},
 		// The same state dir as `up`/`down`, or the cache silently splits.
 		Tunnels: tunnel.Engine{StateDir: stateDir(home)},
+		Home:    home,
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg

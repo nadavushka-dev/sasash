@@ -134,6 +134,15 @@ var (
 	WithLocalPort = withLocalPort
 )
 
+// SettingsOpen reports whether the `o` panel owns the keyboard.
+func SettingsOpen(m Model) bool { return m.settings.pane != settingsOff }
+
+// WithHome sets the directory the settings panel bootstraps.
+func WithHome(m Model, home string) Model {
+	m.home = home
+	return m
+}
+
 // Prompting and PromptingSave expose which prompt, if any, owns the keys.
 func Prompting(m Model) bool     { return m.mode != promptNone }
 func PromptingSave(m Model) bool { return m.mode == promptAlias }

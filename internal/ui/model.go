@@ -215,6 +215,16 @@ type Model struct {
 
 	actions []string // actions.toml entry names, listed in the full help
 
+	// Settings (`o`): the panel state and the home it inspects/bootstraps
+	// through internal/setup; "" disables the create-config entry.
+	settings settingsState
+	home     string
+	// saveThenConnect marks the settings "add new connection" flow: the
+	// save prompt is entered first, and a successful save offers a
+	// connect instead of the ad-hoc flow's connect-first order.
+	saveThenConnect bool
+	offerAlias      string
+
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
 	editorWarn string
@@ -269,6 +279,9 @@ type Config struct {
 	// startup — under the alt screen stderr is invisible.
 	Actions     []string
 	ActionsWarn string
+	// Home is the directory setup.Check/Ensure inspect and bootstrap from
+	// the settings panel; "" disables that entry.
+	Home string
 }
 
 // promptMode says which prompt, if any, owns the keyboard.
@@ -279,6 +292,8 @@ const (
 	promptConnect
 	promptAlias
 	promptForward // `+`: an ad-hoc forward spec for the selected host
+	promptNewConn // settings: a target to save first, then offer to connect
+	promptOffer   // settings: "connect now?" after the save
 )
 
 // New builds the root model. The prober's zero value probes for real and
@@ -342,6 +357,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		tstatus:    make(map[string]tunnelState),
 		tinflight:  make(map[string]bool),
 		actions:    cfg.Actions,
+		home:       cfg.Home,
 		notice:     cfg.ActionsWarn,
 		fwdIdx:     -1,
 	}
@@ -412,6 +428,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case forwardConflictMsg:
 		return m.forwardConflict(msg)
+
+	case setupStatusMsg:
+		if m.settings.pane == settingsSetup {
+			st := msg.status
+			m.settings.status, m.settings.checkErr = &st, msg.err
+		}
+		return m, nil
+
+	case setupDoneMsg:
+		if msg.err != nil {
+			m.notice = "setup: " + msg.err.Error()
+			return m, nil
+		}
+		m.notice = "set up — sasash.conf is wired into ssh"
+		m.editorWarn = "" // the reason for that warning is gone
+		// The include may now bring hosts in; and re-check for the panel.
+		cmds := []tea.Cmd{setupCheckCmd(m.home)}
+		if m.loadHosts != nil {
+			cmds = append(cmds, m.reloadCmd(false))
+		}
+		return m, tea.Batch(cmds...)
 
 	case tunnelDoneMsg:
 		switch {
@@ -494,11 +531,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.prompt.Focus(), probeCmd(m.prober, m.hosts))
 
 	case adhocSavedMsg:
+		offer := m.saveThenConnect
+		m.saveThenConnect = false
 		if msg.err != nil {
 			m.notice = "not saved: " + msg.err.Error()
 			return m, nil
 		}
 		m.notice = "saved " + msg.alias
+		if offer {
+			// Save-first flow: the entry is on disk; now offer the ssh.
+			m.mode, m.offerAlias = promptOffer, msg.alias
+			m.prompt.Reset()
+			m.prompt.Blur()
+		}
 		if m.loadHosts == nil {
 			return m, nil
 		}
@@ -540,6 +585,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.notice = ""
+		// The settings panel owns the keyboard while open (SPEC §5:
+		// action keys inert, like the filter).
+		if m.settings.pane != settingsOff {
+			return m.settingsKey(msg)
+		}
 		// A focused prompt owns the keyboard the way the filter input
 		// does: esc cancels (declining the save writes nothing), enter
 		// submits, everything else is typed text.
@@ -548,16 +598,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, m.keys.ClearFilter):
 				declined := m.mode == promptAlias
 				m.mode = promptNone
+				m.saveThenConnect = false
 				m.prompt.Blur()
 				if declined {
 					m.notice = "not saved"
 				}
 				return m, nil
 			case msg.Type == tea.KeyEnter:
-				if m.mode == promptForward {
+				switch m.mode {
+				case promptForward:
 					return m.submitForward()
+				case promptNewConn:
+					return m.submitNewConn()
+				case promptOffer:
+					m.mode = promptNone
+					return m, tea.ExecProcess(sshExec(m.offerAlias), func(err error) tea.Msg {
+						return sshExitMsg{err: err}
+					})
 				}
 				return m.promptSubmit()
+			}
+			if m.mode == promptOffer {
+				return m, nil // enter or esc only; nothing to type
 			}
 			var cmd tea.Cmd
 			m.prompt, cmd = m.prompt.Update(msg)
@@ -680,13 +742,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.prompt.Placeholder = "[user@]host[:port] [-L local:host:port]"
 				return m, m.prompt.Focus()
 			case key.Matches(msg, m.keys.Theme):
-				m = m.applyTheme((m.themeIdx + 1) % len(Themes))
-				m.notice = "theme: " + Themes[m.themeIdx].Name
-				if m.saveTheme == nil {
-					return m, nil
-				}
-				save, name := m.saveTheme, Themes[m.themeIdx].Name
-				return m, func() tea.Msg { return themeSavedMsg{err: save(name)} }
+				return m.setTheme((m.themeIdx + 1) % len(Themes))
+			case key.Matches(msg, m.keys.Settings):
+				return m.openSettings(), nil
 			case key.Matches(msg, m.keys.Help):
 				m.help.ShowAll = !m.help.ShowAll
 				m.list.SetSize(m.listWidth(), m.contentHeight())
@@ -772,6 +830,8 @@ func (m Model) contentHeight() int {
 func (m Model) helpView() string {
 	var k help.KeyMap = m.keys
 	switch {
+	case m.settings.pane != settingsOff:
+		k = settingsKeys{}
 	case m.mode != promptNone:
 		k = promptKeys{mode: m.mode}
 	case m.list.FilterState() == list.Filtering:
@@ -813,7 +873,12 @@ func (m Model) View() string {
 	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 
 	var body string
-	if len(m.hosts) == 0 {
+	if m.settings.pane != settingsOff {
+		header += "   " + m.styles.CmdPreview.Render("settings")
+		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
+		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
+	} else if len(m.hosts) == 0 {
 		empty := m.styles.Empty.Render("no hosts found — add a Host block to ~/.ssh/config")
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, empty)
 	} else {
@@ -833,6 +898,9 @@ func (m Model) View() string {
 	body = clampHeight(body, m.contentHeight())
 
 	preview := m.previewView()
+	if m.settings.pane != settingsOff {
+		preview = "" // the panel's own footer says what enter does
+	}
 	if m.mode != promptNone {
 		label := "connect:"
 		switch m.mode {
@@ -840,10 +908,17 @@ func (m Model) View() string {
 			label = "save as:"
 		case promptForward:
 			label = "forward " + m.fwdHost + ":"
+		case promptNewConn:
+			label = "new connection:"
+		case promptOffer:
+			label = "connect to " + m.offerAlias + " now? enter · esc skips"
 		}
 		// textinput pads its value to Width; trim the raw padding so a
 		// notice (a rejection message, typically) still fits the line.
 		field := strings.TrimRight(m.prompt.View(), " ")
+		if m.mode == promptOffer {
+			field = "" // a yes/no line: nothing to type
+		}
 		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
 	}
 	// A notice takes the line on its own: appended after a long preview
