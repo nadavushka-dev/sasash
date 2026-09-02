@@ -16,6 +16,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/stats"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
@@ -651,6 +652,247 @@ func TestEngine_Status_SeamFailure(t *testing.T) {
 	r := fakerun.New().Stub(fakerun.Reply{Err: errors.New("boom")}, "ssh", "-O", "check", "ubuntu")
 	if _, err := engine(t, r, fakedial.New()).Status(context.Background(), "ubuntu", nil); err == nil {
 		t.Error("Status() err = nil, want seam failure")
+	}
+}
+
+// Stats integration (CONTRACT-stats.md): Status observes and enriches;
+// Start records sasash-started masters; Exit observes the down transition.
+func TestEngine_Status_ObservedTimes(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	now := t0
+	web := []hostmodel.ForwardSet{{Name: "web", Specs: []string{"3000:localhost:3000"}}}
+
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	e := engine(t, r, d)
+	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return now }}
+	ctx := context.Background()
+
+	got, err := e.Status(ctx, "ubuntu", web)
+	if err != nil {
+		t.Fatalf("first Status() err = %v", err)
+	}
+	if !got.MasterSince.Equal(t0) || got.MasterBySasash || !got.MasterDownSince.IsZero() {
+		t.Errorf("first Status() master times = %+v, want run started at t0, not by sasash", got)
+	}
+	if !got.Forwards[0].Since.Equal(t0) || !got.Forwards[0].DownSince.IsZero() {
+		t.Errorf("first Status() forward times = %+v, want since t0", got.Forwards[0])
+	}
+
+	// A minute later the forward's port dies while the master lives: the
+	// master run keeps its start, the forward flips to down-since.
+	now = t0.Add(time.Minute)
+	e.Dialer = fakedial.New().Down("127.0.0.1:3000")
+	got, err = e.Status(ctx, "ubuntu", web)
+	if err != nil {
+		t.Fatalf("second Status() err = %v", err)
+	}
+	if !got.MasterSince.Equal(t0) {
+		t.Errorf("second Status() MasterSince = %v, want unchanged t0", got.MasterSince)
+	}
+	if !got.Forwards[0].DownSince.Equal(now) || !got.Forwards[0].Since.IsZero() {
+		t.Errorf("second Status() forward times = %+v, want down since t0+1m", got.Forwards[0])
+	}
+
+	// Another minute later the master is dead too.
+	now = t0.Add(2 * time.Minute)
+	e.Runner = fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	got, err = e.Status(ctx, "ubuntu", web)
+	if err != nil {
+		t.Fatalf("third Status() err = %v", err)
+	}
+	if !got.MasterDownSince.Equal(now) || !got.MasterSince.IsZero() {
+		t.Errorf("third Status() master times = %+v, want down since t0+2m", got)
+	}
+}
+
+func TestEngine_Start_RecordsMasterStart(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
+
+	if err := e.Start(context.Background(), "ubuntu"); err != nil {
+		t.Fatalf("Start() err = %v", err)
+	}
+	obs, corrupt := e.Stats.Load("ubuntu")
+	if corrupt || !obs.MasterBySasash || !obs.MasterSince.Equal(t0) {
+		t.Errorf("Load() = %+v (corrupt %v), want sasash-started at t0", obs, corrupt)
+	}
+}
+
+func TestEngine_Start_StatsRecordFailure(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	e.Stats = &stats.Store{Dir: e.StateDir}
+	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.stats.json"), 0o700); err != nil {
+		t.Fatalf("Mkdir() err = %v", err)
+	}
+	err := e.Start(context.Background(), "ubuntu")
+	if !errors.Is(err, tunnel.ErrStateWrite) {
+		t.Errorf("Start() err = %v, want ErrStateWrite (master IS running)", err)
+	}
+}
+
+// B1 extends to Start's stats record: Up keeps forwarding when only the
+// master-start record failed.
+func TestEngine_Up_ContinuesOnStatsRecordFailure(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(1, "ssh", "-O", "check", "ubuntu")
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	e.Stats = &stats.Store{Dir: e.StateDir}
+	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.stats.json"), 0o700); err != nil {
+		t.Fatalf("Mkdir() err = %v", err)
+	}
+
+	err := e.Up(context.Background(), "ubuntu", "web", []string{"3000:localhost:3000"})
+	if !errors.Is(err, tunnel.ErrStateWrite) {
+		t.Fatalf("Up() err = %v, want joined ErrStateWrite", err)
+	}
+	want := []string{
+		"ssh -O check ubuntu",
+		"ssh -fN ubuntu",
+		"ssh -O forward -L 3000:localhost:3000 ubuntu",
+	}
+	if got := r.CallKeys(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Up() calls = %q, want %q (forwarding continued)", got, want)
+	}
+}
+
+func TestEngine_Exit_ObservesMasterDead(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	now := t0
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return now }}
+	ctx := context.Background()
+
+	if _, err := e.Status(ctx, "ubuntu", nil); err != nil { // observes alive at t0
+		t.Fatalf("Status() err = %v", err)
+	}
+	now = t0.Add(time.Minute)
+	if err := e.Exit(ctx, "ubuntu"); err != nil {
+		t.Fatalf("Exit() err = %v", err)
+	}
+	obs, _ := e.Stats.Load("ubuntu")
+	if !obs.MasterDownSince.Equal(now) || !obs.MasterSince.IsZero() {
+		t.Errorf("Load() after Exit = %+v, want down since t0+1m", obs)
+	}
+}
+
+// A FAILED ssh -O exit must observe nothing: the master is still running,
+// and stamping a down-time for it would be the lie SPEC §4 forbids.
+func TestEngine_Exit_FailedExitObservesNothing(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	now := t0
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return now }}
+	ctx := context.Background()
+
+	if _, err := e.Status(ctx, "ubuntu", nil); err != nil { // observes alive at t0
+		t.Fatalf("Status() err = %v", err)
+	}
+	now = t0.Add(time.Minute)
+	e.Runner = fakerun.New().
+		Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("not running"), Code: 255}}, "ssh", "-O", "exit", "ubuntu")
+	if err := e.Exit(ctx, "ubuntu"); err == nil {
+		t.Fatal("Exit() err = nil, want ssh's failure")
+	}
+	obs, _ := e.Stats.Load("ubuntu")
+	if !obs.MasterSince.Equal(t0) || !obs.MasterDownSince.IsZero() {
+		t.Errorf("Load() after failed Exit = %+v, want alive-run at t0 untouched", obs)
+	}
+}
+
+// Listening counts as port-answered: a forward whose port accepts while the
+// master is down still gets its Since stamped.
+func TestEngine_Status_ListeningStampsSince(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	e := engine(t, r, d)
+	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
+
+	got, err := e.Status(context.Background(), "ubuntu",
+		[]hostmodel.ForwardSet{{Name: "web", Specs: []string{"3000:localhost:3000"}}})
+	if err != nil {
+		t.Fatalf("Status() err = %v", err)
+	}
+	f := got.Forwards[0]
+	if f.State != tunnel.Listening || !f.Since.Equal(t0) {
+		t.Errorf("Status() forward = %+v, want listening with Since t0", f)
+	}
+}
+
+// Contract §2: an ObserveHost write error must not fail Status — the view is
+// still enriched for this render. Exit's stats failure follows ErrStateWrite.
+func TestEngine_StatsWriteFailureConventions(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	newEngine := func(t *testing.T) tunnel.Engine {
+		t.Helper()
+		r := fakerun.New()
+		r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+		e := engine(t, r, fakedial.New())
+		e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
+		if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.stats.json"), 0o700); err != nil {
+			t.Fatalf("Mkdir() err = %v", err)
+		}
+		return e
+	}
+
+	t.Run("status never fails over a stale stats cache", func(t *testing.T) {
+		t.Parallel()
+		got, err := newEngine(t).Status(context.Background(), "ubuntu", nil)
+		if err != nil {
+			t.Fatalf("Status() err = %v, want nil (best-effort write)", err)
+		}
+		if !got.MasterSince.Equal(t0) {
+			t.Errorf("Status() = %+v, want the view still enriched at t0", got)
+		}
+	})
+
+	t.Run("exit reports the stats failure as ErrStateWrite", func(t *testing.T) {
+		t.Parallel()
+		err := newEngine(t).Exit(context.Background(), "ubuntu")
+		if !errors.Is(err, tunnel.ErrStateWrite) {
+			t.Errorf("Exit() err = %v, want ErrStateWrite (the master IS down)", err)
+		}
+	})
+}
+
+func TestEngine_Status_CorruptStats(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	e := engine(t, r, fakedial.New())
+	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
+	if err := os.WriteFile(filepath.Join(e.StateDir, "ubuntu.stats.json"), []byte("{nope"), 0o600); err != nil {
+		t.Fatalf("WriteFile() err = %v", err)
+	}
+
+	got, err := e.Status(context.Background(), "ubuntu", nil)
+	if err != nil {
+		t.Fatalf("Status() err = %v", err)
+	}
+	if !got.CorruptStats {
+		t.Error("Status().CorruptStats = false, want true")
+	}
+	// The fresh run starts now — observed, never backdated.
+	if !got.MasterSince.Equal(t0) || !got.MasterDownSince.IsZero() {
+		t.Errorf("Status() master times = %+v, want fresh run at t0", got)
 	}
 }
 
