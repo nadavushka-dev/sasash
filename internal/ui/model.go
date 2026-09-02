@@ -501,13 +501,12 @@ func (m Model) Init() tea.Cmd {
 }
 
 // Update is update plus settleFocus, so every return path — and there
-// are many — leaves the tunnels focus valid or gone.
+// are many — leaves the tunnels focus valid or gone. update always
+// returns a Model; the unconditional assertion keeps it that way, so a
+// return of another type can never quietly skip the settle.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
-	if nm, ok := next.(Model); ok {
-		return nm.settleFocus(), cmd
-	}
-	return next, cmd
+	return next.(Model).settleFocus(), cmd
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
