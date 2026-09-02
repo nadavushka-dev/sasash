@@ -112,7 +112,10 @@ func Update(confPath, alias, name, old, new string) error {
 	if !ok {
 		return fmt.Errorf("host %q not managed by sasash", alias)
 	}
-	line := declaringLine(h.OwnMetaVerb("forwards"), name)
+	line, ambiguous := declaringLine(h.OwnMetaVerb("forwards"), name)
+	if ambiguous {
+		return fmt.Errorf("forward set %q on %q is ambiguous: several lines declare it under different casing", name, alias)
+	}
 	if line == nil || !contains(line.Args[1:], old) {
 		return fmt.Errorf("forward set %q on %q has no spec %q", name, alias, old)
 	}
@@ -137,8 +140,9 @@ func Update(confPath, alias, name, old, new string) error {
 // as the reader). The reader keys sets on the exact name, so "WEB" and
 // "web" are two sets: the exact match wins; a case-insensitive match is
 // taken only when it is the single candidate, so a rewrite can never
-// land on a set the user did not edit.
-func declaringLine(metas []sshconf.Meta, name string) *sshconf.Meta {
+// land on a set the user did not edit — several folded candidates and
+// no exact one is ambiguous.
+func declaringLine(metas []sshconf.Meta, name string) (line *sshconf.Meta, ambiguous bool) {
 	var folded *sshconf.Meta
 	foldedCount := 0
 	for i := range metas {
@@ -147,7 +151,7 @@ func declaringLine(metas []sshconf.Meta, name string) *sshconf.Meta {
 			continue
 		}
 		if m.Args[0] == name {
-			return m
+			return m, false
 		}
 		if strings.EqualFold(m.Args[0], name) {
 			foldedCount++
@@ -156,10 +160,13 @@ func declaringLine(metas []sshconf.Meta, name string) *sshconf.Meta {
 			}
 		}
 	}
-	if foldedCount == 1 {
-		return folded
+	switch foldedCount {
+	case 0:
+		return nil, false
+	case 1:
+		return folded, false
 	}
-	return nil
+	return nil, true
 }
 
 func contains(specs []string, spec string) bool {

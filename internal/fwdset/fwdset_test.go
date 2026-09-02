@@ -450,9 +450,17 @@ func TestUpdate_PicksTheExactSet(t *testing.T) {
 			}
 		})
 	}
-	// Two folded candidates and no exact one: ambiguous, refused.
+	// Two folded candidates and no exact one: ambiguous, refused as such.
 	path := writeConf(t, "# @sasash forwards WEB 3000:localhost:3000\n# @sasash forwards Web 3000:localhost:3000\nHost web\n")
-	if err := fwdset.Update(path, "web", "web", "3000:localhost:3000", "3000:localhost:3009"); err == nil || !strings.Contains(err.Error(), "has no spec") {
-		t.Errorf("Update() with two folded candidates = %v, want refusal", err)
+	if err := fwdset.Update(path, "web", "web", "3000:localhost:3000", "3000:localhost:3009"); err == nil || !strings.Contains(err.Error(), `forward set "web" on "web" is ambiguous`) {
+		t.Errorf("Update() with two folded candidates = %v, want the ambiguity refusal", err)
+	}
+}
+
+func TestUpdate_MissingFile(t *testing.T) {
+	t.Parallel()
+	err := fwdset.Update(filepath.Join(t.TempDir(), "sasash.conf"), "web", "web", "3000:localhost:3000", "3000:localhost:3009")
+	if err == nil || !os.IsNotExist(err) {
+		t.Errorf("Update() on a missing file = %v, want a not-exist error", err)
 	}
 }
