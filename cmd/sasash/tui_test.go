@@ -140,6 +140,12 @@ func TestTuiConfig(t *testing.T) {
 	t.Parallel()
 	wired := wiredHome(t, "# managed\n")
 	bare := t.TempDir()
+	// Include present, sasash.conf not yet: the editor will create the
+	// file and ssh already includes it — no warning.
+	included := wiredHome(t, "")
+	if err := os.Remove(filepath.Join(included, ".ssh", "config.d", "sasash.conf")); err != nil {
+		t.Fatalf("remove conf: %v", err)
+	}
 	tests := []struct {
 		name       string
 		home       string
@@ -150,6 +156,7 @@ func TestTuiConfig(t *testing.T) {
 	}{
 		{name: "wired home with editor", home: wired, editorEnv: "code -w", wantEditor: []string{"code", "-w"}},
 		{name: "bare home falls back and warns", home: bare, editorEnv: "", wantEditor: []string{"vi"}, wantHint: true, wantWarn: true},
+		{name: "include without conf does not warn", home: included, editorEnv: "vi", wantEditor: []string{"vi"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -50,8 +50,7 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	root := filepath.Join(home, ".ssh", "config")
-	hosts, warnings, err := hostmodel.Load(root, home)
+	hosts, warnings, err := hostmodel.Load(sshConfigPath(home), home)
 	if err != nil {
 		fmt.Fprintln(stderr, "sasash:", err)
 		return 1
@@ -98,13 +97,15 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 // every `e` setting is decided here, in one testable place. sasash.conf
 // is the ONE file sasash writes (SPEC §2) — never ~/.ssh/config.
 func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
-	root := filepath.Join(home, ".ssh", "config")
+	root := sshConfigPath(home)
 	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
 	editor, editorHint := resolveEditor(editorEnv)
-	// An edit ssh cannot see (setup has not wired sasash.conf in) must
-	// come back with an explanation, not a silently unchanged list.
+	// An edit ssh cannot see (the Include is not in ~/.ssh/config) must
+	// come back with an explanation, not a silently unchanged list. A
+	// missing sasash.conf alone is fine: ssh ignores an Include of a
+	// missing file, and the editor creates it.
 	editorWarn := ""
-	if st, err := setup.Check(home); err == nil && !(st.IncludePresent && st.ConfPresent) {
+	if st, err := setup.Check(home); err == nil && !st.IncludePresent {
 		editorWarn = "sasash.conf is not wired into ssh yet — run `sasash setup`"
 	}
 	return ui.Config{
