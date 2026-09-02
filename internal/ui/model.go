@@ -920,7 +920,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.saveThenConnect = false // the ad-hoc flow connects first
 				m.mode = promptConnect
 				m.prompt.Reset()
-				m.prompt.Placeholder = "[user@]host[:port] [-L local:host:port]"
+				m.prompt.Placeholder = "[user@]host[:port] [-L local:host:port] [-p port] [-N]  or a pasted ssh command"
 				return m, m.prompt.Focus()
 			case key.Matches(msg, m.keys.Theme):
 				return m.setTheme((m.themeIdx + 1) % len(Themes))

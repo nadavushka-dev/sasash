@@ -26,12 +26,12 @@ func TestParseAdhocTunnelArgv_ExactStrings(t *testing.T) {
 		tunnelOnly bool
 		wantErr    string
 	}{
-		{name: "-N before the target", input: "-N -L 8080:localhost:80 root@192.0.2.99", want: []string{"ssh", "-fN", "-L", "8080:localhost:80", "root@192.0.2.99"}, tunnelOnly: true},
-		{name: "-N after the target", input: "192.0.2.99 -N", want: []string{"ssh", "-fN", "192.0.2.99"}, tunnelOnly: true},
-		{name: "pasted ssh command with -p", input: "ssh -L 8080:localhost:80 -p 2222 root@192.0.2.99", want: []string{"ssh", "-fN", "-L", "8080:localhost:80", "-p", "2222", "root@192.0.2.99"}},
-		{name: "pasted -N -p glued", input: "ssh -N -p2222 -L5432:127.0.0.1:5432 db.invalid", want: []string{"ssh", "-fN", "-L", "5432:127.0.0.1:5432", "-p", "2222", "db.invalid"}, tunnelOnly: true},
-		{name: "same port both ways", input: "192.0.2.99:2222 -p 2222", want: []string{"ssh", "-fN", "-p", "2222", "192.0.2.99"}},
-		{name: "-N twice is once", input: "-N h -N", want: []string{"ssh", "-fN", "h"}, tunnelOnly: true},
+		{name: "-N before the target", input: "-N -L 8080:localhost:80 root@192.0.2.99", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "-L", "8080:localhost:80", "root@192.0.2.99"}, tunnelOnly: true},
+		{name: "-N after the target", input: "192.0.2.99 -N", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "192.0.2.99"}, tunnelOnly: true},
+		{name: "pasted ssh command with -p", input: "ssh -L 8080:localhost:80 -p 2222 root@192.0.2.99", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "-L", "8080:localhost:80", "-p", "2222", "root@192.0.2.99"}},
+		{name: "pasted -N -p glued", input: "ssh -N -p2222 -L5432:127.0.0.1:5432 db.invalid", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "-L", "5432:127.0.0.1:5432", "-p", "2222", "db.invalid"}, tunnelOnly: true},
+		{name: "same port both ways", input: "192.0.2.99:2222 -p 2222", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "-p", "2222", "192.0.2.99"}},
+		{name: "-N twice is once", input: "-N h -N", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "h"}, tunnelOnly: true},
 		{name: "port given twice differently", input: "192.0.2.99:2222 -p 2223", wantErr: "port given twice"},
 		{name: "bad -p", input: "-p x h", wantErr: "bad port"},
 		{name: "dangling -p", input: "h -p", wantErr: "-p needs a value"},
@@ -67,7 +67,7 @@ func TestParseAdhocTunnelArgv_ExactStrings(t *testing.T) {
 func TestModel_Update_AdhocTunnelOnly(t *testing.T) {
 	t.Parallel()
 	const input = "-N -L 8080:localhost:80 root@192.0.2.99"
-	argv := []string{"ssh", "-fN", "-L", "8080:localhost:80", "root@192.0.2.99"}
+	argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "-L", "8080:localhost:80", "root@192.0.2.99"}
 	tests := []struct {
 		name      string
 		reply     fakerun.Reply
@@ -243,6 +243,18 @@ func TestModel_Update_EditForwardOutcomes(t *testing.T) {
 			wantNote: []string{"not declared: ", "already in set"},
 		},
 		{
+			name: "forward failure says the old one is gone",
+			setup: func(r *fakerun.Fake) {
+				r.StubExit(0, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
+					Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("bind: Address already in use")}}, "ssh", "-O", "forward", "-L", "3000:localhost:3009", "ubuntu")
+			},
+			masterUp:  true,
+			newSpec:   "3000:localhost:3009",
+			wantHook:  true,
+			wantCalls: []string{"ssh -O cancel -L " + specWeb0 + " ubuntu", "ssh -O forward -L 3000:localhost:3009 ubuntu"},
+			wantNote:  []string{"cancelled " + specWeb0 + " but forward 3000:localhost:3009 failed", "Address already in use"},
+		},
+		{
 			name: "cancel failure is reported and the forward is not attempted",
 			setup: func(r *fakerun.Fake) {
 				r.Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu")
@@ -351,5 +363,138 @@ func TestModel_Update_EditForwardGuards(t *testing.T) {
 	// Help lists it.
 	if view := press(t, m, "?").View(); !strings.Contains(view, "edit forward") {
 		t.Errorf("View() full help missing E:\n%s", view)
+	}
+}
+
+// adhocRowModel is the tunnels fixture with a recorded ad-hoc forward on
+// port 9000; up says whether its port answers under a live master.
+func adhocRowModel(t *testing.T, r *fakerun.Fake, up bool, calls *[][]string) (ui.Model, string) {
+	t.Helper()
+	r.StubExit(0, "ssh", "-O", "check", "ubuntu")
+	stateDir := t.TempDir()
+	state := `{"forwards":[{"set":"","spec":"9000:localhost:9000"}]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	d := fakedial.New()
+	if up {
+		d.Up("127.0.0.1:9000", time.Millisecond)
+	}
+	m := tunnelModel(t, r, d, stateDir)
+	m = feed(t, m, m.Init())
+	return ui.WithSaveForwardEdit(m, func(alias, set, old, new string) error {
+		*calls = append(*calls, []string{alias, set, old, new})
+		return nil
+	}), stateDir
+}
+
+func TestModel_Update_EditForwardAdhocRow(t *testing.T) {
+	t.Parallel()
+	// A live ad-hoc row is surgery only: no meta line exists to rewrite.
+	var calls [][]string
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "cancel", "-L", "9000:localhost:9000", "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", "9001:localhost:9000", "ubuntu")
+	m, _ := adhocRowModel(t, r, true, &calls)
+	m = press(t, m, "l", "G", "E") // the ad-hoc row is last
+	view := m.View()
+	if !strings.Contains(view, "edit ad-hoc on ubuntu: 9000:localhost:9000") || strings.Contains(view, "sasash.conf:") {
+		t.Fatalf("E on a live ad-hoc row: want the prompt and a surgery-only plan:\n%s", view)
+	}
+	for range len("9000:localhost:9000") {
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9001:localhost:9000")})
+	before := len(r.CallKeys())
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if len(calls) != 0 {
+		t.Errorf("hook called for an ad-hoc row: %v", calls)
+	}
+	want := []string{"ssh -O cancel -L 9000:localhost:9000 ubuntu", "ssh -O forward -L 9001:localhost:9000 ubuntu"}
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
+		t.Errorf("ssh calls = %v, want %v", got, want)
+	}
+	if view := m.View(); !strings.Contains(view, "re-plumbed 9000:localhost:9000 → 9001:localhost:9000") || strings.Contains(view, "declared") {
+		t.Errorf("View() outcome for an ad-hoc row:\n%s", view)
+	}
+
+	// A cancel failure on an ad-hoc row must not claim a config update:
+	// nothing was written.
+	var none2 [][]string
+	r2 := fakerun.New().Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, "ssh", "-O", "cancel", "-L", "9000:localhost:9000", "ubuntu")
+	m2, _ := adhocRowModel(t, r2, true, &none2)
+	m2 = press(t, m2, "l", "G", "E")
+	for range len("9000:localhost:9000") {
+		m2 = update(t, m2, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	m2 = update(t, m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9001:localhost:9000")})
+	next, cmd = m2.Update(keyMsg("enter"))
+	m2 = update(t, next.(ui.Model), cmd())
+	if view := m2.View(); !strings.Contains(view, "cancel of 9000:localhost:9000 failed: unknown port forwarding") || strings.Contains(view, "config updated") {
+		t.Errorf("View() after a failed ad-hoc cancel:\n%s", view)
+	}
+
+	// A dead ad-hoc row has nothing to edit: x it and + a new one.
+	var none [][]string
+	dead, _ := adhocRowModel(t, fakerun.New(), false, &none)
+	dead = press(t, dead, "l", "G", "E")
+	if ui.Prompting(dead) || !strings.Contains(dead.View(), "not live") {
+		t.Errorf("E on a dead ad-hoc row: prompting %v:\n%s", ui.Prompting(dead), dead.View())
+	}
+}
+
+func TestModel_Update_EditForwardNeedsHookForDeclared(t *testing.T) {
+	t.Parallel()
+	// Without the edit hook a declared, dead row cannot be edited; a
+	// live one still can (surgery only).
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m := polled(t, r, fakedial.New().Up("127.0.0.1:3000", time.Millisecond)) // no hook
+	m = press(t, m, "l", "j", "E")                                           // web1: down
+	if ui.Prompting(m) || !strings.Contains(m.View(), "not available") {
+		t.Errorf("E on a dead declared row without a hook: prompting %v:\n%s", ui.Prompting(m), m.View())
+	}
+	m = press(t, m, "k", "E") // web0: live
+	if !ui.Prompting(m) || strings.Contains(m.View(), "sasash.conf:") || !strings.Contains(m.View(), "ssh -O cancel") {
+		t.Errorf("E on a live declared row without a hook: want surgery-only plan:\n%s", m.View())
+	}
+}
+
+func TestModel_View_EditPlanStaysOnItsRow(t *testing.T) {
+	t.Parallel()
+	// A poll lands while the prompt is open and the edited ad-hoc row is
+	// gone: the highlight clamps onto another row, but the plan must not
+	// move with it — it belongs to the row the edit is bound to, and so
+	// does the action.
+	var calls [][]string
+	r := fakerun.New()
+	m, stateDir := adhocRowModel(t, r, true, &calls)
+	m = press(t, m, "l", "G", "E")
+	if !strings.Contains(m.View(), "ssh -O cancel -L 9000:localhost:9000 ubuntu") {
+		t.Fatalf("plan missing before the poll:\n%s", m.View())
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(`{"forwards":[]}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, tick := m.Update(ui.RefreshTick())
+	m = feed(t, m, tick) // the ad-hoc row is gone; the highlight clamps onto api
+	view := m.View()
+	if !ui.Prompting(m) || !strings.Contains(view, "edit ad-hoc on ubuntu: 9000:localhost:9000") {
+		t.Fatalf("the prompt should stay bound to the ad-hoc spec:\n%s", view)
+	}
+	if strings.Contains(view, "-O cancel") || strings.Contains(view, "-O forward") || strings.Contains(view, "sasash.conf:") {
+		t.Errorf("View() shows the plan under a row the edit is not bound to:\n%s", view)
+	}
+}
+
+func TestModel_Update_SettingsNewConnRejectsTunnelOnly(t *testing.T) {
+	t.Parallel()
+	m := ui.WithSaveHost(settingsModel(t, fakerun.New()), func(ui.AdhocEntry) error { return nil })
+	m = press(t, m, "G", "k", "enter")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N 192.0.2.99")})
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(ui.Model)
+	if cmd != nil || !ui.Prompting(m) || ui.PromptingSave(m) || !strings.Contains(m.View(), "-N belongs to the a prompt") {
+		t.Errorf("-N in the settings prompt: cmd %v, prompting %v, save %v:\n%s", cmd != nil, ui.Prompting(m), ui.PromptingSave(m), m.View())
 	}
 }

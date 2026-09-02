@@ -195,7 +195,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `c` | copy the displayed `$` command instead of running it |
 | `t` | cycle theme (choice persists) |
 | `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
-| `a` | ad-hoc connect: `[user@]host[:port] [-L spec]… [-p port]` in any order — a pasted `ssh …` command works, the leading `ssh` is dropped; offer to save on return. With `-N` it is tunnel-only: `ssh -fN …` runs in the background through the run seam with no handoff, the result is a notice (a prompt makes `-f` fail: use keys/agent, or connect once without `-N`), the save offer is unchanged |
+| `a` | ad-hoc connect: `[user@]host[:port] [-L spec]… [-p port]` in any order — a pasted `ssh …` command works, the leading `ssh` is dropped; offer to save on return. With `-N` it is tunnel-only: `ssh -fN -o BatchMode=yes …` runs in the background through the run seam with no handoff and the result is a notice — BatchMode makes ssh refuse to prompt (`-f` would otherwise open `/dev/tty` over the TUI), so auth must be keys/agent or the notice says so with the hint to connect once without `-N`; the save offer is unchanged |
 | `/` `?` `q` | filter, help, quit |
 
 `e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.

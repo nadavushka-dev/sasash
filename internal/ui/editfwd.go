@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -97,10 +98,14 @@ func (m Model) submitEditFwd() (tea.Model, tea.Cmd) {
 			defer cancel()
 			// ssh's reason, without the argv it echoes (shown on the row).
 			if err := eng.Cancel(ctx, e.host, e.old); err != nil {
-				return editFwdDoneMsg{host: e.host, err: fmt.Errorf("cancel of %s failed: %s (config updated)", e.old, oneLine(err, e.host))}
+				msg := fmt.Sprintf("cancel of %s failed: %s", e.old, oneLine(err, e.host))
+				if configEdit {
+					msg += " (config updated)"
+				}
+				return editFwdDoneMsg{host: e.host, err: errors.New(msg)}
 			}
 			if err := eng.Forward(ctx, e.host, e.set, newSpec); err != nil {
-				return editFwdDoneMsg{host: e.host, err: fmt.Errorf("%s cancelled but forward of %s failed: %s", e.old, newSpec, oneLine(err, e.host))}
+				return editFwdDoneMsg{host: e.host, err: fmt.Errorf("cancelled %s but forward %s failed: %s", e.old, newSpec, oneLine(err, e.host))}
 			}
 			done = "re-plumbed " + e.old + " → " + newSpec
 			if configEdit {

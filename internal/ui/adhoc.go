@@ -178,9 +178,13 @@ func adhocDest(t adhocTarget) string {
 
 // adhocTunnelArgv is the tunnel-only (-N) invocation: ssh backgrounds
 // itself after auth (-f) and runs no command (-N), so the TUI keeps the
-// terminal. Same destination and forwards as adhocArgv.
+// terminal. BatchMode is what makes that honest: -f authenticates before
+// it forks and would otherwise open /dev/tty for a passphrase — over the
+// alt screen, racing the TUI for keys, until the timeout. With BatchMode
+// ssh refuses to prompt and fails at once with its reason, which the
+// notice shows with the hint. Same destination and forwards as adhocArgv.
 func adhocTunnelArgv(t adhocTarget) []string {
-	argv := []string{"ssh", "-fN"}
+	argv := []string{"ssh", "-fN", "-o", "BatchMode=yes"}
 	return append(argv, adhocArgv(t)[1:]...)
 }
 
@@ -191,9 +195,9 @@ type adhocTunnelDoneMsg struct {
 	err error
 }
 
-// adhocTunnelCmd runs the tunnel-only ad-hoc through the run seam. ssh
-// cannot prompt here (no tty), which is -f's own caveat: auth must be
-// keys or an agent, and a prompt makes ssh fail — reported, never hung.
+// adhocTunnelCmd runs the tunnel-only ad-hoc through the run seam. Auth
+// must be keys or an agent (BatchMode): anything that would prompt fails
+// — reported with the hint, never hung.
 func adhocTunnelCmd(r run.Runner, t adhocTarget) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
@@ -236,6 +240,10 @@ func (m Model) submitNewConn() (Model, tea.Cmd) {
 	target, err := parseAdhoc(m.prompt.Value())
 	if err != nil {
 		m.notice = err.Error() // stay in the prompt for correction
+		return m, nil
+	}
+	if target.TunnelOnly {
+		m.notice = "-N belongs to the a prompt — this saves a connection, it starts nothing"
 		return m, nil
 	}
 	if m.saveHost == nil {

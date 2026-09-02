@@ -112,14 +112,7 @@ func Update(confPath, alias, name, old, new string) error {
 	if !ok {
 		return fmt.Errorf("host %q not managed by sasash", alias)
 	}
-	var line *sshconf.Meta
-	for _, m := range h.OwnMetaVerb("forwards") {
-		if len(m.Args) > 0 && strings.EqualFold(m.Args[0], name) {
-			m := m
-			line = &m
-			break
-		}
-	}
+	line := declaringLine(h.OwnMetaVerb("forwards"), name)
 	if line == nil || !contains(line.Args[1:], old) {
 		return fmt.Errorf("forward set %q on %q has no spec %q", name, alias, old)
 	}
@@ -138,6 +131,35 @@ func Update(confPath, alias, name, old, new string) error {
 	out := sshconf.Parse(confPath, []byte(strings.Join(rawLines, "")))
 	out.Perm = f.Perm
 	return out.WriteAtomic(confPath)
+}
+
+// declaringLine is the FIRST line declaring the set (first-value-wins,
+// as the reader). The reader keys sets on the exact name, so "WEB" and
+// "web" are two sets: the exact match wins; a case-insensitive match is
+// taken only when it is the single candidate, so a rewrite can never
+// land on a set the user did not edit.
+func declaringLine(metas []sshconf.Meta, name string) *sshconf.Meta {
+	var folded *sshconf.Meta
+	foldedCount := 0
+	for i := range metas {
+		m := &metas[i]
+		if len(m.Args) == 0 {
+			continue
+		}
+		if m.Args[0] == name {
+			return m
+		}
+		if strings.EqualFold(m.Args[0], name) {
+			foldedCount++
+			if folded == nil {
+				folded = m
+			}
+		}
+	}
+	if foldedCount == 1 {
+		return folded
+	}
+	return nil
 }
 
 func contains(specs []string, spec string) bool {

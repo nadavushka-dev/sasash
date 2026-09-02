@@ -390,3 +390,69 @@ func TestUpdate_Errors(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdate_PicksTheExactSet(t *testing.T) {
+	t.Parallel()
+	// The reader keys sets on the exact name: WEB and web are two sets.
+	// The exact one is rewritten; a case-insensitive match is taken only
+	// when it is the single candidate; and only the FIRST line declaring
+	// a set counts, as the reader's first-value-wins.
+	tests := []struct {
+		name string
+		in   string
+		set  string
+		want string
+	}{
+		{
+			name: "exact wins over a folded twin",
+			in:   "# @sasash forwards WEB 3000:localhost:3000\n# @sasash forwards web 3000:localhost:3000\nHost web\n",
+			set:  "web",
+			want: "# @sasash forwards WEB 3000:localhost:3000\n# @sasash forwards web 3000:localhost:3009\nHost web\n",
+		},
+		{
+			name: "single folded candidate is taken",
+			in:   "# @sasash forwards WEB 3000:localhost:3000\nHost web\n",
+			set:  "web",
+			want: "# @sasash forwards WEB 3000:localhost:3009\nHost web\n",
+		},
+		{
+			name: "first declaring line wins",
+			in:   "# @sasash forwards web 3000:localhost:3000\n# @sasash forwards web 3000:localhost:3000 3001:localhost:3001\nHost web\n",
+			set:  "web",
+			want: "# @sasash forwards web 3000:localhost:3009\n# @sasash forwards web 3000:localhost:3000 3001:localhost:3001\nHost web\n",
+		},
+		{
+			name: "a set named like its own spec keeps its name",
+			in:   "# @sasash forwards 3000:localhost:3000 3000:localhost:3000\nHost web\n",
+			set:  "3000:localhost:3000",
+			want: "# @sasash forwards 3000:localhost:3000 3000:localhost:3009\nHost web\n",
+		},
+		{
+			name: "a spec that prefixes another is matched whole",
+			in:   "# @sasash forwards web 3000:localhost:30001 3000:localhost:3000\nHost web\n",
+			set:  "web",
+			want: "# @sasash forwards web 3000:localhost:30001 3000:localhost:3009\nHost web\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConf(t, tt.in)
+			if err := fwdset.Update(path, "web", tt.set, "3000:localhost:3000", "3000:localhost:3009"); err != nil {
+				t.Fatalf("Update() = %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("file = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	// Two folded candidates and no exact one: ambiguous, refused.
+	path := writeConf(t, "# @sasash forwards WEB 3000:localhost:3000\n# @sasash forwards Web 3000:localhost:3000\nHost web\n")
+	if err := fwdset.Update(path, "web", "web", "3000:localhost:3000", "3000:localhost:3009"); err == nil || !strings.Contains(err.Error(), "has no spec") {
+		t.Errorf("Update() with two folded candidates = %v, want refusal", err)
+	}
+}
