@@ -184,7 +184,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `H` | `herdr --remote <host>` |
 | `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
 | `p` | cycle path (rewrites `HostName`) |
-| `tab` / `shift+tab` | move the forward highlight (none → each forward → none); the bottom line previews `space` for it |
+| `l` / `tab` | focus the tunnels pane: `j`/`k` (and `g`/`G`, `tab`/`shift+tab`) then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list. The focused pane's selection is lit, the other's dim |
 | `space` | toggle highlighted forward set |
 | `+` | add ad-hoc forward (`-O forward`) |
 | `x` | cancel highlighted forward (`-O cancel`) |
@@ -196,6 +196,8 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
 | `/` `?` `q` | filter, help, quit |
+
+`e` and `t` keep working but are not listed in `?` — settings (`o`) is their discoverable home.
 
 The tunnels section renders the engine's three states verbatim, with one presentation
 cap: when two forwards claim the same local port, only the first claimant (declared sets

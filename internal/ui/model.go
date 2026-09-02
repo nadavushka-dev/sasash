@@ -44,8 +44,12 @@ func (i hostItem) FilterValue() string {
 }
 
 // hostDelegate renders one single-line row: "› alias" selected, "  alias"
-// otherwise. The prefix + bold keep the selection visible under NO_COLOR.
-type hostDelegate struct{ styles Styles }
+// otherwise. The prefix + bold keep the selection visible under NO_COLOR;
+// dim renders the selection dimmed while the tunnels pane holds focus.
+type hostDelegate struct {
+	styles Styles
+	dim    bool
+}
 
 func (hostDelegate) Height() int                               { return 1 }
 func (hostDelegate) Spacing() int                              { return 0 }
@@ -57,7 +61,11 @@ func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return
 	}
 	if index == m.Index() {
-		fmt.Fprint(w, d.styles.ItemSelected.MaxWidth(m.Width()).Render("› "+it.host.Alias))
+		style := d.styles.ItemSelected
+		if d.dim {
+			style = d.styles.ItemSelectedDim
+		}
+		fmt.Fprint(w, style.MaxWidth(m.Width()).Render("› "+it.host.Alias))
 		return
 	}
 	fmt.Fprint(w, d.styles.Item.MaxWidth(m.Width()).Render(it.host.Alias))
@@ -205,8 +213,10 @@ type Model struct {
 	loadHosts func() ([]hostmodel.Host, []error, error)
 
 	// Tunnels section (SPEC §5): tunnels is the engine seam, nil = off.
-	// tstatus is the last Status per alias; fwdIdx is the forward row tab
-	// has moved onto, -1 for none (then the preview is enter's ssh).
+	// tstatus is the last Status per alias; fwdIdx is the highlighted
+	// forward row while the tunnels pane holds focus, -1 otherwise (then
+	// the preview is enter's ssh).
+	focus     paneFocus
 	tunnels   Tunneler
 	tstatus   map[string]tunnelState
 	tinflight map[string]bool // a Status poll is running for the alias
@@ -291,6 +301,16 @@ type Config struct {
 	// disables the entry. The cmd layer wires fwdset.Add on sasash.conf.
 	SaveForwardSet func(alias, name string, specs []string) error
 }
+
+// paneFocus says which pane the navigation keys move (SPEC §5: l/tab
+// and h/esc switch it; the focused pane's selection is lit, the other's
+// dim).
+type paneFocus int
+
+const (
+	focusList    paneFocus = iota
+	focusTunnels           // j/k move the forward highlight
+)
 
 // promptMode says which prompt, if any, owns the keyboard.
 type promptMode int
@@ -383,7 +403,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 func (m Model) applyTheme(idx int) Model {
 	m.themeIdx = idx
 	m.styles = NewStyles(Themes[idx].Palette)
-	m.list.SetDelegate(hostDelegate{styles: m.styles})
+	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: m.focus == focusTunnels})
 	m.help.Styles.ShortKey = m.styles.HelpKey
 	m.help.Styles.ShortDesc = m.styles.HelpDesc
 	m.help.Styles.ShortSeparator = m.styles.HelpSep
@@ -391,6 +411,54 @@ func (m Model) applyTheme(idx int) Model {
 	m.help.Styles.FullDesc = m.styles.HelpDesc
 	m.help.Styles.FullSeparator = m.styles.HelpSep
 	return m
+}
+
+// setFocus moves pane focus: the list selection lights or dims with it,
+// and the forward highlight exists only under tunnels focus.
+func (m Model) setFocus(f paneFocus) Model {
+	m.focus = f
+	if f == focusList {
+		m.fwdIdx = -1
+	}
+	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: f == focusTunnels})
+	return m
+}
+
+// tunnelsFocusKey routes navigation while the tunnels pane holds focus:
+// j/k (tab/shift+tab) move the highlight, clamped; g/G jump; h/esc go
+// back to the list. Everything else is not handled here — action keys
+// keep their meanings in both foci.
+func (m Model) tunnelsFocusKey(msg tea.KeyMsg) (Model, bool) {
+	host, ok := m.Selected()
+	rows, _ := m.forwardRows(host)
+	if !ok || len(rows) == 0 {
+		// The rows went away under the focus (a reload): nothing to
+		// move over, so the list has it again.
+		return m.setFocus(focusList), false
+	}
+	move := func(d int) Model {
+		m.fwdIdx = min(max(m.fwdIdx+d, 0), len(rows)-1)
+		return m
+	}
+	switch {
+	case key.Matches(msg, m.keys.Down) || msg.String() == "tab":
+		return move(1), true
+	case key.Matches(msg, m.keys.Up) || msg.String() == "shift+tab":
+		return move(-1), true
+	case key.Matches(msg, m.keys.HalfDown):
+		return move(m.halfPage()), true
+	case key.Matches(msg, m.keys.HalfUp):
+		return move(-m.halfPage()), true
+	case key.Matches(msg, m.keys.Top):
+		m.fwdIdx = 0
+		return m, true
+	case key.Matches(msg, m.keys.Bottom):
+		m.fwdIdx = len(rows) - 1
+		return m, true
+	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter) && !m.help.ShowAll:
+		return m.setFocus(focusList), true
+	}
+	return m, false
 }
 
 // Selected returns the host under the cursor; ok is false when the list is
@@ -658,6 +726,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (SPEC §5 addendum): everything below is typed text then, and
 		// only the list — which owns the input — sees the key.
 		if m.list.FilterState() != list.Filtering {
+			if m.focus == focusTunnels {
+				if next, handled := m.tunnelsFocusKey(msg); handled {
+					return next, nil
+				} else {
+					m = next
+				}
+			}
 			switch {
 			case key.Matches(msg, m.keys.Quit):
 				return m, tea.Quit
@@ -700,24 +775,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, clipCmd(m.runner, strings.Join(argv, " "))
-			case key.Matches(msg, m.keys.NextFwd), key.Matches(msg, m.keys.PrevFwd):
+			case key.Matches(msg, m.keys.FocusRight):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {
 					return m, nil
 				}
-				// Cycle none -> first .. last -> none, either direction.
-				rows, _ := m.forwardRows(host)
-				if key.Matches(msg, m.keys.NextFwd) {
-					m.fwdIdx++
-				} else {
-					m.fwdIdx--
+				if rows, _ := m.forwardRows(host); len(rows) == 0 {
+					m.notice = "no tunnels on " + host.Alias + " — + adds one"
+					return m, nil
 				}
-				if m.fwdIdx >= len(rows) {
-					m.fwdIdx = -1
-				} else if m.fwdIdx < -1 {
-					m.fwdIdx = len(rows) - 1
-				}
+				m = m.setFocus(focusTunnels)
+				m.fwdIdx = 0
 				return m, nil
+			case key.Matches(msg, m.keys.FocusLeft):
+				return m, nil // already on the list
 			case key.Matches(msg, m.keys.Toggle):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {
@@ -725,7 +796,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				row, ok := m.highlighted(host)
 				if !ok {
-					m.notice = "no forward highlighted — tab picks one"
+					m.notice = "no forward highlighted — l focuses the tunnels pane"
 					return m, nil
 				}
 				return m, m.toggleCmd(host, row)
@@ -742,7 +813,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				row, ok := m.highlighted(host)
 				if !ok {
-					m.notice = "no forward highlighted — tab picks one"
+					m.notice = "no forward highlighted — l focuses the tunnels pane"
 					return m, nil
 				}
 				return m, m.cancelCmd(host, row)

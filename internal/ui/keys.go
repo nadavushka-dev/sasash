@@ -21,8 +21,8 @@ type KeyMap struct {
 	CopyCmd     key.Binding
 	Adhoc       key.Binding
 	Edit        key.Binding
-	NextFwd     key.Binding
-	PrevFwd     key.Binding
+	FocusRight  key.Binding
+	FocusLeft   key.Binding
 	Toggle      key.Binding
 	AddFwd      key.Binding
 	CancelFwd   key.Binding
@@ -37,9 +37,9 @@ type KeyMap struct {
 	ForceQuit   key.Binding
 }
 
-// DefaultKeyMap is the vim-style layout. Bare h/l/b/f/u/d stay unbound:
-// they page in the bubbles list defaults and would collide with the
-// single-letter action keys of later slices.
+// DefaultKeyMap is the vim-style layout. Bare b/f/u/d stay unbound: they
+// page in the bubbles list defaults and would collide with the
+// single-letter action keys. h/l, reserved since 1.3, move pane focus.
 func DefaultKeyMap() KeyMap {
 	return KeyMap{
 		Up:          key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("↑/k", "up")),
@@ -54,8 +54,8 @@ func DefaultKeyMap() KeyMap {
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
 		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
-		NextFwd:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next forward")),
-		PrevFwd:     key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev forward")),
+		FocusRight:  key.NewBinding(key.WithKeys("l", "tab"), key.WithHelp("l/tab", "tunnels pane")),
+		FocusLeft:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "host list")),
 		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
 		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward")),
 		CancelFwd:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel forward")),
@@ -72,9 +72,10 @@ func DefaultKeyMap() KeyMap {
 }
 
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
-// the most-reached-for keys come first.
+// the most-reached-for keys come first. e and t keep working but are not
+// listed: settings (o) is their discoverable home (SASASH.4.5).
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.NextFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.FocusRight, k.CopyAddr, k.CopyCmd, k.Herdr, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /
@@ -85,9 +86,9 @@ func (k KeyMap) ShortHelp() []key.Binding {
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Quit},
-		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
-		{k.Connect, k.Herdr, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme},
-		{k.NextFwd, k.PrevFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit},
+		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.FocusRight, k.FocusLeft},
+		{k.Connect, k.Herdr, k.Adhoc, k.CopyAddr, k.CopyCmd},
+		{k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit},
 	}
 }
 

@@ -12,6 +12,9 @@ type Styles struct {
 	// Host list (left pane).
 	Item         lipgloss.Style // unselected row
 	ItemSelected lipgloss.Style // "› " row: accent text over selection fill
+	// ItemSelectedDim is the same row while the tunnels pane holds focus:
+	// dim text over the subtle fill (research: lit vs dimmed selection).
+	ItemSelectedDim lipgloss.Style
 
 	// Detail (right pane).
 	SectionLabel lipgloss.Style // "paths" heading
@@ -45,6 +48,8 @@ func NewStyles(p Palette) Styles {
 
 		Item:         lipgloss.NewStyle().Foreground(p.Fg).PaddingLeft(2),
 		ItemSelected: lipgloss.NewStyle().Foreground(p.Accent).Background(p.Selection).Bold(true),
+
+		ItemSelectedDim: lipgloss.NewStyle().Foreground(p.FgDim).Background(p.BgSubtle).Bold(true),
 
 		SectionLabel: lipgloss.NewStyle().Foreground(p.FgDim),
 		PathName:     lipgloss.NewStyle().Foreground(p.Fg),

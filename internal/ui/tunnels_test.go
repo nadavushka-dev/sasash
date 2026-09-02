@@ -192,7 +192,7 @@ func aliveWeb0(t *testing.T) (ui.Model, *fakerun.Fake) {
 	return polled(t, r, d), r
 }
 
-func TestModel_Update_TabCyclesHighlightAndPreview(t *testing.T) {
+func TestModel_Update_FocusMovesHighlightAndPreview(t *testing.T) {
 	t.Parallel()
 	m, _ := aliveWeb0(t)
 	steps := []struct {
@@ -201,13 +201,20 @@ func TestModel_Update_TabCyclesHighlightAndPreview(t *testing.T) {
 		wantMore    string
 	}{
 		{key: "", wantPreview: "$ ssh ubuntu"},
-		// web is partially up: space goes through Up, one -L per spec.
+		// l focuses the pane on the first row. web is partially up:
+		// space goes through Up, one -L per spec.
+		{key: "l", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
+		{key: "j", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
+		{key: "j", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"},
+		{key: "j", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"}, // clamps at the last row
+		{key: "k", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
+		{key: "G", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"},
+		{key: "g", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
 		{key: "tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "tab", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"},
-		{key: "tab", wantPreview: "$ ssh ubuntu"},
-		{key: "shift+tab", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"},
 		{key: "shift+tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
+		{key: "h", wantPreview: "$ ssh ubuntu"},
+		{key: "tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"}, // tab from the list = l
+		{key: "esc", wantPreview: "$ ssh ubuntu"},
 	}
 	for i, st := range steps {
 		if st.key != "" {
@@ -224,8 +231,11 @@ func TestModel_Update_TabCyclesHighlightAndPreview(t *testing.T) {
 			t.Errorf("step %d (%s): View() shows a count for a single command:\n%s", i, st.key, view)
 		}
 	}
-	// The highlighted row carries the mark.
-	m = press(t, m, "tab") // web1 -> api
+	// The highlighted row carries the mark; the host list never moved.
+	m = press(t, m, "l", "G") // api
+	if host, _ := m.Selected(); host.Alias != "ubuntu" || !ui.TunnelsFocused(m) {
+		t.Fatalf("Selected() = %q, focused %v; want ubuntu under tunnels focus", host.Alias, ui.TunnelsFocused(m))
+	}
 	for _, line := range strings.Split(m.View(), "\n") {
 		if strings.Contains(line, "$ ") {
 			continue // the preview line, not a row
@@ -246,7 +256,7 @@ func TestModel_Update_CopyCmdCopiesPreview(t *testing.T) {
 	m, r := aliveWeb0(t)
 	want := "ssh -O forward -L " + specAPI + " ubuntu"
 	r.StubExit(0, ui.ClipArgv(want)...)
-	m = press(t, m, "tab", "tab", "tab")
+	m = press(t, m, "l", "G")
 	_, cmd := m.Update(keyMsg("c"))
 	if cmd == nil {
 		t.Fatalf("Update(c) cmd = nil, want clipboard cmd")
@@ -267,7 +277,7 @@ func TestModel_Update_SpaceBringsSetUp(t *testing.T) {
 		StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
 		StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
 	m := polled(t, r, fakedial.New())
-	m = press(t, m, "tab")
+	m = press(t, m, "l")
 	if view := m.View(); !strings.Contains(view, "$ ssh -fN ubuntu") || !strings.Contains(view, "+2 more") {
 		t.Fatalf("View() with a dead master should preview the start:\n%s", view)
 	}
@@ -305,7 +315,7 @@ func TestModel_Update_SpaceTakesSetDown(t *testing.T) {
 		StubExit(0, "ssh", "-O", "cancel", "-L", specWeb1, "ubuntu")
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond).Up("127.0.0.1:3001", time.Millisecond)
 	m := polled(t, r, d)
-	m = press(t, m, "tab")
+	m = press(t, m, "l")
 	if view := m.View(); !strings.Contains(view, "$ ssh -O cancel -L "+specWeb0+" ubuntu") || !strings.Contains(view, "+1 more") {
 		t.Fatalf("View() with web fully up should preview the cancel:\n%s", view)
 	}
@@ -397,7 +407,7 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 			}
 			m := tunnelModel(t, r, d, tt.stateDir(t))
 			m = feed(t, m, m.Init())
-			m = press(t, m, "tab") // web
+			m = press(t, m, "l") // web
 			next, cmd := m.Update(keyMsg(" "))
 			m = next.(ui.Model)
 			if cmd == nil {
@@ -439,7 +449,7 @@ func TestModel_Update_SpaceNeedsHighlight(t *testing.T) {
 	if cmd != nil || len(r.CallKeys()) != before {
 		t.Errorf("Update(space) without a highlight ran something: cmd %v, calls %v", cmd != nil, r.CallKeys()[before:])
 	}
-	if view := m.View(); !strings.Contains(view, "tab") {
+	if view := m.View(); !strings.Contains(view, "l focuses") {
 		t.Errorf("View() missing the tab hint:\n%s", view)
 	}
 }
@@ -524,9 +534,15 @@ func TestModel_Update_HighlightResetsOnHostChange(t *testing.T) {
 		StubExit(0, "ssh", "-O", "check", "ubuntu").
 		StubExit(0, "ssh", "-O", "check", "spare")
 	m := polled(t, r, fakedial.New())
-	m = press(t, m, "tab", "G")
-	if view := m.View(); !strings.Contains(view, "$ ssh spare") || strings.Contains(view, "› ○ db") {
-		t.Errorf("View() after G carries ubuntu's highlight onto spare:\n%s", view)
+	// Under tunnels focus G moves the highlight, never the host.
+	m = press(t, m, "l", "G")
+	if host, _ := m.Selected(); host.Alias != "ubuntu" {
+		t.Fatalf("Selected() under tunnels focus after G = %q, want ubuntu", host.Alias)
+	}
+	// Back on the list, G changes host and no highlight comes along.
+	m = press(t, m, "h", "G")
+	if view := m.View(); !strings.Contains(view, "$ ssh spare") || strings.Contains(view, "› ○ db") || ui.TunnelsFocused(m) {
+		t.Errorf("View() after h G carries ubuntu's highlight onto spare:\n%s", view)
 	}
 }
 
@@ -535,7 +551,7 @@ func TestModel_Update_TunnelKeysInertWhileFiltering(t *testing.T) {
 	m, r := aliveWeb0(t)
 	before := len(r.CallKeys())
 	// With a row highlighted — the realistic state — every key is text.
-	m = press(t, m, "tab", "/", " ", "X", "r")
+	m = press(t, m, "l", "/", " ", "X", "r")
 	if got := ui.FilterText(m); got != " Xr" {
 		t.Errorf("FilterText() = %q, want %q", got, " Xr")
 	}
@@ -550,7 +566,6 @@ func TestModel_Update_SelectionChangeFetchesStatus(t *testing.T) {
 		StubExit(0, "ssh", "-O", "check", "ubuntu").
 		StubExit(255, "ssh", "-O", "check", "bare")
 	m := polled(t, r, fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
-	m = press(t, m, "tab") // highlight belongs to ubuntu
 	next, cmd := m.Update(keyMsg("j"))
 	m = next.(ui.Model)
 	if cmd == nil {
@@ -565,7 +580,6 @@ func TestModel_Update_SelectionChangeFetchesStatus(t *testing.T) {
 	if !strings.Contains(view, "○ master down") {
 		t.Errorf("View() after bare's status missing its master row:\n%s", view)
 	}
-	// The highlight did not follow the cursor to another host.
 	if !strings.Contains(view, "$ ssh bare") {
 		t.Errorf("View() preview should be enter's ssh for the new host:\n%s", view)
 	}
@@ -692,9 +706,9 @@ func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
 	if !strings.Contains(row, "ad-hoc") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
 		t.Errorf("recorded ad-hoc row = %q, want an ad-hoc row marked down", row)
 	}
-	// It is the last row: shift+tab reaches it, and with the master
+	// It is the last row: l then G reaches it, and with the master
 	// alive space would re-forward it.
-	m = press(t, m, "shift+tab")
+	m = press(t, m, "l", "G")
 	if view := m.View(); !strings.Contains(view, "$ ssh -O forward -L 5000:localhost:5000 ubuntu") {
 		t.Errorf("View() after shift+tab should preview the ad-hoc row's forward:\n%s", view)
 	}
@@ -706,7 +720,7 @@ func TestModel_View_HelpListsTunnelKeys(t *testing.T) {
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = press(t, m, "?")
 	view := m.View()
-	for _, want := range []string{"toggle set", "restart master", "exit master", "next forward"} {
+	for _, want := range []string{"toggle set", "restart master", "exit master", "tunnels pane", "host list"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() full help missing %q:\n%s", want, view)
 		}
@@ -718,8 +732,11 @@ func TestModel_View_NoTunnelsWithoutEngine(t *testing.T) {
 	// ui.Config{} (every other fixture) must never shell out or render
 	// the section: the seam is nil, not a zero engine over run.OS{}.
 	m := sized(t, tunnelHosts())
-	if view := m.View(); strings.Contains(view, "tunnels") {
+	if view := m.View(); strings.Contains(view, "master") {
 		t.Errorf("View() renders the tunnels section with no engine:\n%s", view)
+	}
+	if m = press(t, m, "l"); ui.TunnelsFocused(m) {
+		t.Errorf("l focused a tunnels pane that does not exist")
 	}
 	if _, cmd := m.Update(keyMsg(" ")); cmd != nil {
 		t.Errorf("Update(space) with no engine cmd = %v, want nil", cmd)

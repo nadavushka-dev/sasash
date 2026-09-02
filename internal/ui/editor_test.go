@@ -317,28 +317,39 @@ func TestModel_Update_EditorReloadShowsWarnings(t *testing.T) {
 	}
 }
 
-func TestModel_View_HelpListsEdit(t *testing.T) {
+func TestModel_View_HelpOmitsEditAndTheme(t *testing.T) {
 	t.Parallel()
-	// Presence only, at widths where the entry fits — not a golden frame.
-	// Below ~70 cols bubbles drops the whole actions column (pre-existing
-	// for a/y/c/t too); short help at 80 truncates before e.
+	// Deliberate inversion of the 4.2 presence pin (SASASH.4.5): e and t
+	// keep working but are NOT listed in either help — settings (o) is
+	// their discoverable home. Absence is checked at the widths where
+	// they used to fit, so a truncation cannot pass the test by accident.
 	tests := []struct {
 		name  string
 		width int
 		full  bool
 	}{
-		{name: "short help at 120", width: 120},
-		{name: "full help at 70", width: 70, full: true},
+		{name: "short help at 200", width: 200},
+		{name: "full help at 100", width: 100, full: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: tt.width, Height: 24})
+			m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: tt.width, Height: 30})
 			if tt.full {
 				m = press(t, m, "?")
 			}
-			if view := m.View(); !strings.Contains(view, "edit config") {
-				t.Errorf("View() at width %d (full help %v) missing the e entry:\n%s", tt.width, tt.full, view)
+			view := m.View()
+			for _, gone := range []string{"edit config", "theme"} {
+				if strings.Contains(view, gone) {
+					t.Errorf("View() at width %d (full help %v) still lists %q:\n%s", tt.width, tt.full, gone, view)
+				}
+			}
+			// The keys themselves still work.
+			if _, cmd := ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf").Update(keyMsg("e")); cmd == nil {
+				t.Errorf("Update(e) cmd = nil, want the editor handoff")
+			}
+			if got := ui.ThemeName(press(t, m, "t")); got == "gruvbox" {
+				t.Errorf("t did not cycle the theme")
 			}
 		})
 	}

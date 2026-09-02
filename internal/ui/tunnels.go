@@ -159,8 +159,8 @@ func sharedWith(rows []tunnel.Forward, i int) string {
 	return ""
 }
 
-// highlighted returns the forward row tab has moved onto, if any. The
-// index is clamped lazily: a reload can shrink the rows under it.
+// highlighted returns the forward row the tunnels focus is on, if any.
+// The index is clamped lazily: a reload can shrink the rows under it.
 func (m Model) highlighted(host hostmodel.Host) (tunnel.Forward, bool) {
 	rows, _ := m.forwardRows(host)
 	if m.fwdIdx < 0 || m.fwdIdx >= len(rows) {

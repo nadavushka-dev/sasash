@@ -134,6 +134,9 @@ var (
 	WithLocalPort = withLocalPort
 )
 
+// TunnelsFocused reports whether the tunnels pane holds focus.
+func TunnelsFocused(m Model) bool { return m.focus == focusTunnels }
+
 // SettingsOpen reports whether the `o` panel owns the keyboard.
 func SettingsOpen(m Model) bool { return m.settings.pane != settingsOff }
 

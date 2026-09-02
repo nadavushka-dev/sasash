@@ -259,7 +259,7 @@ func TestModel_Update_CancelHighlighted(t *testing.T) {
 			}
 			m := tunnelModel(t, r, fakedial.New(), stateDir)
 			m = feed(t, m, m.Init())
-			m = press(t, m, "tab") // web0
+			m = press(t, m, "l") // web0
 			before := len(r.CallKeys())
 			next, cmd := m.Update(keyMsg("x"))
 			m = next.(ui.Model)
@@ -286,7 +286,7 @@ func TestModel_Update_CancelNeedsHighlight(t *testing.T) {
 	if cmd != nil || len(r.CallKeys()) != before {
 		t.Errorf("Update(x) without a highlight ran something")
 	}
-	if view := m.View(); !strings.Contains(view, "tab") {
+	if view := m.View(); !strings.Contains(view, "l focuses") {
 		t.Errorf("View() missing the tab hint:\n%s", view)
 	}
 }
@@ -329,7 +329,7 @@ func TestModel_View_SharedPortDemoted(t *testing.T) {
 	}
 	// The demotion reaches actions too: the ad-hoc set is not "all up",
 	// so space previews a re-forward, not a cancel.
-	m = press(t, m, "shift+tab")
+	m = press(t, m, "l", "G")
 	if view := m.View(); !strings.Contains(view, "$ ssh -O forward -L 3000:localhost:9999 ubuntu") {
 		t.Errorf("View() preview on the demoted row should be a forward:\n%s", view)
 	}
@@ -492,7 +492,7 @@ func TestModel_Update_ForwardKeysInertWhileFiltering(t *testing.T) {
 	t.Parallel()
 	m, r := aliveWeb0(t)
 	before := len(r.CallKeys())
-	m = press(t, m, "tab", "/", "+", "x")
+	m = press(t, m, "l", "/", "+", "x")
 	if got := ui.FilterText(m); got != "+x" {
 		t.Errorf("FilterText() = %q, want %q", got, "+x")
 	}

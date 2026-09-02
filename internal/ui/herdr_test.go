@@ -87,7 +87,7 @@ func TestModel_View_HerdrPreview(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H herdr --remote ubuntu") {
 		t.Errorf("View() missing the herdr preview beside enter's:\n%s", view)
 	}
-	m = press(t, m, "tab")
+	m = press(t, m, "l")
 	if view := m.View(); strings.Contains(view, "herdr --remote") {
 		t.Errorf("View() with a forward highlighted still previews herdr:\n%s", view)
 	}
@@ -132,7 +132,7 @@ func TestModel_View_HerdrPreviewAfterRowsShrink(t *testing.T) {
 	}
 	m := tunnelModel(t, r, fakedial.New(), stateDir)
 	m = feed(t, m, m.Init())
-	m = press(t, m, "shift+tab") // last row: 5001
+	m = press(t, m, "l", "G") // last row: 5001
 	if view := m.View(); strings.Contains(view, "herdr --remote") {
 		t.Fatalf("View() with a row highlighted should not name H:\n%s", view)
 	}
