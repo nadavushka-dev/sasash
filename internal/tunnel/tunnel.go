@@ -339,14 +339,14 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 		// Best-effort persistence: the returned view is correct for this
 		// render even when the write failed, and a render must not break
 		// over a stale cache (ratified contract §2).
-		obs, corrupt, _ := e.Stats.ObserveHost(host, master, accepting)
+		obs, statsCorrupt, _ := e.Stats.ObserveHost(host, master, accepting)
 		out.MasterSince = obs.MasterSince
 		out.MasterDownSince = obs.MasterDownSince
 		out.MasterBySasash = obs.MasterBySasash
 		out.LastHandoff = obs.LastHandoff
 		out.LastSwitch = obs.LastSwitch
 		out.LastSwitchPath = obs.LastSwitchPath
-		out.CorruptStats = corrupt
+		out.CorruptStats = statsCorrupt
 		for i := range out.Forwards {
 			fo := obs.Forwards[out.Forwards[i].Spec]
 			out.Forwards[i].Since = fo.Since

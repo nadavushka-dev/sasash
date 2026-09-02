@@ -166,6 +166,26 @@ func TestStore_RecordMasterStart(t *testing.T) {
 	}
 }
 
+// The common real-world sequence: sasash starts a master that was observed
+// down. The down marker must clear, or the illegal both-set shape appears.
+func TestStore_RecordMasterStart_AfterDownRun(t *testing.T) {
+	t.Parallel()
+	s := tickStore(t, t0, t1, t2)
+	if _, _, err := s.ObserveHost("ubuntu", true, nil); err != nil {
+		t.Fatalf("ObserveHost(alive) err = %v", err)
+	}
+	if _, _, err := s.ObserveHost("ubuntu", false, nil); err != nil {
+		t.Fatalf("ObserveHost(dead) err = %v", err)
+	}
+	if err := s.RecordMasterStart("ubuntu"); err != nil {
+		t.Fatalf("RecordMasterStart() err = %v", err)
+	}
+	got, _ := s.Load("ubuntu")
+	if !got.MasterSince.Equal(t2) || !got.MasterDownSince.IsZero() || !got.MasterBySasash {
+		t.Errorf("Load() = %+v, want fresh sasash run at t2 with the down marker cleared", got)
+	}
+}
+
 func TestStore_RecordHooks(t *testing.T) {
 	t.Parallel()
 	s := tickStore(t, t0, t1)
