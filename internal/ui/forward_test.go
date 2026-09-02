@@ -239,17 +239,26 @@ func TestModel_Update_CancelHighlighted(t *testing.T) {
 		reply      fakerun.Reply
 		wantNotice string
 	}{
-		{name: "cancel runs for the one row", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNotice: "cancelled " + specAPI},
+		{name: "cancel runs for the one row", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNotice: "cancelled " + specWeb0},
 		{name: "already gone reports ssh's reason", reply: fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, wantNotice: "cancel: unknown port forwarding"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			// web has two specs and the cache records its second: x on
+			// the first row must cancel that one only — never the set
+			// (DownSet would also cancel the recorded spec, unstubbed).
 			r := fakerun.New().
 				StubExit(0, "ssh", "-O", "check", "ubuntu").
-				Stub(tt.reply, "ssh", "-O", "cancel", "-L", specAPI, "ubuntu")
-			m := polled(t, r, fakedial.New())
-			m = press(t, m, "tab", "tab", "tab") // api
+				Stub(tt.reply, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu")
+			stateDir := t.TempDir()
+			state := `{"forwards":[{"set":"web","spec":"` + specWeb1 + `"}]}`
+			if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			m := tunnelModel(t, r, fakedial.New(), stateDir)
+			m = feed(t, m, m.Init())
+			m = press(t, m, "tab") // web0
 			before := len(r.CallKeys())
 			next, cmd := m.Update(keyMsg("x"))
 			m = next.(ui.Model)
@@ -257,7 +266,7 @@ func TestModel_Update_CancelHighlighted(t *testing.T) {
 				t.Fatalf("Update(x) cmd = nil, want cancel cmd")
 			}
 			m = update(t, m, cmd())
-			if got, want := r.CallKeys()[before:], []string{"ssh -O cancel -L " + specAPI + " ubuntu"}; !reflect.DeepEqual(got, want) {
+			if got, want := r.CallKeys()[before:], []string{"ssh -O cancel -L " + specWeb0 + " ubuntu"}; !reflect.DeepEqual(got, want) {
 				t.Errorf("x calls = %v, want %v", got, want)
 			}
 			if view := m.View(); !strings.Contains(view, tt.wantNotice) {
