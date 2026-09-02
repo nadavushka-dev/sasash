@@ -16,6 +16,11 @@ type KeyMap struct {
 	CopyCmd     key.Binding
 	Adhoc       key.Binding
 	Edit        key.Binding
+	NextFwd     key.Binding
+	PrevFwd     key.Binding
+	Toggle      key.Binding
+	Restart     key.Binding
+	Exit        key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
 	Theme       key.Binding
@@ -40,6 +45,11 @@ func DefaultKeyMap() KeyMap {
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
 		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
+		NextFwd:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next forward")),
+		PrevFwd:     key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev forward")),
+		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
+		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart master")),
+		Exit:        key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "exit master")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
@@ -52,18 +62,20 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.NextFwd, k.Toggle, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
-// FullHelp implements help.KeyMap, grouped general / navigation / actions;
-// `?` expands the help bar into these columns. bubbles drops whole columns
-// right-to-left when the terminal is narrow, so the group holding filter,
-// esc, help, and quit — the keys the view exists to document — comes first.
+// FullHelp implements help.KeyMap, grouped general / navigation / actions /
+// tunnels; `?` expands the help bar into these columns. bubbles drops whole
+// columns right-to-left when the terminal is narrow, so the group holding
+// filter, esc, help, and quit — the keys the view exists to document —
+// comes first.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp},
 		{k.Connect, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme},
+		{k.NextFwd, k.PrevFwd, k.Toggle, k.Restart, k.Exit},
 	}
 }
 

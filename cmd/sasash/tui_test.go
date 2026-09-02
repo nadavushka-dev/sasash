@@ -10,6 +10,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -181,6 +182,10 @@ func TestTuiConfig(t *testing.T) {
 			}
 			if cfg.SaveTheme == nil || cfg.SaveHost == nil || cfg.LoadHosts == nil {
 				t.Errorf("tuiConfig() hooks = %v %v %v, want all wired", cfg.SaveTheme != nil, cfg.SaveHost != nil, cfg.LoadHosts != nil)
+			}
+			// The TUI and `up`/`down` must share one state cache.
+			if eng, ok := cfg.Tunnels.(tunnel.Engine); !ok || eng.StateDir != stateDir(tt.home) {
+				t.Errorf("tuiConfig().Tunnels = %#v, want tunnel.Engine with StateDir %q", cfg.Tunnels, stateDir(tt.home))
 			}
 		})
 	}

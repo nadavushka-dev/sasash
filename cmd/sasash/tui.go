@@ -15,6 +15,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -119,6 +120,8 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		LoadHosts: func() ([]hostmodel.Host, []error, error) {
 			return hostmodel.Load(root, home)
 		},
+		// The same state dir as `up`/`down`, or the cache silently splits.
+		Tunnels: tunnel.Engine{StateDir: stateDir(home)},
 	}
 }
 

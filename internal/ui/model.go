@@ -23,6 +23,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 // refreshEvery is how often paths are re-probed. One refresh dials every
@@ -189,6 +190,13 @@ type Model struct {
 	saveHost  func(AdhocEntry) error // nil -> no save offer after connect
 	loadHosts func() ([]hostmodel.Host, []error, error)
 
+	// Tunnels section (SPEC §5): tunnels is the engine seam, nil = off.
+	// tstatus is the last Status per alias; fwdIdx is the forward row tab
+	// has moved onto, -1 for none (then the preview is enter's ssh).
+	tunnels Tunneler
+	tstatus map[string]tunnelState
+	fwdIdx  int
+
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
 	editorWarn string
@@ -235,6 +243,9 @@ type Config struct {
 	EditorWarn string
 	// ConfPath is the file `e` edits: sasash.conf.
 	ConfPath string
+	// Tunnels drives the tunnels section (status polling, space/r/X);
+	// nil leaves the section out. The cmd layer passes a tunnel.Engine.
+	Tunnels Tunneler
 }
 
 // promptMode says which prompt, if any, owns the keyboard.
@@ -303,6 +314,9 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		editorHint: cfg.EditorHint,
 		editorWarn: cfg.EditorWarn,
 		confPath:   cfg.ConfPath,
+		tunnels:    cfg.Tunnels,
+		tstatus:    make(map[string]tunnelState),
+		fwdIdx:     -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
 	return m.applyTheme(idx)
@@ -333,12 +347,14 @@ func (m Model) Selected() (hostmodel.Host, bool) {
 	return it.host, true
 }
 
-// Init kicks off the first probe; rendering never waits on it.
+// Init kicks off the first probe (and the selected host's tunnel status);
+// rendering never waits on either.
 func (m Model) Init() tea.Cmd {
-	return probeCmd(m.prober, m.hosts)
+	return tea.Batch(probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before, _ := m.Selected()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -360,7 +376,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshTickMsg:
 		m.tickArmed = false
-		return m, probeCmd(m.prober, m.hosts)
+		return m, tea.Batch(probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
+
+	case tunnelStatusMsg:
+		m.tstatus[msg.host] = tunnelState{status: msg.status, err: msg.err}
+		return m, nil
+
+	case tunnelDoneMsg:
+		switch {
+		case msg.err == nil:
+			m.notice = msg.done
+		case errors.Is(msg.err, tunnel.ErrStateWrite):
+			// The ssh side succeeded; only the cache write failed.
+			m.notice = "warning: " + msg.err.Error()
+		default:
+			m.notice = msg.label + ": " + msg.err.Error()
+		}
+		// Reality may have changed either way: re-derive it.
+		if host, ok := m.hostByAlias(msg.host); ok {
+			return m, m.tunnelStatusCmd(host)
+		}
+		return m, nil
 
 	case sshExitMsg:
 		// A non-zero ssh exit is not news — ssh printed its own diagnosis
@@ -453,7 +489,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// selection at all. Under an applied filter the visible items are
 		// empty until the FilterMatchesMsg lands — that arm clamps too.
 		clampCursor(&m.list)
-		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts))
+		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
 	case list.FilterMatchesMsg:
 		var cmd tea.Cmd
@@ -519,11 +555,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, clipCmd(m.runner, s.Path.Host)
 			case key.Matches(msg, m.keys.CopyCmd):
-				host, ok := m.Selected()
-				if !ok {
+				argv, _ := m.actionPreview()
+				if argv == nil {
 					return m, nil
 				}
-				return m, clipCmd(m.runner, strings.Join(sshCommand(host.Alias), " "))
+				return m, clipCmd(m.runner, strings.Join(argv, " "))
+			case key.Matches(msg, m.keys.NextFwd), key.Matches(msg, m.keys.PrevFwd):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				// Cycle none -> first .. last -> none, either direction.
+				rows, _ := m.forwardRows(host)
+				if key.Matches(msg, m.keys.NextFwd) {
+					m.fwdIdx++
+				} else {
+					m.fwdIdx--
+				}
+				if m.fwdIdx >= len(rows) {
+					m.fwdIdx = -1
+				} else if m.fwdIdx < -1 {
+					m.fwdIdx = len(rows) - 1
+				}
+				return m, nil
+			case key.Matches(msg, m.keys.Toggle):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				row, ok := m.highlighted(host)
+				if !ok {
+					m.notice = "no forward highlighted — tab picks one"
+					return m, nil
+				}
+				return m, m.toggleCmd(host, row)
+			case key.Matches(msg, m.keys.Restart):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				return m, m.restartCmd(host)
+			case key.Matches(msg, m.keys.Exit):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				return m, m.exitCmd(host)
 			case key.Matches(msg, m.keys.Edit):
 				if len(m.editor) == 0 || m.confPath == "" {
 					return m, nil
@@ -572,6 +649,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	// A new host under the cursor: the forward highlight belongs to the
+	// old one, and the new one's tunnel status is fetched once — the
+	// refresh tick keeps only the selected host current.
+	if after, ok := m.Selected(); ok && after.Alias != before.Alias {
+		m.fwdIdx = -1
+		if _, known := m.tstatus[after.Alias]; !known {
+			cmd = tea.Batch(cmd, m.tunnelStatusCmd(after))
+		}
+	}
 	return m, cmd
 }
 
@@ -747,15 +833,24 @@ func (m Model) detailView() string {
 			b.WriteString(" " + m.styles.ActiveMark.Render("← active"))
 		}
 	}
+	if m.tunnels != nil {
+		b.WriteString(m.tunnelsView(host))
+	}
 	return b.String()
 }
 
-// previewView is the bottom command line: what enter will run (SPEC §5,
-// "always shows what the highlighted action will run").
+// previewView is the bottom command line: what enter will run, or — with
+// a forward row highlighted — what space will (SPEC §5, "always shows what
+// the highlighted action will run"). A set is one ssh call per forward;
+// the first is shown and the rest counted.
 func (m Model) previewView() string {
-	host, ok := m.Selected()
-	if !ok {
+	argv, more := m.actionPreview()
+	if argv == nil {
 		return ""
 	}
-	return " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(sshCommand(host.Alias), " "))
+	v := " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(argv, " "))
+	if more > 0 {
+		v += " " + m.styles.PathExtra.Render(fmt.Sprintf("+%d more", more))
+	}
+	return v
 }

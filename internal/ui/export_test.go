@@ -108,6 +108,15 @@ func WithLoadHosts(m Model, f func() ([]hostmodel.Host, []error, error)) Model {
 	return m
 }
 
+// Tunnel preview argv builders, exposed so the parity test can pin them
+// to the engine's real calls.
+var (
+	StartArgv   = startArgv
+	ForwardArgv = forwardArgv
+	CancelArgv  = cancelArgv
+	ExitArgv    = exitArgv
+)
+
 // Prompting and PromptingSave expose which prompt, if any, owns the keys.
 func Prompting(m Model) bool     { return m.mode != promptNone }
 func PromptingSave(m Model) bool { return m.mode == promptAlias }

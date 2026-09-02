@@ -22,6 +22,9 @@ type Styles struct {
 	StatusUp     lipgloss.Style // ● glyph
 	StatusDown   lipgloss.Style // ○ glyph
 	StatusWait   lipgloss.Style // ◌ glyph
+	// Tunnels section.
+	StatusListening lipgloss.Style // ◐ glyph: port answers, master unverified
+	RowMark         lipgloss.Style // "› " on the highlighted forward row
 
 	// Bottom chrome.
 	CmdPrompt  lipgloss.Style // the "$"
@@ -51,6 +54,9 @@ func NewStyles(p Palette) Styles {
 		StatusUp:     lipgloss.NewStyle().Foreground(p.Success),
 		StatusDown:   lipgloss.NewStyle().Foreground(p.Error),
 		StatusWait:   lipgloss.NewStyle().Foreground(p.Warning),
+
+		StatusListening: lipgloss.NewStyle().Foreground(p.Warning),
+		RowMark:         lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
 
 		CmdPrompt:  lipgloss.NewStyle().Foreground(p.Accent),
 		CmdPreview: lipgloss.NewStyle().Foreground(p.FgDim).Italic(true),
