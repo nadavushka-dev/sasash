@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/stats"
@@ -257,7 +258,13 @@ type Model struct {
 	// made to, stamped when the terminal comes back; pendingStamp holds
 	// stamps waiting for an in-flight poll of that host to land.
 	handoffHost  string
-	pendingStamp map[string]bool
+	pendingStamp map[string]func() error // stamp to run on the host's next poll
+
+	// p (SASASH.2.6): the cycle hook, the HostName read behind its
+	// preview, and the switch stamp.
+	switchPath   func(alias string) (pathswitch.Result, error)
+	hostName     func(alias string) (string, bool)
+	recordSwitch func(alias, pathName string) error
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -327,6 +334,14 @@ type Config struct {
 	// down-since, ago); nil is wall time. Tests inject a fake and never
 	// sleep.
 	Clock stats.Clock
+	// SwitchPath cycles a host's active path (the p key): the cmd layer
+	// wires pathswitch.Cycle on sasash.conf; nil disables p. HostName reads
+	// the block's current HostName from sasash.conf (false when the alias
+	// is not managed there) so the preview can name the exact target;
+	// RecordSwitch stamps a successful switch through stats.Store.
+	SwitchPath   func(alias string) (pathswitch.Result, error)
+	HostName     func(alias string) (string, bool)
+	RecordSwitch func(alias, pathName string) error
 	// RecordHandoff stamps the last interactive handoff (enter/H) for a
 	// managed host after the terminal comes back; nil disables. The cmd
 	// layer wires stats.Store.RecordHandoff. The stamp rides the host's
@@ -430,7 +445,10 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		clock:           clockOr(cfg.Clock),
 		hist:            make(map[string]*pathHist),
 		recordHandoff:   cfg.RecordHandoff,
-		pendingStamp:    make(map[string]bool),
+		pendingStamp:    make(map[string]func() error),
+		switchPath:      cfg.SwitchPath,
+		hostName:        cfg.HostName,
+		recordSwitch:    cfg.RecordSwitch,
 		notice:          cfg.ActionsWarn,
 		fwdIdx:          -1,
 	}
@@ -712,6 +730,28 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.offerSave()
 
+	case switchDoneMsg:
+		delete(m.tinflight, msg.host)
+		if msg.err != nil {
+			m.notice = "path: " + msg.err.Error()
+			return m, nil
+		}
+		m.notice = switchNotice(msg.res)
+		if !msg.res.Changed {
+			return m, nil
+		}
+		// The switch is on disk: remember it on the host's next poll (one
+		// writer per host), and re-read the config so the pane follows.
+		var stamp tea.Cmd
+		if m.recordSwitch != nil {
+			rec, alias, name := m.recordSwitch, msg.host, msg.res.To.Name
+			m, stamp = m.stampVia(alias, func() error { return rec(alias, name) })
+		}
+		if m.loadHosts != nil {
+			return m, tea.Batch(m.reloadCmd(false), stamp)
+		}
+		return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
+
 	case editFwdDoneMsg:
 		delete(m.tinflight, msg.host)
 		if msg.err != nil {
@@ -861,6 +901,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.ExecProcess(sshExec(host.Alias), func(err error) tea.Msg {
 					return sshExitMsg{err: err}
 				})
+			case key.Matches(msg, m.keys.CyclePath):
+				host, ok := m.Selected()
+				if !ok || m.switchPath == nil {
+					return m, nil
+				}
+				// The write and the stamp both touch this host's files:
+				// no poll meanwhile.
+				m.tinflight[host.Alias] = true
+				return m, m.switchCmd(host)
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()
 				if !ok {
@@ -1289,6 +1338,13 @@ func (m Model) previewView() string {
 			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
 			if lipgloss.Width(v+seg) <= m.width {
 				v += seg
+			}
+			// p's plan: the exact path it will make active, when it fits.
+			if plan := m.switchPlan(host); plan != "" {
+				seg := "   " + m.styles.HelpDesc.Render(plan)
+				if lipgloss.Width(v+seg) <= m.width {
+					v += seg
+				}
 			}
 		}
 	}

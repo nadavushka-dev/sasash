@@ -17,6 +17,7 @@ type KeyMap struct {
 	HalfUp      key.Binding
 	Connect     key.Binding
 	Herdr       key.Binding
+	CyclePath   key.Binding
 	CopyAddr    key.Binding
 	CopyCmd     key.Binding
 	Adhoc       key.Binding
@@ -51,6 +52,7 @@ func DefaultKeyMap() KeyMap {
 		HalfUp:      key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
 		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
 		Herdr:       key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "herdr")),
+		CyclePath:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle path")),
 		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
@@ -76,7 +78,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.CyclePath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /
@@ -89,7 +91,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.FocusRight, k.FocusLeft},
-		{k.Connect, k.Herdr, k.Adhoc, k.CopyAddr, k.CopyCmd},
+		{k.Connect, k.Herdr, k.CyclePath, k.Adhoc, k.CopyAddr, k.CopyCmd},
 		{k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit},
 	}
 }

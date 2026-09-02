@@ -54,6 +54,12 @@ func tunnelModel(t *testing.T, r *fakerun.Fake, d *fakedial.Fake, stateDir strin
 	return update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 }
 
+// tunnelEngine is a real engine over the fakes and a fresh state dir.
+func tunnelEngine(t *testing.T, r *fakerun.Fake, d *fakedial.Fake) tunnel.Engine {
+	t.Helper()
+	return tunnel.Engine{Runner: r, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+}
+
 // feed executes one cmd the way the runtime would — one level deep, a
 // batch's members each once — and delivers the produced msgs. Cmds the
 // deliveries return are dropped (a probe result arms a real 5s tick).

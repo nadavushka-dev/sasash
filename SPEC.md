@@ -183,7 +183,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `enter` | ssh to host |
 | `H` | `herdr --remote <host>` |
 | `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
-| `p` | cycle path (rewrites `HostName`) |
+| `p` | cycle the selected host's active path: rewrites `HostName` in `sasash.conf` to the next named path (after the last one matching the current `HostName`, wrapping; the first when none matches) and regenerates the pinned variants; the host row's line previews the exact target (`p → ts 198.51.100.5`, or `only one path`); the outcome is a notice — `HostName: lan … → ts …`, plus `N pinned variants left as-is` when the generator does not own a variant block — then the config is re-read and re-probed and the switch is remembered for `last switch` |
 | `l` / `tab` | focus the tunnels pane (a host without tunnels says so instead): `j`/`k`, `ctrl+d`/`ctrl+u`, `g`/`G`, `tab`/`shift+tab` then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list, as does any host change. The focused pane's selection is lit and carries the `›` mark, the other's is dim and unmarked |
 | `space` | toggle highlighted forward set |
 | `+` | add ad-hoc forward (`-O forward`) |

@@ -13,6 +13,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/action"
 	"github.com/nadavushka-dev/sasash/internal/fwdset"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/setup"
@@ -129,6 +130,11 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		Tunnels:       tunnel.Engine{StateDir: stateDir(home), Stats: &store},
 		Home:          home,
 		RecordHandoff: store.RecordHandoff,
+		// p: the switcher on sasash.conf, the HostName read behind its
+		// preview, and the switch stamp.
+		SwitchPath:   func(alias string) (pathswitch.Result, error) { return pathswitch.Cycle(confPath, alias) },
+		HostName:     hostNameIn(confPath),
+		RecordSwitch: store.RecordSwitch,
 		SaveForwardSet: func(alias, name string, specs []string) error {
 			return fwdset.Add(confPath, alias, name, specs)
 		},
@@ -138,6 +144,24 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg
+}
+
+// hostNameIn reads a managed host's HostName from sasash.conf for the p
+// preview: the alias must have a Host block there (the switcher's own
+// rule), else false. A missing or unreadable file is "not managed" too.
+func hostNameIn(confPath string) func(alias string) (string, bool) {
+	return func(alias string) (string, bool) {
+		f, err := sshconf.ParseFile(confPath)
+		if err != nil {
+			return "", false
+		}
+		h, ok := f.Host(alias)
+		if !ok {
+			return "", false
+		}
+		v, _ := h.Get("HostName")
+		return v, true
+	}
 }
 
 // loadActionNames lists actions.toml entries for the help line; a load

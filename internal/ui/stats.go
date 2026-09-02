@@ -214,7 +214,15 @@ func (m Model) stampHandoff(host string) (Model, tea.Cmd) {
 	if m.recordHandoff == nil || host == "" {
 		return m, nil
 	}
-	m.pendingStamp[host] = true
+	rec := m.recordHandoff
+	return m.stampVia(host, func() error { return rec(host) })
+}
+
+// stampVia queues one stamp for host and issues it with the next poll —
+// now, or when the in-flight one lands. A later stamp replaces an
+// unissued one for the same host.
+func (m Model) stampVia(host string, stamp func() error) (Model, tea.Cmd) {
+	m.pendingStamp[host] = stamp
 	if m.tinflight[host] {
 		return m, nil // the landing poll re-polls with the stamp
 	}
@@ -224,7 +232,8 @@ func (m Model) stampHandoff(host string) (Model, tea.Cmd) {
 // stampedPollCmd issues the deferred stamp followed by a fresh poll on
 // one goroutine, so the stamp is on disk before the render that shows it.
 func (m Model) stampedPollCmd(host string) (Model, tea.Cmd) {
-	if !m.pendingStamp[host] {
+	stamp := m.pendingStamp[host]
+	if stamp == nil {
 		return m, nil
 	}
 	h, ok := m.hostByAlias(host)
@@ -234,9 +243,9 @@ func (m Model) stampedPollCmd(host string) (Model, tea.Cmd) {
 	}
 	delete(m.pendingStamp, host)
 	m.tinflight[host] = true
-	rec, eng := m.recordHandoff, m.tunnels
+	eng := m.tunnels
 	return m, func() tea.Msg {
-		stampErr := rec(host)
+		stampErr := stamp()
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelStatusTimeout)
 		defer cancel()
 		st, err := eng.Status(ctx, host, h.Forwards)

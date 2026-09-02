@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 )
 
@@ -41,6 +42,18 @@ var (
 	Sparkline    = sparkline
 	LatencyRange = latencyRange
 )
+
+// NextPath and SwitchNotice expose the p rule and its rendering for
+// table tests; WithSwitcher wires the p hooks.
+var (
+	NextPath     = nextPath
+	SwitchNotice = switchNotice
+)
+
+func WithSwitcher(m Model, sw func(string) (pathswitch.Result, error), hn func(string) (string, bool), rec func(string, string) error) Model {
+	m.switchPath, m.hostName, m.recordSwitch = sw, hn, rec
+	return m
+}
 
 // WithRecordHandoff swaps the handoff stamp hook so tests can observe it.
 func WithRecordHandoff(m Model, f func(string) error) Model {
