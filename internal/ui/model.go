@@ -92,6 +92,21 @@ func sshExec(alias string) *exec.Cmd {
 	return execCommand(sshCommand(alias))
 }
 
+// herdrCommand is the argv `H` hands the terminal to (SPEC §5/§6): herdr
+// reads ssh_config itself, so it needs no actions.toml template.
+func herdrCommand(alias string) []string {
+	return []string{"herdr", "--remote", alias}
+}
+
+// herdrExec is the ONE construction site of the herdr handoff process.
+func herdrExec(alias string) *exec.Cmd {
+	return execCommand(herdrCommand(alias))
+}
+
+// herdrExitMsg arrives when the terminal comes back from herdr. err
+// reports only a failure to start; herdr's own exit code is not news.
+type herdrExitMsg struct{ err error }
+
 // editorArgv is the exact invocation `e` hands the terminal to.
 func editorArgv(editor []string, confPath string) []string {
 	return append(append([]string{}, editor...), confPath)
@@ -763,7 +778,7 @@ func (m Model) helpView() string {
 		k = filterKeys{}
 	}
 	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
-	if m.help.ShowAll && m.mode == promptNone {
+	if m.help.ShowAll && m.mode == promptNone && m.list.FilterState() != list.Filtering {
 		if line := actionsLine(m.actions); line != "" {
 			v += "\n" + m.styles.Clamp.MaxWidth(m.width).Render(m.styles.HelpDesc.Render(line))
 		}
@@ -916,10 +931,15 @@ func (m Model) previewView() string {
 	if more > 0 {
 		v += " " + m.styles.PathExtra.Render(fmt.Sprintf("+%d more", more))
 	}
-	// H is the other handoff on the host row: shown beside enter's, so
-	// the line names both commands that can run from here.
-	if host, ok := m.Selected(); ok && m.fwdIdx < 0 {
-		v += "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
+	// H is the other handoff on the host row: named beside enter's when
+	// it fits whole — a half-rendered command would be a lie, so a long
+	// alias drops it rather than clipping it.
+	host, ok := m.Selected()
+	if _, hl := m.highlighted(host); ok && !hl {
+		seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
+		if lipgloss.Width(v+seg) <= m.width {
+			v += seg
+		}
 	}
 	return v
 }

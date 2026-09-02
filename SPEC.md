@@ -175,7 +175,8 @@ Two panes. Left: filterable host list. Right: detail for the selected host.
 
 The command line at the bottom always shows what the highlighted action will run, except
 while a transient notice (an action's outcome, ssh's own message) holds the line — the
-next keypress clears it.
+next keypress clears it. On the host row it also names `H`'s command beside `enter`'s
+when both fit; `c` copies the `$` command (the highlighted action's), never the `H` one.
 
 | key | action |
 |---|---|
@@ -190,7 +191,7 @@ next keypress clears it.
 | `r` | restart master |
 | `X` | `ssh -O exit` |
 | `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
-| `c` | copy the displayed command instead of running it |
+| `c` | copy the displayed `$` command instead of running it |
 | `t` | cycle theme (choice persists) |
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
 | `/` `?` `q` | filter, help, quit |

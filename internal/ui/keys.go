@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/charmbracelet/bubbles/key"
+import (
+	"strings"
+
+	"github.com/charmbracelet/bubbles/key"
+)
 
 // KeyMap names every binding so the help line is generated from the
 // bindings themselves (SPEC §5 addendum), never hand-maintained.
@@ -83,6 +87,16 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Connect, k.Herdr, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Theme},
 		{k.NextFwd, k.PrevFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit},
 	}
+}
+
+// actionsLine is the full-help line naming the actions.toml entries
+// (SPEC §6): listed so the file is discoverable, and honest about not
+// being runnable from the TUI yet.
+func actionsLine(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return " actions.toml: " + strings.Join(names, ", ") + " — not runnable from the TUI yet"
 }
 
 // promptKeys is the help shown while a prompt owns the keyboard.
