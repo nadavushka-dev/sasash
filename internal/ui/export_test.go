@@ -69,6 +69,22 @@ func ParseAdhocArgv(input string) ([]string, error) {
 	return adhocArgv(t), nil
 }
 
+// ParseAdhocTunnelArgv exposes the tunnel-only (-N) pipeline: the exact
+// `ssh -fN` argv and whether the input asked for it.
+func ParseAdhocTunnelArgv(input string) (argv []string, tunnelOnly bool, err error) {
+	t, err := parseAdhoc(input)
+	if err != nil {
+		return nil, false, err
+	}
+	return adhocTunnelArgv(t), t.TunnelOnly, nil
+}
+
+// WithSaveForwardEdit swaps the edit-in-place hook so tests can observe it.
+func WithSaveForwardEdit(m Model, f func(alias, set, old, new string) error) Model {
+	m.saveForwardEdit = f
+	return m
+}
+
 // AdhocExit replays the terminal returning from an ad-hoc handoff.
 func AdhocExit(err error) tea.Msg { return adhocExitMsg{err: err} }
 

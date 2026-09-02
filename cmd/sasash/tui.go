@@ -128,6 +128,9 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		SaveForwardSet: func(alias, name string, specs []string) error {
 			return fwdset.Add(confPath, alias, name, specs)
 		},
+		SaveForwardEdit: func(alias, set, old, new string) error {
+			return fwdset.Update(confPath, alias, set, old, new)
+		},
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg

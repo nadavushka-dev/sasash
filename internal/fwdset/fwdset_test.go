@@ -281,3 +281,112 @@ func TestAdd_MissingFile(t *testing.T) {
 		t.Errorf("Add() on a missing file = %v, want a not-exist error", err)
 	}
 }
+
+func TestUpdate_ExactBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		set  string
+		want string
+	}{
+		{
+			name: "middle spec of three, spacing kept",
+			in:   "#@sasash  forwards   web  3000:localhost:3000   3001:localhost:3001 3002:localhost:3002\nHost web\n  HostName 192.0.2.10\n",
+			set:  "web",
+			want: "#@sasash  forwards   web  3000:localhost:3000   3001:localhost:3002 3002:localhost:3002\nHost web\n  HostName 192.0.2.10\n",
+		},
+		{
+			name: "CRLF and casing kept, other lines untouched",
+			in:   "# managed\r\n# @sasash Forwards WEB 3001:localhost:3001\r\n# @sasash forwards api 3001:localhost:3001\r\nHost web\r\n  HostName 192.0.2.10\r\n",
+			set:  "web",
+			want: "# managed\r\n# @sasash Forwards WEB 3001:localhost:3002\r\n# @sasash forwards api 3001:localhost:3001\r\nHost web\r\n  HostName 192.0.2.10\r\n",
+		},
+		{
+			// In-block meta followed by a directive (a run leading straight
+			// into the next Host line would belong to that host).
+			name: "meta inside the block, indented",
+			in:   "Host web\n  # @sasash forwards web 3001:localhost:3001\n  HostName 192.0.2.10\nHost other\n  HostName 192.0.2.11\n",
+			set:  "web",
+			want: "Host web\n  # @sasash forwards web 3001:localhost:3002\n  HostName 192.0.2.10\nHost other\n  HostName 192.0.2.11\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConf(t, tt.in)
+			if err := fwdset.Update(path, "web", tt.set, "3001:localhost:3001", "3001:localhost:3002"); err != nil {
+				t.Fatalf("Update() = %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("file = %q, want %q", got, tt.want)
+			}
+			if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o640 {
+				t.Errorf("perm = %v, %v; want 0640 preserved", fi.Mode().Perm(), err)
+			}
+		})
+	}
+}
+
+func TestUpdate_RoundTripsThroughHostmodel(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(filepath.Join(sshDir, "config.d"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	root := filepath.Join(sshDir, "config")
+	conf := filepath.Join(sshDir, "config.d", "sasash.conf")
+	if err := os.WriteFile(root, []byte("Include ~/.ssh/config.d/sasash.conf\n"), 0o600); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	if err := os.WriteFile(conf, []byte("# @sasash forwards web 3000:localhost:3000 3001:localhost:3001\nHost web\n  HostName 192.0.2.10\n"), 0o600); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := fwdset.Update(conf, "web", "web", "3001:localhost:3001", "3001:localhost:9001"); err != nil {
+		t.Fatalf("Update() = %v", err)
+	}
+	hosts, warnings, err := hostmodel.Load(root, home)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("Load() = %v, warnings %v", err, warnings)
+	}
+	want := []hostmodel.ForwardSet{{Name: "web", Specs: []string{"3000:localhost:3000", "3001:localhost:9001"}}}
+	if len(hosts) != 1 || !reflect.DeepEqual(hosts[0].Forwards, want) {
+		t.Errorf("Load() forwards = %+v, want %+v", hosts, want)
+	}
+}
+
+func TestUpdate_Errors(t *testing.T) {
+	t.Parallel()
+	const in = "# @sasash forwards web 3000:localhost:3000 3001:localhost:3001\nHost web\n  HostName 192.0.2.10\n"
+	tests := []struct {
+		name       string
+		alias, set string
+		old, new   string
+		wantErr    string
+	}{
+		{name: "unknown host", alias: "nope", set: "web", old: "3000:localhost:3000", new: "3000:localhost:1", wantErr: `host "nope" not managed by sasash`},
+		{name: "unknown set", alias: "web", set: "api", old: "3000:localhost:3000", new: "3000:localhost:1", wantErr: `forward set "api" on "web" has no spec "3000:localhost:3000"`},
+		{name: "old spec absent", alias: "web", set: "web", old: "3009:localhost:3009", new: "3000:localhost:1", wantErr: `has no spec "3009:localhost:3009"`},
+		{name: "new already present", alias: "web", set: "web", old: "3000:localhost:3000", new: "3001:localhost:3001", wantErr: `spec "3001:localhost:3001" already in set "web"`},
+		{name: "new without a local port", alias: "web", set: "web", old: "3000:localhost:3000", new: "nonsense", wantErr: `spec "nonsense": no local port`},
+		{name: "unchanged", alias: "web", set: "web", old: "3000:localhost:3000", new: "3000:localhost:3000", wantErr: `spec "3000:localhost:3000" unchanged`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConf(t, in)
+			err := fwdset.Update(path, tt.alias, tt.set, tt.old, tt.new)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Update() = %v, want error containing %q", err, tt.wantErr)
+			}
+			if got, rerr := os.ReadFile(path); rerr != nil || string(got) != in {
+				t.Errorf("file after a rejected Update = %q, want untouched", got)
+			}
+		})
+	}
+}

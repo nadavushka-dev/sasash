@@ -22,6 +22,7 @@ type Tunneler interface {
 	Up(ctx context.Context, host, set string, specs []string) error
 	DownSet(ctx context.Context, host, set string, specs []string) error
 	Cancel(ctx context.Context, host, spec string) error
+	Forward(ctx context.Context, host, set, spec string) error
 	Exit(ctx context.Context, host string) error
 }
 
@@ -373,6 +374,13 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 		if !pending && f.State != tunnel.Down {
 			if with := sharedWith(rows, i); with != "" {
 				b.WriteString(" " + m.styles.Notice.Render("unverified: :"+f.Port+" claimed by "+with))
+			}
+		}
+		// While this row is being edited, the exact commands enter will
+		// run sit under it and follow the typing: nothing silent.
+		if m.mode == promptEditFwd && i == m.fwdIdx {
+			for _, line := range m.editFwdPlan(strings.TrimSpace(m.prompt.Value())) {
+				b.WriteString("\n       " + m.styles.CmdPreview.Render(line))
 			}
 		}
 	}

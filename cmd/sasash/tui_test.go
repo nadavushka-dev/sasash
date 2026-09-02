@@ -184,6 +184,9 @@ func TestTuiConfig(t *testing.T) {
 			if cfg.SaveTheme == nil || cfg.SaveHost == nil || cfg.LoadHosts == nil {
 				t.Errorf("tuiConfig() hooks = %v %v %v, want all wired", cfg.SaveTheme != nil, cfg.SaveHost != nil, cfg.LoadHosts != nil)
 			}
+			if cfg.SaveForwardEdit == nil {
+				t.Errorf("tuiConfig().SaveForwardEdit = nil, want fwdset.Update wired")
+			}
 			if cfg.SaveForwardSet == nil || cfg.Home != tt.home {
 				t.Errorf("tuiConfig() SaveForwardSet wired = %v, Home = %q; want wired and %q", cfg.SaveForwardSet != nil, cfg.Home, tt.home)
 			}

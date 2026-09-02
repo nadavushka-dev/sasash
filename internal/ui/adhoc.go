@@ -1,11 +1,14 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/nadavushka-dev/sasash/internal/run"
 )
 
 // AdhocEntry is what the SaveHost hook persists after an ad-hoc connect:
@@ -19,24 +22,67 @@ type AdhocEntry struct {
 }
 
 // adhocTarget is a parsed "[user@]host[:port] [-L spec]..." input.
+// TunnelOnly is the -N token: no tty, no handoff — `ssh -fN` through the
+// run seam in the background.
 type adhocTarget struct {
 	User, Host, Port string
 	Forwards         []string
+	TunnelOnly       bool
 }
 
 // parseAdhoc parses the connect prompt. Malformed input returns an error
 // for the notice line and never reaches exec (pin: "never a broken exec").
 func parseAdhoc(input string) (adhocTarget, error) {
 	fields := strings.Fields(input)
+	// A pasted command: the leading ssh token is noise, options may come
+	// before the destination as ssh takes them.
+	if len(fields) > 0 && fields[0] == "ssh" {
+		fields = fields[1:]
+	}
 	if len(fields) == 0 {
-		return adhocTarget{}, fmt.Errorf("type [user@]host[:port], optionally -L local:host:port")
+		return adhocTarget{}, fmt.Errorf("type [user@]host[:port], optionally -L local:host:port, -N for a tunnel only")
 	}
 
 	var t adhocTarget
-	dest := fields[0]
+	dest, flagPort := "", ""
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		switch {
+		case f == "-N":
+			t.TunnelOnly = true
+		case f == "-L" || f == "-p":
+			i++
+			if i == len(fields) {
+				return adhocTarget{}, fmt.Errorf("%s needs a value", f)
+			}
+			if f == "-L" {
+				if err := addForward(&t, fields[i]); err != nil {
+					return adhocTarget{}, err
+				}
+			} else {
+				flagPort = fields[i]
+			}
+		case strings.HasPrefix(f, "-L"):
+			if err := addForward(&t, f[2:]); err != nil {
+				return adhocTarget{}, err
+			}
+		case strings.HasPrefix(f, "-p"):
+			flagPort = f[2:]
+		case strings.HasPrefix(f, "-"):
+			return adhocTarget{}, fmt.Errorf("unexpected %q: only -L, -N and -p are accepted", f)
+		case dest != "":
+			return adhocTarget{}, fmt.Errorf("unexpected %q after the target %q", f, dest)
+		default:
+			dest = f
+		}
+	}
+	if dest == "" {
+		return adhocTarget{}, fmt.Errorf("no target: want [user@]host[:port]")
+	}
+	target := dest
 	if user, rest, ok := strings.Cut(dest, "@"); ok {
 		if user == "" || rest == "" {
-			return adhocTarget{}, fmt.Errorf("bad target %q: want [user@]host[:port]", fields[0])
+			return adhocTarget{}, fmt.Errorf("bad target %q: want [user@]host[:port]", target)
 		}
 		t.User, dest = user, rest
 	}
@@ -44,28 +90,26 @@ func parseAdhoc(input string) (adhocTarget, error) {
 	if err != nil {
 		return adhocTarget{}, err
 	}
-	t.Host, t.Port = host, port
-
-	for i := 1; i < len(fields); i++ {
-		spec := fields[i]
-		switch {
-		case spec == "-L":
-			i++
-			if i == len(fields) {
-				return adhocTarget{}, fmt.Errorf("-L needs a forward spec")
-			}
-			spec = fields[i]
-		case strings.HasPrefix(spec, "-L"):
-			spec = spec[2:]
-		default:
-			return adhocTarget{}, fmt.Errorf("unexpected %q: only -L forwards are accepted", spec)
+	if flagPort != "" {
+		if port != "" && port != flagPort {
+			return adhocTarget{}, fmt.Errorf("port given twice: %q and -p %s", target, flagPort)
 		}
-		if strings.Count(spec, ":") < 2 {
-			return adhocTarget{}, fmt.Errorf("forward %q: want local:host:port", spec)
+		if !numeric(flagPort) {
+			return adhocTarget{}, fmt.Errorf("bad port %q", flagPort)
 		}
-		t.Forwards = append(t.Forwards, spec)
+		port = flagPort
 	}
+	t.Host, t.Port = host, port
 	return t, nil
+}
+
+// addForward accepts one -L spec.
+func addForward(t *adhocTarget, spec string) error {
+	if strings.Count(spec, ":") < 2 {
+		return fmt.Errorf("forward %q: want local:host:port", spec)
+	}
+	t.Forwards = append(t.Forwards, spec)
+	return nil
 }
 
 // splitDest splits "host[:port]", mirroring hostmodel.splitAddr's rules
@@ -122,6 +166,41 @@ func adhocArgv(t adhocTarget) []string {
 		dest = t.User + "@" + t.Host
 	}
 	return append(argv, dest)
+}
+
+// adhocDest is the [user@]host token as ssh prints it back.
+func adhocDest(t adhocTarget) string {
+	if t.User != "" {
+		return t.User + "@" + t.Host
+	}
+	return t.Host
+}
+
+// adhocTunnelArgv is the tunnel-only (-N) invocation: ssh backgrounds
+// itself after auth (-f) and runs no command (-N), so the TUI keeps the
+// terminal. Same destination and forwards as adhocArgv.
+func adhocTunnelArgv(t adhocTarget) []string {
+	argv := []string{"ssh", "-fN"}
+	return append(argv, adhocArgv(t)[1:]...)
+}
+
+// adhocTunnelDoneMsg reports the background `ssh -fN`: err is a seam
+// failure (ssh never ran); res is ssh's own result.
+type adhocTunnelDoneMsg struct {
+	res run.Result
+	err error
+}
+
+// adhocTunnelCmd runs the tunnel-only ad-hoc through the run seam. ssh
+// cannot prompt here (no tty), which is -f's own caveat: auth must be
+// keys or an agent, and a prompt makes ssh fail — reported, never hung.
+func adhocTunnelCmd(r run.Runner, t adhocTarget) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
+		defer cancel()
+		res, err := r.Run(ctx, adhocTunnelArgv(t)...)
+		return adhocTunnelDoneMsg{res: res, err: err}
+	}
 }
 
 // adhocExitMsg arrives when the terminal returns from an ad-hoc handoff.
@@ -185,6 +264,10 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 		m.pending = target
 		m.mode = promptNone
 		m.prompt.Blur()
+		if target.TunnelOnly {
+			m.notice = "starting " + strings.Join(adhocTunnelArgv(target), " ") + " …"
+			return m, adhocTunnelCmd(m.runner, target)
+		}
 		argv := adhocArgv(target)
 		return m, tea.ExecProcess(execCommand(argv), func(err error) tea.Msg {
 			return adhocExitMsg{err: err}
@@ -218,4 +301,16 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// offerSave follows an ad-hoc connect or tunnel: the alias prompt takes
+// the line when saving is wired; either way the paths re-probe.
+func (m Model) offerSave() (tea.Model, tea.Cmd) {
+	if m.saveHost == nil {
+		return m, probeCmd(m.prober, m.hosts)
+	}
+	m.mode = promptAlias
+	m.prompt.Reset()
+	m.prompt.Placeholder = "alias to save as — esc to skip"
+	return m, tea.Batch(m.prompt.Focus(), probeCmd(m.prober, m.hosts))
 }

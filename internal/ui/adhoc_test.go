@@ -117,7 +117,7 @@ func TestModel_Update_AdhocPromptRejectsMalformed(t *testing.T) {
 	if !ui.Prompting(m) {
 		t.Errorf("Prompting() = false, want the prompt kept for correction")
 	}
-	if view := m.View(); !strings.Contains(view, "only -L") {
+	if view := m.View(); !strings.Contains(view, "unexpected") {
 		t.Errorf("View() missing the rejection message:\n%s", view)
 	}
 	m = press(t, m, "esc")

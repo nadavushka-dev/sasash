@@ -241,6 +241,10 @@ type Model struct {
 	// collected answers.
 	saveForwardSet func(alias, name string, specs []string) error
 	tunnel         newTunnel
+	// edit forward in place (E): the hook that rewrites the meta line,
+	// and the row being edited.
+	saveForwardEdit func(alias, set, old, new string) error
+	editFwd         editFwdState
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -303,6 +307,9 @@ type Config struct {
 	// "add new tunnel" entry) — desire only, nothing is started; nil
 	// disables the entry. The cmd layer wires fwdset.Add on sasash.conf.
 	SaveForwardSet func(alias, name string, specs []string) error
+	// SaveForwardEdit rewrites one spec of a declared set in place (the E
+	// key); nil makes E live-only. The cmd layer wires fwdset.Update.
+	SaveForwardEdit func(alias, set, old, new string) error
 }
 
 // paneFocus says which pane the navigation keys move (SPEC §5: l/tab
@@ -328,6 +335,7 @@ const (
 	promptTunnelHost
 	promptTunnelName
 	promptTunnelSpecs
+	promptEditFwd // E: a highlighted forward's spec, prefilled
 )
 
 // New builds the root model. The prober's zero value probes for real and
@@ -393,9 +401,10 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		actions:    cfg.Actions,
 		home:       cfg.Home,
 
-		saveForwardSet: cfg.SaveForwardSet,
-		notice:         cfg.ActionsWarn,
-		fwdIdx:         -1,
+		saveForwardSet:  cfg.SaveForwardSet,
+		saveForwardEdit: cfg.SaveForwardEdit,
+		notice:          cfg.ActionsWarn,
+		fwdIdx:          -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
 	return m.applyTheme(idx)
@@ -648,14 +657,40 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "ssh: " + msg.err.Error()
 			return m, probeCmd(m.prober, m.hosts)
 		}
-		if m.saveHost == nil {
+		return m.offerSave()
+
+	case adhocTunnelDoneMsg:
+		if msg.err != nil {
+			// ssh never ran: nothing worth saving.
+			m.notice = "ssh: " + msg.err.Error()
 			return m, probeCmd(m.prober, m.hosts)
 		}
-		// Offer to keep the connection: the alias prompt takes the line.
-		m.mode = promptAlias
-		m.prompt.Reset()
-		m.prompt.Placeholder = "alias to save as — esc to skip"
-		return m, tea.Batch(m.prompt.Focus(), probeCmd(m.prober, m.hosts))
+		if !msg.res.OK() {
+			// -f cannot answer a prompt: the reason is ssh's, the hint ours.
+			// ssh echoes the destination ahead of the reason; the user
+			// just typed it, so it goes.
+			reason := oneLineText(string(msg.res.Stderr))
+			reason = strings.TrimPrefix(reason, adhocDest(m.pending)+": ")
+			m.notice = "ssh -fN failed: " + reason + " — keys/agent, or connect once"
+		} else {
+			m.notice = "tunnel up in the background"
+		}
+		return m.offerSave()
+
+	case editFwdDoneMsg:
+		if msg.err != nil {
+			m.notice = msg.err.Error() // built with its own context and ssh's reason
+		} else {
+			m.notice = msg.done
+		}
+		cmds := []tea.Cmd{}
+		if host, ok := m.hostByAlias(msg.host); ok {
+			cmds = append(cmds, m.tunnelStatusCmd(host))
+		}
+		if m.loadHosts != nil {
+			cmds = append(cmds, m.reloadCmd(false))
+		}
+		return m, tea.Batch(cmds...)
 
 	case adhocSavedMsg:
 		offer := m.saveThenConnect
@@ -744,6 +779,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					})
 				case promptTunnelHost, promptTunnelName, promptTunnelSpecs:
 					return m.submitTunnel()
+				case promptEditFwd:
+					return m.submitEditFwd()
 				}
 				return m.promptSubmit()
 			}
@@ -849,6 +886,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, m.cancelCmd(host, row)
+			case key.Matches(msg, m.keys.EditFwd):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				row, ok := m.highlighted(host)
+				if !ok {
+					m.notice = "no forward highlighted — l focuses the tunnels pane"
+					return m, nil
+				}
+				return m.openEditFwd(host, row)
 			case key.Matches(msg, m.keys.Restart):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {
@@ -1050,12 +1098,17 @@ func (m Model) View() string {
 			label = "set name:"
 		case promptTunnelSpecs:
 			label = "specs:"
+		case promptEditFwd:
+			label = "edit " + setLabel(m.editFwd.set) + " on " + m.editFwd.host + ":"
 		}
 		// textinput pads its value to Width; trim the raw padding so a
 		// notice (a rejection message, typically) still fits the line.
 		field := strings.TrimRight(m.prompt.View(), " ")
-		if m.mode == promptOffer {
-			field = "" // a yes/no line: nothing to type
+		if m.mode == promptOffer || (m.notice != "" && m.prompt.Value() == "") {
+			// A yes/no line has nothing to type; an empty field under a
+			// notice yields its placeholder so the notice — a reason,
+			// typically — gets the width. Typing clears the notice.
+			field = ""
 		}
 		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
 	}

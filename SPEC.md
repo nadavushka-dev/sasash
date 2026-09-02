@@ -188,13 +188,14 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `space` | toggle highlighted forward set |
 | `+` | add ad-hoc forward (`-O forward`) |
 | `x` | cancel highlighted forward (`-O cancel`) |
+| `E` | edit the highlighted forward in place: the prompt opens prefilled with its spec; enter rewrites that one spec on the set's meta line and, if the forward is live (master alive, row up), runs `-O cancel` of the old spec then `-O forward` of the new — the row shows both commands while you type; every other forward on the master is untouched; master down = config only |
 | `r` | restart master |
 | `X` | `ssh -O exit` |
 | `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
 | `c` | copy the displayed `$` command instead of running it |
 | `t` | cycle theme (choice persists) |
 | `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
-| `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
+| `a` | ad-hoc connect: `[user@]host[:port] [-L spec]… [-p port]` in any order — a pasted `ssh …` command works, the leading `ssh` is dropped; offer to save on return. With `-N` it is tunnel-only: `ssh -fN …` runs in the background through the run seam with no handoff, the result is a notice (a prompt makes `-f` fail: use keys/agent, or connect once without `-N`), the save offer is unchanged |
 | `/` `?` `q` | filter, help, quit |
 
 `e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.

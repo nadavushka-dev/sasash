@@ -8,6 +8,7 @@ package fwdset
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
@@ -91,3 +92,79 @@ func lineTerm(raw string) string {
 		return "\n"
 	}
 }
+
+// Update rewrites one spec of an existing set in place (CONTRACT-fwdset
+// A1): the token equal to old on the set's own meta line becomes new;
+// every other byte of the line — and of the file — survives verbatim.
+// Config only: a live forward is the caller's to re-plumb.
+func Update(confPath, alias, name, old, new string) error {
+	if old == new {
+		return fmt.Errorf("spec %q unchanged", old)
+	}
+	if err := validate(name, []string{new}); err != nil {
+		return err
+	}
+	f, err := sshconf.ParseFile(confPath)
+	if err != nil {
+		return err
+	}
+	h, ok := f.Host(alias)
+	if !ok {
+		return fmt.Errorf("host %q not managed by sasash", alias)
+	}
+	var line *sshconf.Meta
+	for _, m := range h.OwnMetaVerb("forwards") {
+		if len(m.Args) > 0 && strings.EqualFold(m.Args[0], name) {
+			m := m
+			line = &m
+			break
+		}
+	}
+	if line == nil || !contains(line.Args[1:], old) {
+		return fmt.Errorf("forward set %q on %q has no spec %q", name, alias, old)
+	}
+	if contains(line.Args[1:], new) {
+		return fmt.Errorf("spec %q already in set %q", new, name)
+	}
+	raw := replaceSpecToken(f.Line(line.Index).Raw, old, new)
+	rawLines := make([]string, 0, f.Len())
+	for i := 0; i < f.Len(); i++ {
+		if i == line.Index {
+			rawLines = append(rawLines, raw)
+			continue
+		}
+		rawLines = append(rawLines, f.Line(i).Raw)
+	}
+	out := sshconf.Parse(confPath, []byte(strings.Join(rawLines, "")))
+	out.Perm = f.Perm
+	return out.WriteAtomic(confPath)
+}
+
+func contains(specs []string, spec string) bool {
+	for _, s := range specs {
+		if s == spec {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceSpecToken swaps the first whole token equal to old that follows
+// the "forwards <name>" tokens, leaving every other byte in place.
+func replaceSpecToken(raw, old, new string) string {
+	pastName := 0 // whole tokens seen after the "forwards" verb
+	for _, span := range tokenRe.FindAllStringIndex(raw, -1) {
+		tok := raw[span[0]:span[1]]
+		switch {
+		case pastName == 0 && strings.EqualFold(tok, "forwards"):
+			pastName = 1
+		case pastName == 1:
+			pastName = 2 // the set name
+		case pastName == 2 && tok == old:
+			return raw[:span[0]] + new + raw[span[1]:]
+		}
+	}
+	return raw
+}
+
+var tokenRe = regexp.MustCompile(`\S+`)
