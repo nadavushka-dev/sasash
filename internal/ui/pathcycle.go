@@ -99,11 +99,14 @@ func (m Model) switchPlan(host hostmodel.Host) string {
 	return "p → " + next.Name + " " + next.Host
 }
 
-// switchCmd runs the cycle off the UI thread, carrying the block as
-// read before the switch.
+// switchCmd runs the cycle off the UI thread. The block is read fresh
+// there, just before the switch — the cache may lag an out-of-band edit,
+// and the notice must state what was actually there.
 func (m Model) switchCmd(host hostmodel.Host) tea.Cmd {
-	sw, alias, before := m.switchPath, host.Alias, m.block(host.Alias)
+	sw, read, alias := m.switchPath, m.pathBlock, host.Alias
 	return func() tea.Msg {
+		paths, hostName, managed := read(alias)
+		before := pathBlock{paths: paths, hostName: hostName, managed: managed}
 		res, err := sw(alias)
 		return switchDoneMsg{host: alias, before: before, res: res, err: err}
 	}

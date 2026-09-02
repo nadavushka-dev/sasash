@@ -90,7 +90,10 @@ func switcherModel(t *testing.T, r *fakerun.Fake, res pathswitch.Result, swErr e
 // alias absent from it is not managed.
 func switcherModelReads(t *testing.T, r *fakerun.Fake, res pathswitch.Result, swErr error) (ui.Model, *[]string, *[][]string, *int) {
 	t.Helper()
-	hosts := append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS}})
+	// dual's HOST MODEL carries other paths than its sasash.conf block
+	// (an earlier block in another included file wins the model): the
+	// preview must follow the block, never the model.
+	hosts := append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{{Name: "office", Host: "203.0.113.9"}, {Name: "vpn", Host: "203.0.113.10"}}})
 	r.StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "check", "dual")
 	d := fakedial.New()
 	eng := tunnelEngine(t, r, d)
@@ -106,7 +109,7 @@ func switcherModelReads(t *testing.T, r *fakerun.Fake, res pathswitch.Result, sw
 			reads++
 			switch alias {
 			case "dual":
-				// The block's own paths — the host model above agrees here.
+				// The block's own paths; the host model above disagrees.
 				return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true
 			case "ubuntu":
 				return []probe.Path{{Host: "192.0.2.10"}}, "192.0.2.10", true // one unnamed path
@@ -369,9 +372,31 @@ func TestModel_Update_BlockCacheRefreshesOnReload(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "p → ts") {
 		t.Errorf("View() should still show the cached plan until a reload:\n%s", view)
 	}
+	// The switch itself reads the block fresh: its notice names what was
+	// really there, not the cached HostName.
+	hostName = "203.0.113.99" // hand-edited to match no path
+	m = ui.WithSwitcher(m, func(string) (pathswitch.Result, error) {
+		return pathswitch.Result{Alias: "dual", To: pathLAN, Changed: true}, nil
+	}, func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, hostName, true }, nil)
+	next, sw := m.Update(keyMsg("p"))
+	next, _ = next.(ui.Model).Update(sw())
+	if view := next.(ui.Model).View(); !strings.Contains(view, "HostName: 203.0.113.99 (no path) → lan") {
+		t.Errorf("the notice should name the fresh pre-switch HostName:\n%s", view)
+	}
 	m = ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf")
 	m = reloadAndProbe(t, m, hosts)
 	if view := m.View(); !strings.Contains(view, "p → lan") {
 		t.Errorf("View() after the reload should re-read the block:\n%s", view)
+	}
+}
+
+func TestModel_Update_CyclePathNeedsBothHooks(t *testing.T) {
+	t.Parallel()
+	// SwitchPath without PathBlock is half-wired: p is disabled rather
+	// than a nil dereference on the key.
+	m := polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New())
+	m = ui.WithSwitcher(m, func(string) (pathswitch.Result, error) { return pathswitch.Result{}, nil }, nil, nil)
+	if _, cmd := m.Update(keyMsg("p")); cmd != nil {
+		t.Errorf("Update(p) with only SwitchPath wired cmd = %v, want nil", cmd)
 	}
 }

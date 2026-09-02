@@ -912,8 +912,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			case key.Matches(msg, m.keys.CyclePath):
 				host, ok := m.Selected()
-				if !ok || m.switchPath == nil {
-					return m, nil
+				if !ok || m.switchPath == nil || m.pathBlock == nil {
+					return m, nil // both hooks or neither: nil disables p
 				}
 				if m.switching[host.Alias] {
 					m.notice = "a switch is already running for " + host.Alias
