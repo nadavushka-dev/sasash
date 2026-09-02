@@ -195,6 +195,12 @@ next keypress clears it.
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]…`, offer to save on return |
 | `/` `?` `q` | filter, help, quit |
 
+The tunnels section renders the engine's three states verbatim, with one presentation
+cap: when two forwards claim the same local port, only the first claimant (declared sets
+first, in meta order, then remembered ad-hoc ones) can be the one answering, so every
+later claimant shows as `◐ listening` with an "unverified" note even when the engine
+reports it up — a stale remembered spec cannot ride a live one's listener.
+
 **Handoff:** use `tea.ExecProcess` to suspend the TUI and give the terminal fully to `ssh`.
 Native resize, mouse, colors, `~.`, nested tmux — all free. On exit you're back in the list.
 

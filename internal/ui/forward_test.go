@@ -85,7 +85,7 @@ func typeSpec(t *testing.T, m ui.Model, spec string) (ui.Model, tea.Cmd) {
 	if !ui.Prompting(m) {
 		t.Fatalf("Prompting() = false after +, want the forward prompt")
 	}
-	if view := m.View(); !strings.Contains(view, "forward:") || !strings.Contains(view, "enter add") {
+	if view := m.View(); !strings.Contains(view, "forward ubuntu:") || !strings.Contains(view, "enter add") {
 		t.Fatalf("View() missing the forward prompt or its help:\n%s", view)
 	}
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(spec)})
@@ -152,7 +152,7 @@ func TestModel_Update_AddForwardConflictOffersNext(t *testing.T) {
 				t.Fatalf("Prompting() = false after a conflict, want the prompt reopened")
 			}
 			view := m.View()
-			if !strings.Contains(view, "forward: "+tt.wantSpec) {
+			if !strings.Contains(view, "forward ubuntu: "+tt.wantSpec) {
 				t.Errorf("View() prompt should hold %q:\n%s", tt.wantSpec, view)
 			}
 			for _, w := range tt.wantNote {
@@ -298,7 +298,7 @@ func TestModel_View_SharedPortDemoted(t *testing.T) {
 	// listening and says whose port it shares.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	stateDir := t.TempDir()
-	state := `{"forwards":[{"set":"","spec":"3000:localhost:9999"}]}`
+	state := `{"forwards":[{"set":"","spec":"3000:localhost:9999"},{"set":"","spec":"4011:localhost:1"}]}`
 	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -316,14 +316,110 @@ func TestModel_View_SharedPortDemoted(t *testing.T) {
 	if !strings.Contains(webRow, "● ") || !strings.Contains(webRow, " up") {
 		t.Errorf("web row = %q, want up", webRow)
 	}
-	if !strings.Contains(staleRow, "◐ ") || !strings.Contains(staleRow, "listening") || !strings.Contains(staleRow, "shares :3000 with web") {
+	if !strings.Contains(staleRow, "◐ ") || !strings.Contains(staleRow, "listening") || !strings.Contains(staleRow, "unverified: :3000 claimed by web") {
 		t.Errorf("stale row = %q, want listening with the shared-port note", staleRow)
+	}
+	// api's port has no listener: its recorded twin is plainly down and
+	// carries no note — nobody is claiming anything there.
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "4011:localhost:1") && strings.Contains(line, "claimed") {
+			t.Errorf("dead row carries a shared-port note: %q", line)
+		}
 	}
 	// The demotion reaches actions too: the ad-hoc set is not "all up",
 	// so space previews a re-forward, not a cancel.
 	m = press(t, m, "shift+tab")
 	if view := m.View(); !strings.Contains(view, "$ ssh -O forward -L 3000:localhost:9999 ubuntu") {
 		t.Errorf("View() preview on the demoted row should be a forward:\n%s", view)
+	}
+}
+
+func TestModel_Update_ConflictBindsToItsHost(t *testing.T) {
+	t.Parallel()
+	// The check runs off the UI thread; the cursor moves on meanwhile.
+	// The offer must come back for the host + was pressed on — and the
+	// add must go there, never to whatever is under the cursor now.
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(0, "ssh", "-O", "check", "spare").
+		StubExit(0, "ssh", "-O", "forward", "-L", "8081:localhost:80", "ubuntu")
+	m := polled(t, r, fakedial.New().Up("127.0.0.1:8080", time.Millisecond))
+	m, check := typeSpec(t, m, "8080:localhost:80")
+	m = press(t, m, "G") // spare
+	next, _ := m.Update(check())
+	m = next.(ui.Model)
+	view := m.View()
+	if !ui.Prompting(m) || !strings.Contains(view, "forward ubuntu: 8081:localhost:80") {
+		t.Fatalf("View() should reopen the prompt bound to ubuntu:\n%s", view)
+	}
+	before := len(r.CallKeys())
+	next, add := m.Update(keyMsg("enter"))
+	m = next.(ui.Model)
+	if add == nil {
+		t.Fatalf("enter cmd = nil, want the add")
+	}
+	m = update(t, m, add())
+	want := []string{"ssh -O check ubuntu", "ssh -O forward -L 8081:localhost:80 ubuntu"}
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
+		t.Errorf("add calls = %v, want %v (never spare)", got, want)
+	}
+	if view := m.View(); !strings.Contains(view, "added 8081:localhost:80 on ubuntu") {
+		t.Errorf("View() notice should name the host:\n%s", view)
+	}
+}
+
+func TestModel_Update_ConflictYieldsToKeyboardOwner(t *testing.T) {
+	t.Parallel()
+	// A conflict landing while another prompt or the filter owns the
+	// keyboard must not seize it: the offer becomes a notice, nothing
+	// runs, nothing typed is lost.
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, m ui.Model) ui.Model
+		check func(t *testing.T, m ui.Model)
+	}{
+		{
+			name: "save prompt keeps its alias",
+			setup: func(t *testing.T, m ui.Model) ui.Model {
+				m = ui.WithSaveHost(m, func(ui.AdhocEntry) error { return nil })
+				m = connectPending(t, m, "192.0.2.99")
+				return update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
+			},
+			check: func(t *testing.T, m ui.Model) {
+				if !ui.PromptingSave(m) || !strings.Contains(m.View(), "save as: edge") {
+					t.Errorf("save prompt lost:\n%s", m.View())
+				}
+			},
+		},
+		{
+			name:  "filter stays focused",
+			setup: func(t *testing.T, m ui.Model) ui.Model { return press(t, m, "/", "u") },
+			check: func(t *testing.T, m ui.Model) {
+				if ui.Prompting(m) || ui.FilterState(m).String() != "filtering" || ui.FilterText(m) != "u" {
+					t.Errorf("filter lost: prompting %v, state %v, text %q", ui.Prompting(m), ui.FilterState(m), ui.FilterText(m))
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+			m := polled(t, r, fakedial.New().Up("127.0.0.1:8080", time.Millisecond))
+			m, check := typeSpec(t, m, "8080:localhost:80")
+			m = tt.setup(t, m)
+			before := len(r.CallKeys())
+			next, _ := m.Update(check())
+			m = next.(ui.Model)
+			tt.check(t, m)
+			view := m.View()
+			if !strings.Contains(view, "8080 is in use on ubuntu") || !strings.Contains(view, "8081:localhost:80") {
+				t.Errorf("View() missing the offer as a notice:\n%s", view)
+			}
+			if got := r.CallKeys()[before:]; len(got) != 0 {
+				t.Errorf("calls = %v, want none", got)
+			}
+		})
 	}
 }
 

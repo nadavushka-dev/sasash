@@ -368,9 +368,11 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 			m.styles.PathName.Render(fmt.Sprintf("%-*s", nameWidth, setLabel(f.Set))),
 			m.styles.PathAddr.Render(fmt.Sprintf("%-*s", specWidth, f.Spec)),
 			m.styles.PathExtra.Render(word)))
-		if !pending {
+		// A live later claimant cannot be told apart from the earlier
+		// one on its port (demoteShared); a dead one has nothing to say.
+		if !pending && f.State != tunnel.Down {
 			if with := sharedWith(rows, i); with != "" {
-				b.WriteString(" " + m.styles.Notice.Render("shares :"+f.Port+" with "+with))
+				b.WriteString(" " + m.styles.Notice.Render("unverified: :"+f.Port+" claimed by "+with))
 			}
 		}
 	}

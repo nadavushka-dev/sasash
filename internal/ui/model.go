@@ -196,6 +196,7 @@ type Model struct {
 	tstatus   map[string]tunnelState
 	tinflight map[string]bool // a Status poll is running for the alias
 	fwdIdx    int
+	fwdHost   string // the host the forward prompt is bound to
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -599,13 +600,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.toggleCmd(host, row)
 			case key.Matches(msg, m.keys.AddFwd):
-				if _, ok := m.Selected(); !ok || m.tunnels == nil {
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
 					return m, nil
 				}
-				m.mode = promptForward
-				m.prompt.Reset()
-				m.prompt.Placeholder = "local:host:port  e.g. 8080:localhost:80"
-				return m, m.prompt.Focus()
+				return m.openForward(host, "")
 			case key.Matches(msg, m.keys.CancelFwd):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {
@@ -796,7 +795,7 @@ func (m Model) View() string {
 		case promptAlias:
 			label = "save as:"
 		case promptForward:
-			label = "forward:"
+			label = "forward " + m.fwdHost + ":"
 		}
 		// textinput pads its value to Width; trim the raw padding so a
 		// notice (a rejection message, typically) still fits the line.
