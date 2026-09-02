@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nadavushka-dev/sasash/internal/action"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
@@ -109,7 +110,7 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 	if st, err := setup.Check(home); err == nil && !st.IncludePresent {
 		editorWarn = "sasash.conf is not wired into ssh yet — run `sasash setup`"
 	}
-	return ui.Config{
+	cfg := ui.Config{
 		Theme:      theme,
 		SaveTheme:  saveThemeTo(statePath),
 		SaveHost:   saveHostTo(confPath),
@@ -123,6 +124,22 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		// The same state dir as `up`/`down`, or the cache silently splits.
 		Tunnels: tunnel.Engine{StateDir: stateDir(home)},
 	}
+	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
+	return cfg
+}
+
+// loadActionNames lists actions.toml entries for the help line; a load
+// problem becomes the startup notice, since stderr is invisible under
+// the alt screen. A missing file is neither.
+func loadActionNames(home string) (names []string, warn string) {
+	acts, err := action.Load(home)
+	if err != nil {
+		return nil, err.Error()
+	}
+	for _, a := range acts {
+		names = append(names, a.Name)
+	}
+	return names, ""
 }
 
 // resolveEditor turns $EDITOR into the argv prefix `e` launches.

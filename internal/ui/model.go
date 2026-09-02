@@ -198,6 +198,8 @@ type Model struct {
 	fwdIdx    int
 	fwdHost   string // the host the forward prompt is bound to
 
+	actions []string // actions.toml entry names, listed in the full help
+
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
 	editorWarn string
@@ -247,6 +249,11 @@ type Config struct {
 	// Tunnels drives the tunnels section (status polling, space/r/X);
 	// nil leaves the section out. The cmd layer passes a tunnel.Engine.
 	Tunnels Tunneler
+	// Actions are the actions.toml entry names (action.Load, file order),
+	// listed in the full help; ActionsWarn is a load problem to show at
+	// startup — under the alt screen stderr is invisible.
+	Actions     []string
+	ActionsWarn string
 }
 
 // promptMode says which prompt, if any, owns the keyboard.
@@ -319,6 +326,8 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		tunnels:    cfg.Tunnels,
 		tstatus:    make(map[string]tunnelState),
 		tinflight:  make(map[string]bool),
+		actions:    cfg.Actions,
+		notice:     cfg.ActionsWarn,
 		fwdIdx:     -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
@@ -404,6 +413,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.tunnelStatusCmd(host)
 		}
 		return m, nil
+
+	case herdrExitMsg:
+		var exitErr *exec.ExitError
+		if msg.err != nil && !errors.As(msg.err, &exitErr) {
+			m.notice = "herdr: " + msg.err.Error()
+		}
+		return m, probeCmd(m.prober, m.hosts)
 
 	case sshExitMsg:
 		// A non-zero ssh exit is not news — ssh printed its own diagnosis
@@ -546,6 +562,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.ExecProcess(sshExec(host.Alias), func(err error) tea.Msg {
 					return sshExitMsg{err: err}
+				})
+			case key.Matches(msg, m.keys.Herdr):
+				host, ok := m.Selected()
+				if !ok {
+					return m, nil
+				}
+				return m, tea.ExecProcess(herdrExec(host.Alias), func(err error) tea.Msg {
+					return herdrExitMsg{err: err}
 				})
 			case key.Matches(msg, m.keys.CopyAddr):
 				host, ok := m.Selected()
@@ -739,6 +763,11 @@ func (m Model) helpView() string {
 		k = filterKeys{}
 	}
 	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
+	if m.help.ShowAll && m.mode == promptNone {
+		if line := actionsLine(m.actions); line != "" {
+			v += "\n" + m.styles.Clamp.MaxWidth(m.width).Render(m.styles.HelpDesc.Render(line))
+		}
+	}
 	return clampHeight(v, m.height-4)
 }
 
@@ -886,6 +915,11 @@ func (m Model) previewView() string {
 	v := " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(argv, " "))
 	if more > 0 {
 		v += " " + m.styles.PathExtra.Render(fmt.Sprintf("+%d more", more))
+	}
+	// H is the other handoff on the host row: shown beside enter's, so
+	// the line names both commands that can run from here.
+	if host, ok := m.Selected(); ok && m.fwdIdx < 0 {
+		v += "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
 	}
 	return v
 }

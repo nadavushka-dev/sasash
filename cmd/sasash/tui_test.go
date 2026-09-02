@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nadavushka-dev/sasash/internal/action"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
@@ -205,6 +206,46 @@ func TestTuiConfig_LoadHostsReportsWarnings(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "missing addr") {
 		t.Errorf("LoadHosts() warnings = %v, want one missing-addr warning", warnings)
+	}
+}
+
+func TestLoadActionNames(t *testing.T) {
+	t.Parallel()
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		home := t.TempDir()
+		if body == "" {
+			return home
+		}
+		if err := os.MkdirAll(filepath.Join(home, ".config", "sasash"), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(action.Path(home), []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return home
+	}
+	tests := []struct {
+		name      string
+		body      string
+		wantNames []string
+		wantWarn  string
+	}{
+		{name: "no file is no actions and no warning", body: ""},
+		{name: "entries in file order", body: "[vnc]\ncmd = \"vncviewer {addr}\"\n[rdp]\ncmd = \"xfreerdp /v:{addr}\"\n", wantNames: []string{"vnc", "rdp"}},
+		{name: "malformed file warns with the line", body: "[rdp]\ncmd = \"unterminated\n", wantWarn: "actions.toml:"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			names, warn := loadActionNames(write(t, tt.body))
+			if !reflect.DeepEqual(names, tt.wantNames) {
+				t.Errorf("loadActionNames() names = %v, want %v", names, tt.wantNames)
+			}
+			if (warn != "") != (tt.wantWarn != "") || !strings.Contains(warn, tt.wantWarn) {
+				t.Errorf("loadActionNames() warn = %q, want containing %q", warn, tt.wantWarn)
+			}
+		})
 	}
 }
 

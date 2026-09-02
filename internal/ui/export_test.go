@@ -117,6 +117,16 @@ var (
 	ExitArgv    = exitArgv
 )
 
+// HerdrCommand and HerdrExec expose the H handoff: the argv and the one
+// construction site of its process.
+var (
+	HerdrCommand = herdrCommand
+	HerdrExec    = herdrExec
+)
+
+// HerdrExit replays the terminal returning from herdr.
+func HerdrExit(err error) tea.Msg { return herdrExitMsg{err: err} }
+
 // LocalPort and WithLocalPort expose the forward-spec port rule so it can
 // be pinned to the engine's and to exact rewrites.
 var (
