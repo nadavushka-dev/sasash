@@ -45,26 +45,72 @@ func TestModel_Update_FocusFollowsHostChange(t *testing.T) {
 	// A host change made by the list (a filter accept) hands focus back
 	// and drops the highlight: x afterwards must not act on a row of the
 	// new host the user never highlighted.
+	// From the FIRST host, so opening the filter does not move the
+	// cursor by itself: only the accept changes the host.
 	r := fakerun.New().
 		StubExit(0, "ssh", "-O", "check", "ubuntu").
 		StubExit(0, "ssh", "-O", "check", "spare")
 	m := polled(t, r, fakedial.New())
-	m = press(t, m, "G") // spare
-	m = feed(t, m, m.Init())
-	m = press(t, m, "l") // spare's db row
-	m = press(t, m, "/", "u", "b", "u", "enter")
-	if host, _ := m.Selected(); host.Alias != "ubuntu" || ui.TunnelsFocused(m) {
-		t.Fatalf("after the filter accept: host %q, focused %v; want ubuntu, list focus", host.Alias, ui.TunnelsFocused(m))
+	m = press(t, m, "l") // ubuntu's web row
+	m = press(t, m, "/", "s", "p", "a")
+	if host, _ := m.Selected(); host.Alias != "spare" {
+		t.Fatalf("filter typed: host %q, want spare (the match)", host.Alias)
+	}
+	m = press(t, m, "enter")
+	if host, _ := m.Selected(); host.Alias != "spare" || ui.TunnelsFocused(m) {
+		t.Fatalf("after the filter accept: host %q, focused %v; want spare, list focus", host.Alias, ui.TunnelsFocused(m))
 	}
 	before := len(r.CallKeys())
-	next, cmd := m.Update(keyMsg("x"))
-	m = next.(ui.Model)
-	if cmd != nil || len(r.CallKeys()) != before || !strings.Contains(m.View(), "no forward highlighted") {
-		t.Errorf("x after a host change acted: cmd %v, calls %v", cmd != nil, r.CallKeys()[before:])
+	for _, k := range []string{"x", " "} {
+		next, cmd := m.Update(keyMsg(k))
+		m = next.(ui.Model)
+		if cmd != nil || len(r.CallKeys()) != before || !strings.Contains(m.View(), "no forward highlighted") {
+			t.Errorf("%q after a host change acted: cmd %v, calls %v", k, cmd != nil, r.CallKeys()[before:])
+		}
 	}
 	// The list row carries the mark again; no tunnels row does.
-	if view := m.View(); !strings.Contains(view, "› ubuntu") || strings.Contains(view, "› ○") || strings.Contains(view, "› ●") {
+	if view := m.View(); !strings.Contains(view, "› spare") || strings.Contains(view, "› ○") || strings.Contains(view, "› ●") {
 		t.Errorf("View() after the host change should mark the list, not a row:\n%s", view)
+	}
+}
+
+func TestModel_Update_FocusDropsWhenHostEditedAway(t *testing.T) {
+	t.Parallel()
+	// The editor deletes the focused host: the reload clamps the cursor
+	// onto another host, and the focus must not ride along.
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(0, "ssh", "-O", "check", "spare")
+	m := polled(t, r, fakedial.New())
+	m = press(t, m, "l", "G") // ubuntu's api row
+	m = ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf")
+	m = editReload(t, m, tunnelHosts()[1:]) // ubuntu gone: cursor lands on bare
+	if host, _ := m.Selected(); host.Alias != "bare" || ui.TunnelsFocused(m) {
+		t.Errorf("after the reload: host %q, focused %v; want bare, list focus", host.Alias, ui.TunnelsFocused(m))
+	}
+	if view := m.View(); !strings.Contains(view, "› bare") {
+		t.Errorf("View() should mark the list:\n%s", view)
+	}
+}
+
+func TestModel_Update_FocusOverFilteredEmptyHost(t *testing.T) {
+	t.Parallel()
+	// Focus on ubuntu, then a filter that lands on a host with no rows:
+	// the focus is gone the moment the selection moved, and exactly one
+	// › is on screen — the list's.
+	r := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(255, "ssh", "-O", "check", "bare")
+	m := polled(t, r, fakedial.New())
+	m = press(t, m, "l", "/", "b", "a", "r", "enter")
+	view := m.View()
+	if ui.TunnelsFocused(m) || strings.Count(view, "› ") != 1 || !strings.Contains(view, "› bare") {
+		t.Errorf("focused %v, › count %d:\n%s", ui.TunnelsFocused(m), strings.Count(view, "› "), view)
+	}
+	// esc now means one thing: clear the filter.
+	m = press(t, m, "esc")
+	if ui.FilterState(m).String() != "unfiltered" {
+		t.Errorf("esc after the settled focus should clear the filter, got %v", ui.FilterState(m))
 	}
 }
 
