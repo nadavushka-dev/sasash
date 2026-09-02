@@ -25,6 +25,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/stats"
 )
 
 // ErrStateWrite marks an action whose ssh side SUCCEEDED but whose state
@@ -65,6 +66,12 @@ type Forward struct {
 	Spec  string // verbatim, e.g. "3000:localhost:3000"
 	Port  string // parsed local port; "" when unparseable (then State is Down)
 	State Status
+	// Since and DownSince are observed times from the stats store (contract
+	// CONTRACT-stats.md): start of the current accepting run, and the first
+	// observation of the port dead after being up. Zero = unknown, or no
+	// Stats store configured.
+	Since     time.Time
+	DownSince time.Time
 }
 
 // HostStatus is one render's truth for a host.
@@ -77,6 +84,19 @@ type HostStatus struct {
 	// CorruptState reports a state file that existed but could not be
 	// read or parsed; it was treated as empty (reality wins regardless).
 	CorruptState bool
+
+	// Observed times from the stats store; all zero when Engine.Stats is
+	// nil or nothing was ever observed. The zero time means unknown —
+	// never invented (CONTRACT-stats.md).
+	MasterSince     time.Time
+	MasterDownSince time.Time
+	MasterBySasash  bool
+	LastHandoff     time.Time
+	LastSwitch      time.Time
+	LastSwitchPath  string
+	// CorruptStats reports the stats file was unreadable or unparseable
+	// this render; observations restarted from now rather than backdated.
+	CorruptStats bool
 }
 
 // Engine shells out through the run seam and dials through the probe seam.
@@ -94,6 +114,11 @@ type Engine struct {
 	Dialer   probe.Dialer
 	StateDir string
 	Timeout  time.Duration
+	// Stats, when non-nil, records observed timestamps (master/forward
+	// up-down transitions on Status and Exit, sasash-started masters on
+	// Start) and enriches HostStatus/Forward with them. nil means no
+	// observing and every observed field stays zero.
+	Stats *stats.Store
 }
 
 func (e Engine) runner() run.Runner {
@@ -136,8 +161,18 @@ func (e Engine) exec(ctx context.Context, argv ...string) error {
 
 // Start launches the background master: `ssh -fN <host>`. Managed hosts
 // carry ControlMaster auto + ControlPath from sasash.conf, so no -M here.
+// On success the alive-run is recorded as sasash-started; a record failure
+// follows the ErrStateWrite convention (the master IS running).
 func (e Engine) Start(ctx context.Context, host string) error {
-	return e.exec(ctx, "ssh", "-fN", host)
+	if err := e.exec(ctx, "ssh", "-fN", host); err != nil {
+		return err
+	}
+	if e.Stats != nil {
+		if err := e.Stats.RecordMasterStart(host); err != nil {
+			return fmt.Errorf("master started but %w: %v", ErrStateWrite, err)
+		}
+	}
+	return nil
 }
 
 // CheckMaster asks `ssh -O check <host>`. A non-zero exit is data — the
@@ -178,11 +213,18 @@ func (e Engine) Cancel(ctx context.Context, host, spec string) error {
 // for the host is cleared regardless of the exit result — a dead master has
 // no forwards either way.
 func (e Engine) Exit(ctx context.Context, host string) error {
-	err := e.exec(ctx, "ssh", "-O", "exit", host)
+	execErr := e.exec(ctx, "ssh", "-O", "exit", host)
+	err := execErr
 	if serr := e.mutateState(host, "master exit requested", func(st *hostState) {
 		st.Forwards = nil
 	}); serr != nil && err == nil {
 		err = serr
+	}
+	// The ssh side succeeded: the master is observably dead now.
+	if execErr == nil && e.Stats != nil {
+		if _, _, oerr := e.Stats.ObserveHost(host, false, nil); oerr != nil && err == nil {
+			err = fmt.Errorf("master exited but %w: %v", ErrStateWrite, oerr)
+		}
 	}
 	return err
 }
@@ -198,12 +240,17 @@ func (e Engine) Up(ctx context.Context, host, set string, specs []string) error 
 	if err != nil {
 		return err
 	}
+	var stateErrs []error
 	if !alive {
 		if err := e.Start(ctx, host); err != nil {
-			return err
+			// B1 applies to Start's stats record too: the master is real,
+			// only its record failed — keep forwarding.
+			if !errors.Is(err, ErrStateWrite) {
+				return err
+			}
+			stateErrs = append(stateErrs, err)
 		}
 	}
-	var stateErrs []error
 	for _, spec := range specs {
 		if err := e.Forward(ctx, host, set, spec); err != nil {
 			if errors.Is(err, ErrStateWrite) {
@@ -281,6 +328,30 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 	}
 	for _, sf := range st.Forwards {
 		add(sf.Set, sf.Spec)
+	}
+
+	if e.Stats != nil {
+		accepting := make(map[string]bool, len(out.Forwards))
+		for _, f := range out.Forwards {
+			// Up and Listening both mean the local port answered.
+			accepting[f.Spec] = f.State != Down
+		}
+		// Best-effort persistence: the returned view is correct for this
+		// render even when the write failed, and a render must not break
+		// over a stale cache (ratified contract §2).
+		obs, corrupt, _ := e.Stats.ObserveHost(host, master, accepting)
+		out.MasterSince = obs.MasterSince
+		out.MasterDownSince = obs.MasterDownSince
+		out.MasterBySasash = obs.MasterBySasash
+		out.LastHandoff = obs.LastHandoff
+		out.LastSwitch = obs.LastSwitch
+		out.LastSwitchPath = obs.LastSwitchPath
+		out.CorruptStats = corrupt
+		for i := range out.Forwards {
+			fo := obs.Forwards[out.Forwards[i].Spec]
+			out.Forwards[i].Since = fo.Since
+			out.Forwards[i].DownSince = fo.DownSince
+		}
 	}
 	return out, nil
 }
