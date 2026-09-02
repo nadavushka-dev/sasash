@@ -17,6 +17,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
+	"github.com/nadavushka-dev/sasash/internal/stats"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
@@ -102,6 +103,7 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 	root := sshConfigPath(home)
 	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
+	store := stats.Store{Dir: stateDir(home)}
 	editor, editorHint := resolveEditor(editorEnv)
 	// An edit ssh cannot see (the Include is not in ~/.ssh/config) must
 	// come back with an explanation, not a silently unchanged list. A
@@ -122,9 +124,11 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		LoadHosts: func() ([]hostmodel.Host, []error, error) {
 			return hostmodel.Load(root, home)
 		},
-		// The same state dir as `up`/`down`, or the cache silently splits.
-		Tunnels: tunnel.Engine{StateDir: stateDir(home)},
-		Home:    home,
+		// The same state dir as `up`/`down`, or the cache silently splits;
+		// the stats store lives beside it and stamps handoffs.
+		Tunnels:       tunnel.Engine{StateDir: stateDir(home), Stats: &store},
+		Home:          home,
+		RecordHandoff: store.RecordHandoff,
 		SaveForwardSet: func(alias, name string, specs []string) error {
 			return fwdset.Add(confPath, alias, name, specs)
 		},

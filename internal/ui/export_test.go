@@ -18,8 +18,24 @@ func RefreshTick() tea.Msg { return refreshTickMsg{} }
 // ProbeChunk exposes the refresh fan-out bound for the regression test.
 const ProbeChunk = probeChunk
 
-// SSHExit lets tests replay the terminal returning from an ssh handoff.
-func SSHExit(err error) tea.Msg { return sshExitMsg{err: err} }
+// SSHExit lets tests replay the terminal returning from an ssh handoff;
+// SSHExitFrom names the managed host it came back from.
+func SSHExit(err error) tea.Msg                  { return sshExitMsg{err: err} }
+func SSHExitFrom(host string, err error) tea.Msg { return sshExitMsg{host: host, err: err} }
+
+// Since, Sparkline, and LatencyRange expose the stats spellings for
+// table tests (SASASH.4.8).
+var (
+	Since        = since
+	Sparkline    = sparkline
+	LatencyRange = latencyRange
+)
+
+// WithRecordHandoff swaps the handoff stamp hook so tests can observe it.
+func WithRecordHandoff(m Model, f func(string) error) Model {
+	m.recordHandoff = f
+	return m
+}
 
 // SSHCommand and ClipArgv expose the argv builders for exact-string tests.
 func SSHCommand(alias string) []string { return sshCommand(alias) }

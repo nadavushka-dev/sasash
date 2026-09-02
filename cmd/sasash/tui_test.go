@@ -190,9 +190,14 @@ func TestTuiConfig(t *testing.T) {
 			if cfg.SaveForwardSet == nil || cfg.Home != tt.home {
 				t.Errorf("tuiConfig() SaveForwardSet wired = %v, Home = %q; want wired and %q", cfg.SaveForwardSet != nil, cfg.Home, tt.home)
 			}
-			// The TUI and `up`/`down` must share one state cache.
-			if eng, ok := cfg.Tunnels.(tunnel.Engine); !ok || eng.StateDir != stateDir(tt.home) {
+			// The TUI and `up`/`down` must share one state cache; the stats
+			// store sits beside it and stamps handoffs.
+			eng, ok := cfg.Tunnels.(tunnel.Engine)
+			if !ok || eng.StateDir != stateDir(tt.home) {
 				t.Errorf("tuiConfig().Tunnels = %#v, want tunnel.Engine with StateDir %q", cfg.Tunnels, stateDir(tt.home))
+			}
+			if eng.Stats == nil || eng.Stats.Dir != stateDir(tt.home) || cfg.RecordHandoff == nil {
+				t.Errorf("tuiConfig() stats: engine store %+v, RecordHandoff wired %v; want the store on %q and the hook", eng.Stats, cfg.RecordHandoff != nil, stateDir(tt.home))
 			}
 		})
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/stats"
 )
 
 // refreshEvery is how often paths are re-probed. One refresh dials every
@@ -82,7 +83,10 @@ type refreshTickMsg struct{}
 
 // sshExitMsg arrives when the terminal comes back from an ssh handoff.
 // err reports only a failure to start; ssh's own exit code is not news.
-type sshExitMsg struct{ err error }
+type sshExitMsg struct {
+	host string // the managed alias handed off to; "" for an ad-hoc target
+	err  error
+}
 
 // copyDoneMsg reports the outcome of a clipboard write.
 type copyDoneMsg struct{ err error }
@@ -115,7 +119,10 @@ func herdrExec(alias string) *exec.Cmd {
 
 // herdrExitMsg arrives when the terminal comes back from herdr. err
 // reports only a failure to start; herdr's own exit code is not news.
-type herdrExitMsg struct{ err error }
+type herdrExitMsg struct {
+	host string
+	err  error
+}
 
 // editorArgv is the exact invocation `e` hands the terminal to.
 func editorArgv(editor []string, confPath string) []string {
@@ -246,6 +253,13 @@ type Model struct {
 	saveForwardEdit func(alias, set, old, new string) error
 	editFwd         editFwdState
 
+	// Stats (SASASH.4.8): every duration the UI renders comes from clock;
+	// hist is the per-path session memory behind the sparkline and the
+	// stability count; recordHandoff stamps enter/H returns.
+	clock         stats.Clock
+	hist          map[string]*pathHist
+	recordHandoff func(alias string) error
+
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
 	editorWarn string
@@ -310,6 +324,15 @@ type Config struct {
 	// SaveForwardEdit rewrites one spec of a declared set in place (the E
 	// key); nil makes E live-only. The cmd layer wires fwdset.Update.
 	SaveForwardEdit func(alias, set, old, new string) error
+	// Clock is the time source for every duration rendered (uptime,
+	// down-since, ago); nil is wall time. Tests inject a fake and never
+	// sleep.
+	Clock stats.Clock
+	// RecordHandoff stamps the last interactive handoff (enter/H) for a
+	// managed host after the terminal comes back; nil disables. The cmd
+	// layer wires stats.Store.RecordHandoff. Best-effort: a failed stamp
+	// is a notice, never a blocked action.
+	RecordHandoff func(alias string) error
 }
 
 // paneFocus says which pane the navigation keys move (SPEC §5: l/tab
@@ -403,6 +426,9 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 
 		saveForwardSet:  cfg.SaveForwardSet,
 		saveForwardEdit: cfg.SaveForwardEdit,
+		clock:           clockOr(cfg.Clock),
+		hist:            make(map[string]*pathHist),
+		recordHandoff:   cfg.RecordHandoff,
 		notice:          cfg.ActionsWarn,
 		fwdIdx:          -1,
 	}
@@ -533,6 +559,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case probeDoneMsg:
 		m.statuses = msg.statuses
+		m = m.observeProbes(msg.statuses)
 		if m.tickArmed {
 			return m, nil
 		}
@@ -607,7 +634,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && !errors.As(msg.err, &exitErr) {
 			m.notice = "herdr: " + msg.err.Error()
 		}
-		return m, probeCmd(m.prober, m.hosts)
+		return m, tea.Batch(probeCmd(m.prober, m.hosts), m.recordHandoffCmd(msg.host))
+
+	case handoffRecordedMsg:
+		if msg.err != nil {
+			m.notice = "stats not recorded: " + msg.err.Error()
+			return m, nil
+		}
+		// The stamp is on disk: the next status shows it.
+		if host, ok := m.hostByAlias(msg.host); ok {
+			return m, m.tunnelStatusCmd(host)
+		}
+		return m, nil
 
 	case sshExitMsg:
 		// A non-zero ssh exit is not news — ssh printed its own diagnosis
@@ -617,8 +655,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && !errors.As(msg.err, &exitErr) {
 			m.notice = "ssh: " + msg.err.Error()
 		}
-		// The world may have changed while the terminal was handed away.
-		return m, probeCmd(m.prober, m.hosts)
+		// The world may have changed while the terminal was handed away;
+		// and the handoff itself is worth remembering.
+		return m, tea.Batch(probeCmd(m.prober, m.hosts), m.recordHandoffCmd(msg.host))
 
 	case copyDoneMsg:
 		if msg.err != nil {
@@ -774,8 +813,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.submitNewConn()
 				case promptOffer:
 					m.mode = promptNone
-					return m, tea.ExecProcess(sshExec(m.offerAlias), func(err error) tea.Msg {
-						return sshExitMsg{err: err}
+					alias := m.offerAlias
+					return m, tea.ExecProcess(sshExec(alias), func(err error) tea.Msg {
+						return sshExitMsg{host: alias, err: err}
 					})
 				case promptTunnelHost, promptTunnelName, promptTunnelSpecs:
 					return m.submitTunnel()
@@ -810,16 +850,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				return m, tea.ExecProcess(sshExec(host.Alias), func(err error) tea.Msg {
-					return sshExitMsg{err: err}
+				alias := host.Alias
+				return m, tea.ExecProcess(sshExec(alias), func(err error) tea.Msg {
+					return sshExitMsg{host: alias, err: err}
 				})
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()
 				if !ok {
 					return m, nil
 				}
-				return m, tea.ExecProcess(herdrExec(host.Alias), func(err error) tea.Msg {
-					return herdrExitMsg{err: err}
+				alias := host.Alias
+				return m, tea.ExecProcess(herdrExec(alias), func(err error) tea.Msg {
+					return herdrExitMsg{host: alias, err: err}
 				})
 			case key.Matches(msg, m.keys.CopyAddr):
 				host, ok := m.Selected()
@@ -1046,6 +1088,9 @@ func (m Model) View() string {
 	}
 
 	header := " " + m.styles.Title.Render("sasash")
+	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff {
+		header += "   " + m.styles.PathExtra.Render(sum)
+	}
 	if m.list.FilterState() == list.FilterApplied {
 		header += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
 	}
@@ -1176,6 +1221,21 @@ func (m Model) detailView() string {
 		b.WriteString(" " + m.styles.PathAddr.Render(p.Addr()) + " " + extra)
 		if i == active {
 			b.WriteString(" " + m.styles.ActiveMark.Render("← active"))
+		}
+		// Session memory: the recent latencies as a shape, their range,
+		// how many rounds answered, and — for a dead path — since when
+		// this session saw it down after being up.
+		if h := m.hist[pathKey(host.Alias, i)]; h != nil && h.total > 0 {
+			if i < len(sts) && !sts[i].Alive() {
+				if d := since(m.clock.Now(), h.downSince); d != "" {
+					b.WriteString(" " + m.styles.PathExtra.Render(d))
+				}
+			}
+			b.WriteString("  " + m.styles.PathExtra.Render(sparkline(h.ring)))
+			if r := latencyRange(h.ring); r != "" {
+				b.WriteString(" " + m.styles.PathExtra.Render(r))
+			}
+			b.WriteString(" " + m.styles.PathExtra.Render(fmt.Sprintf("%d/%d", h.up, h.total)))
 		}
 	}
 	if m.tunnels != nil {

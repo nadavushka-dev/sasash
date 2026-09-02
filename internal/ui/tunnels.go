@@ -326,11 +326,17 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 	b.WriteString("\n\n" + m.styles.SectionLabel.Render("tunnels"))
 
 	ts, known := m.tstatus[host.Alias]
+	now := m.clock.Now()
 	glyph, word := m.styles.StatusWait.Render("◌"), "…"
 	if known && ts.err == nil {
 		glyph, word = m.styles.StatusDown.Render("○"), "down"
 		if ts.status.Master {
 			glyph, word = m.styles.StatusUp.Render("●"), "up"
+		}
+		// The observed run, when the store has seen one: "up 12m" /
+		// "down 3m"; nothing when unknown — never a made-up zero.
+		if run := runWord(now, ts.status.MasterSince, ts.status.MasterDownSince); run != "" && strings.HasPrefix(run, word) {
+			word = run
 		}
 	}
 	b.WriteString("\n   " + glyph + " " + m.styles.PathName.Render("master") + " " + m.styles.PathExtra.Render(word))
@@ -341,8 +347,14 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 	if ts.status.CorruptState {
 		b.WriteString("\n   " + m.styles.Notice.Render("! state cache unreadable — treated as empty"))
 	}
+	if ts.status.CorruptStats {
+		b.WriteString("\n   " + m.styles.Notice.Render("! stats cache unreadable — times start fresh from now"))
+	}
 
 	rows, pending := m.forwardRows(host)
+	if len(rows) == 0 && known && ts.err == nil {
+		b.WriteString(m.lastSeenLine(ts.status, now))
+	}
 	nameWidth, specWidth := 0, 0
 	for _, f := range rows {
 		nameWidth = max(nameWidth, len(setLabel(f.Set)))
@@ -364,6 +376,17 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 				glyph = m.styles.StatusDown.Render("○")
 			}
 			word = f.State.String()
+			// Observed run for up/down rows; a listening row's port is
+			// accepting, so its "since" is the accepting run.
+			if run := runWord(now, f.Since, f.DownSince); run != "" {
+				switch {
+				case f.State == tunnel.Up && strings.HasPrefix(run, "up"),
+					f.State == tunnel.Down && strings.HasPrefix(run, "down"):
+					word = run
+				case f.State == tunnel.Listening && strings.HasPrefix(run, "up"):
+					word = "listening " + strings.TrimPrefix(run, "up ")
+				}
+			}
 		}
 		b.WriteString(fmt.Sprintf("\n %s%s %s %s %s", mark, glyph,
 			m.styles.PathName.Render(fmt.Sprintf("%-*s", nameWidth, setLabel(f.Set))),
@@ -376,6 +399,9 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 				b.WriteString(" " + m.styles.Notice.Render("unverified: :"+f.Port+" claimed by "+with))
 			}
 		}
+		if i == len(rows)-1 {
+			b.WriteString(m.lastSeenLine(ts.status, now))
+		}
 		// While this row is being edited, the exact commands enter will
 		// run sit under it and follow the typing: nothing silent. The
 		// plan belongs to the row the edit is BOUND to — a poll can move
@@ -387,4 +413,25 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 		}
 	}
 	return b.String()
+}
+
+// lastSeenLine renders the host's remembered moments — the last
+// interactive handoff and the last path switch — as "ago" times; each is
+// omitted when unknown, and the line vanishes when both are.
+func (m Model) lastSeenLine(st tunnel.HostStatus, now time.Time) string {
+	var parts []string
+	if ago := since(now, st.LastHandoff); ago != "" {
+		parts = append(parts, "last connected "+ago+" ago")
+	}
+	if ago := since(now, st.LastSwitch); ago != "" {
+		p := "last switch"
+		if st.LastSwitchPath != "" {
+			p += " → " + st.LastSwitchPath
+		}
+		parts = append(parts, p+" "+ago+" ago")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\n   " + m.styles.PathExtra.Render(strings.Join(parts, " · "))
 }
