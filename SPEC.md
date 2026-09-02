@@ -181,6 +181,7 @@ The command line at the bottom always shows what the highlighted action will run
 | `H` | `herdr --remote <host>` |
 | `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
 | `p` | cycle path (rewrites `HostName`) |
+| `tab` / `shift+tab` | move the forward highlight (none → each forward → none); the bottom line previews `space` for it |
 | `space` | toggle highlighted forward set |
 | `+` | add ad-hoc forward (`-O forward`) |
 | `x` | cancel highlighted forward (`-O cancel`) |

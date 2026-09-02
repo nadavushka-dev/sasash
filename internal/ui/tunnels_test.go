@@ -25,10 +25,12 @@ const (
 	specWeb0 = "3000:localhost:3000"
 	specWeb1 = "3001:localhost:3001"
 	specAPI  = "4011:localhost:4011"
+	specDB   = "5432:localhost:5432"
 )
 
 // tunnelHosts is the fixture: ubuntu declares two sets, bare declares
-// none. Paths are unstubbed, so they probe down and stay out of the way.
+// none, spare declares one. Paths are unstubbed, so they probe down and
+// stay out of the way.
 func tunnelHosts() []hostmodel.Host {
 	return []hostmodel.Host{
 		{Alias: "ubuntu", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}, Forwards: []hostmodel.ForwardSet{
@@ -36,6 +38,9 @@ func tunnelHosts() []hostmodel.Host {
 			{Name: "api", Specs: []string{specAPI}},
 		}},
 		{Alias: "bare", Paths: []probe.Path{{Host: "192.0.2.20"}}},
+		{Alias: "spare", Paths: []probe.Path{{Host: "192.0.2.30"}}, Forwards: []hostmodel.ForwardSet{
+			{Name: "db", Specs: []string{specDB}},
+		}},
 	}
 }
 
@@ -151,10 +156,11 @@ func TestModel_View_TunnelStates(t *testing.T) {
 				d.Up("127.0.0.1:3000", time.Millisecond)
 			}
 			m := tunnelModel(t, r, d, t.TempDir())
-			// Status runs in a cmd: the frame renders before it lands.
+			// Status runs in a cmd: the frame renders before it lands,
+			// and an unpolled forward is pending — never a guessed down.
 			cmd := m.Init()
-			if view := m.View(); !strings.Contains(view, "tunnels") || !strings.Contains(view, specWeb0) {
-				t.Fatalf("View() before status missing the pending tunnels section:\n%s", view)
+			if view := m.View(); !strings.Contains(view, "◌ web "+specWeb0+" …") {
+				t.Fatalf("View() before status missing the pending web row:\n%s", view)
 			}
 			m = feed(t, m, cmd)
 			view := m.View()
@@ -322,47 +328,76 @@ func TestModel_Update_SpaceTakesSetDown(t *testing.T) {
 	}
 }
 
+// noStateDir returns a path where the state dir cannot be created: a
+// file. Every record then fails with ErrStateWrite while ssh succeeded.
+func noStateDir(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	return p
+}
+
 func TestModel_Update_SpaceOutcomes(t *testing.T) {
 	t.Parallel()
+	refused := fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}}
 	tests := []struct {
-		name       string
-		forward    fakerun.Reply
-		stateDir   func(t *testing.T) string
-		wantNotice string
-		wantNot    string
+		name string
+		// webUp stubs every web port answering so space goes down.
+		webUp    bool
+		stubs    func(r *fakerun.Fake)
+		stateDir func(t *testing.T) string
+		want     []string // all present in the notice
+		wantNot  []string
 	}{
 		{
-			name:       "ssh failure is reported with its message",
-			forward:    fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("bind: Address already in use")}},
-			stateDir:   func(t *testing.T) string { return t.TempDir() },
-			wantNotice: "api: ",
-			wantNot:    "api up",
+			name: "ssh failure is reported with its message",
+			stubs: func(r *fakerun.Fake) {
+				r.Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("bind: Address already in use")}}, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu")
+			},
+			stateDir: func(t *testing.T) string { return t.TempDir() },
+			want:     []string{"web: ", "Address already in use"},
+			wantNot:  []string{"web up"},
 		},
 		{
-			name:    "state write failure warns but the tunnel is real",
-			forward: fakerun.Reply{Result: run.Result{Code: 0}},
-			// A file where the state dir should be: the record cannot be
-			// written, ssh already succeeded.
-			stateDir: func(t *testing.T) string {
-				p := filepath.Join(t.TempDir(), "notadir")
-				if err := os.WriteFile(p, nil, 0o600); err != nil {
-					t.Fatalf("write: %v", err)
-				}
-				return p
+			name: "state write failures warn on one line and the tunnel is real",
+			stubs: func(r *fakerun.Fake) {
+				r.StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
+					StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
 			},
-			wantNotice: "warning: ",
-			wantNot:    "api: ",
+			stateDir: noStateDir,
+			// Two specs => Up joins two state errors: both must stay on
+			// the notice line, not push the frame off the terminal.
+			want:    []string{"warning: ", "not recorded"},
+			wantNot: []string{"web: "},
+		},
+		{
+			name:  "a refused cancel joined with a state failure is a failure",
+			webUp: true,
+			stubs: func(r *fakerun.Fake) {
+				r.Stub(refused, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
+					StubExit(0, "ssh", "-O", "cancel", "-L", specWeb1, "ubuntu")
+			},
+			stateDir: noStateDir,
+			// DownSet joins the cancel failure and the cache failure:
+			// ssh's message must win the label, never "warning".
+			want:    []string{"web: ", "No such file"},
+			wantNot: []string{"warning: "},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := fakerun.New().
-				StubExit(0, "ssh", "-O", "check", "ubuntu").
-				Stub(tt.forward, "ssh", "-O", "forward", "-L", specAPI, "ubuntu")
-			m := tunnelModel(t, r, fakedial.New(), tt.stateDir(t))
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+			tt.stubs(r)
+			d := fakedial.New()
+			if tt.webUp {
+				d.Up("127.0.0.1:3000", time.Millisecond).Up("127.0.0.1:3001", time.Millisecond)
+			}
+			m := tunnelModel(t, r, d, tt.stateDir(t))
 			m = feed(t, m, m.Init())
-			m = press(t, m, "tab", "tab", "tab") // api
+			m = press(t, m, "tab") // web
 			next, cmd := m.Update(keyMsg(" "))
 			m = next.(ui.Model)
 			if cmd == nil {
@@ -370,14 +405,18 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 			}
 			m = update(t, m, cmd())
 			view := m.View()
-			if !strings.Contains(view, tt.wantNotice) {
-				t.Errorf("View() missing %q:\n%s", tt.wantNotice, view)
+			for _, w := range tt.want {
+				if !strings.Contains(view, w) {
+					t.Errorf("View() missing %q:\n%s", w, view)
+				}
 			}
-			if strings.Contains(view, tt.wantNot) {
-				t.Errorf("View() shows %q, want it absent:\n%s", tt.wantNot, view)
+			for _, w := range tt.wantNot {
+				if strings.Contains(view, w) {
+					t.Errorf("View() shows %q, want it absent:\n%s", w, view)
+				}
 			}
-			if tt.wantNotice == "warning: " && !strings.Contains(view, "not recorded") {
-				t.Errorf("View() warning does not say what failed:\n%s", view)
+			if h := strings.Count(view, "\n") + 1; h > 30 {
+				t.Errorf("View() height = %d, want <= 30 (a notice must never add a line)", h)
 			}
 		})
 	}
@@ -407,31 +446,19 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 		wantNotice string
 	}{
 		{
-			name:      "r exits then brings every declared set up",
-			key:       "r",
-			exitReply: fakerun.Reply{Result: run.Result{Code: 0}},
-			wantCalls: []string{
-				"ssh -O exit ubuntu",
-				"ssh -O check ubuntu",
-				"ssh -O forward -L " + specWeb0 + " ubuntu",
-				"ssh -O forward -L " + specWeb1 + " ubuntu",
-				"ssh -O check ubuntu",
-				"ssh -O forward -L " + specAPI + " ubuntu",
-			},
+			// SPEC §5 "restart master": exit, then a fresh master and
+			// nothing else — no set the user did not ask for gets bound.
+			name:       "r exits then starts a fresh master only",
+			key:        "r",
+			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
+			wantCalls:  []string{"ssh -O exit ubuntu", "ssh -O check ubuntu", "ssh -fN ubuntu"},
 			wantNotice: "master restarted",
 		},
 		{
-			name:      "r on a dead master is just an up",
-			key:       "r",
-			exitReply: fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}},
-			wantCalls: []string{
-				"ssh -O exit ubuntu",
-				"ssh -O check ubuntu",
-				"ssh -O forward -L " + specWeb0 + " ubuntu",
-				"ssh -O forward -L " + specWeb1 + " ubuntu",
-				"ssh -O check ubuntu",
-				"ssh -O forward -L " + specAPI + " ubuntu",
-			},
+			name:       "r on a dead master is just a start",
+			key:        "r",
+			exitReply:  fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}},
+			wantCalls:  []string{"ssh -O exit ubuntu", "ssh -O check ubuntu", "ssh -fN ubuntu"},
 			wantNotice: "master restarted",
 		},
 		{
@@ -453,12 +480,13 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().
-				StubExit(0, "ssh", "-O", "check", "ubuntu").
 				Stub(tt.exitReply, "ssh", "-O", "exit", "ubuntu").
-				StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-				StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu").
-				StubExit(0, "ssh", "-O", "forward", "-L", specAPI, "ubuntu")
+				StubExit(0, "ssh", "-fN", "ubuntu")
+			// The poll sees a live master; after the exit the restart's
+			// own check finds none and starts one.
+			r.StubExit(0, "ssh", "-O", "check", "ubuntu")
 			m := polled(t, r, fakedial.New())
+			r.StubExit(255, "ssh", "-O", "check", "ubuntu")
 			before := len(r.CallKeys())
 			next, cmd := m.Update(keyMsg(tt.key))
 			m = next.(ui.Model)
@@ -480,25 +508,17 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 	}
 }
 
-func TestModel_Update_RestartMasterOnlyHost(t *testing.T) {
+func TestModel_Update_HighlightResetsOnHostChange(t *testing.T) {
 	t.Parallel()
-	// A host with no declared sets still gets its master ensured.
+	// A highlight is per host: moving to another host that also has
+	// forwards must not leave an unrelated row armed for space.
 	r := fakerun.New().
 		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(255, "ssh", "-O", "exit", "bare").
-		StubExit(255, "ssh", "-O", "check", "bare").
-		StubExit(0, "ssh", "-fN", "bare")
+		StubExit(0, "ssh", "-O", "check", "spare")
 	m := polled(t, r, fakedial.New())
-	m = press(t, m, "j")
-	before := len(r.CallKeys())
-	_, cmd := m.Update(keyMsg("r"))
-	if cmd == nil {
-		t.Fatalf("Update(r) cmd = nil, want action cmd")
-	}
-	cmd()
-	want := []string{"ssh -O exit bare", "ssh -O check bare", "ssh -fN bare"}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("r calls = %v, want %v", got, want)
+	m = press(t, m, "tab", "G")
+	if view := m.View(); !strings.Contains(view, "$ ssh spare") || strings.Contains(view, "› ○ db") {
+		t.Errorf("View() after G carries ubuntu's highlight onto spare:\n%s", view)
 	}
 }
 
@@ -506,7 +526,8 @@ func TestModel_Update_TunnelKeysInertWhileFiltering(t *testing.T) {
 	t.Parallel()
 	m, r := aliveWeb0(t)
 	before := len(r.CallKeys())
-	m = press(t, m, "/", " ", "X", "r")
+	// With a row highlighted — the realistic state — every key is text.
+	m = press(t, m, "tab", "/", " ", "X", "r")
 	if got := ui.FilterText(m); got != " Xr" {
 		t.Errorf("FilterText() = %q, want %q", got, " Xr")
 	}
@@ -540,9 +561,16 @@ func TestModel_Update_SelectionChangeFetchesStatus(t *testing.T) {
 	if !strings.Contains(view, "$ ssh bare") {
 		t.Errorf("View() preview should be enter's ssh for the new host:\n%s", view)
 	}
-	// Back to a polled host: no re-poll on navigation alone.
-	if _, cmd := m.Update(keyMsg("k")); cmd != nil {
-		t.Errorf("Update(k) back onto a polled host cmd = %v, want nil", cmd)
+	// Back to a host polled earlier: its status is stale — the master
+	// may have died meanwhile — so it reads pending and is re-polled,
+	// never shown as live from memory.
+	next, cmd = m.Update(keyMsg("k"))
+	m = next.(ui.Model)
+	if cmd == nil {
+		t.Fatalf("Update(k) back onto ubuntu cmd = nil, want a re-poll")
+	}
+	if view := m.View(); !strings.Contains(view, "◌ master …") || strings.Contains(view, "● web") {
+		t.Errorf("View() shows ubuntu's stale status as live:\n%s", view)
 	}
 }
 
@@ -619,10 +647,11 @@ func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
 	if !strings.Contains(row, "ad-hoc") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
 		t.Errorf("recorded ad-hoc row = %q, want an ad-hoc row marked down", row)
 	}
-	// It is the fourth row: tab reaches it and space would cancel it.
+	// It is the last row: shift+tab reaches it, and with the master
+	// alive space would re-forward it.
 	m = press(t, m, "shift+tab")
-	if view := m.View(); !strings.Contains(view, "$ ssh -fN ubuntu") && !strings.Contains(view, "5000:localhost:5000 ubuntu") {
-		t.Errorf("View() after shift+tab should preview the ad-hoc row's action:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ ssh -O forward -L 5000:localhost:5000 ubuntu") {
+		t.Errorf("View() after shift+tab should preview the ad-hoc row's forward:\n%s", view)
 	}
 }
 

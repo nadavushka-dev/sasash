@@ -172,7 +172,8 @@ func setLabel(set string) string {
 
 // actionPreview is what the bottom line shows: enter's ssh when no forward
 // row is highlighted, otherwise the first ssh command space will run and
-// how many follow it (a set is one -L per invocation).
+// how many follow it (a set is one -L per invocation). The engine's
+// `-O check` before an Up is a probe, not an action, and is not counted.
 func (m Model) actionPreview() (argv []string, more int) {
 	host, ok := m.Selected()
 	if !ok {
@@ -183,6 +184,9 @@ func (m Model) actionPreview() (argv []string, more int) {
 		return sshCommand(host.Alias), 0
 	}
 	specs, allUp := m.setSpecs(host, row.Set)
+	if len(specs) == 0 {
+		return sshCommand(host.Alias), 0
+	}
 	if allUp {
 		return cancelArgv(host.Alias, specs[0]), len(specs) - 1
 	}
@@ -210,31 +214,41 @@ func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	})
 }
 
-// restartCmd is r: exit the master, then bring every declared set back up
-// (master only when none is declared) — `sasash down` then `sasash up`.
-// The exit's own failure is not news: a restart of a dead master is just
-// an up, and anything that would stop a fresh master fails in Up.
+// restartCmd is r, "restart master" (SPEC §5): exit the master and start
+// a fresh one, nothing more — the forwards it carried are gone with it
+// and come back per set through space, so nothing the user did not ask
+// for gets bound. The exit's own failure is not news: a restart of a dead
+// master is just a start, and anything that would stop a fresh master
+// fails in Up.
 func (m Model) restartCmd(host hostmodel.Host) tea.Cmd {
 	eng, alias := m.tunnels, host.Alias
-	sets := host.Forwards
-	if len(sets) == 0 {
-		sets = []hostmodel.ForwardSet{{}}
-	}
 	return tunnelActionCmd(alias, "restart", "master restarted", func(ctx context.Context) error {
 		_ = eng.Exit(ctx, alias)
-		var stateErrs []error
-		for _, s := range sets {
-			err := eng.Up(ctx, alias, s.Name, s.Specs)
-			if errors.Is(err, tunnel.ErrStateWrite) {
-				stateErrs = append(stateErrs, err)
-				continue
-			}
-			if err != nil {
-				return err
+		return eng.Up(ctx, alias, "", nil)
+	})
+}
+
+// stateWriteOnly reports whether err is nothing but state-cache write
+// failures: the ssh side succeeded. DownSet joins cancel failures and the
+// cache failure into one error, so errors.Is alone would call a refused
+// cancel a mere warning — every leaf has to be ErrStateWrite.
+func stateWriteOnly(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !stateWriteOnly(e) {
+				return false
 			}
 		}
-		return errors.Join(stateErrs...)
-	})
+		return true
+	}
+	return errors.Is(err, tunnel.ErrStateWrite)
+}
+
+// oneLine folds a joined error onto the notice line: errors.Join
+// separates with newlines, and a second line would push the frame off
+// the terminal and truncate the message that matters.
+func oneLine(err error) string {
+	return strings.ReplaceAll(err.Error(), "\n", "; ")
 }
 
 // exitCmd is X: `ssh -O exit`, the master and every forward with it.

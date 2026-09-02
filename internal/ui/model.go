@@ -23,7 +23,6 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
-	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 // refreshEvery is how often paths are re-probed. One refresh dials every
@@ -386,11 +385,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.err == nil:
 			m.notice = msg.done
-		case errors.Is(msg.err, tunnel.ErrStateWrite):
+		case stateWriteOnly(msg.err):
 			// The ssh side succeeded; only the cache write failed.
-			m.notice = "warning: " + msg.err.Error()
+			m.notice = "warning: " + oneLine(msg.err)
 		default:
-			m.notice = msg.label + ": " + msg.err.Error()
+			m.notice = msg.label + ": " + oneLine(msg.err)
 		}
 		// Reality may have changed either way: re-derive it.
 		if host, ok := m.hostByAlias(msg.host); ok {
@@ -649,14 +648,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
-	// A new host under the cursor: the forward highlight belongs to the
-	// old one, and the new one's tunnel status is fetched once — the
-	// refresh tick keeps only the selected host current.
+	// A new host under the cursor: the forward highlight belonged to the
+	// old one, and whatever status the new one had is stale — the tick
+	// refreshes only the selected host — so its rows go back to pending
+	// while a fresh poll runs. Never show a stale state as live.
 	if after, ok := m.Selected(); ok && after.Alias != before.Alias {
 		m.fwdIdx = -1
-		if _, known := m.tstatus[after.Alias]; !known {
-			cmd = tea.Batch(cmd, m.tunnelStatusCmd(after))
-		}
+		delete(m.tstatus, after.Alias)
+		cmd = tea.Batch(cmd, m.tunnelStatusCmd(after))
 	}
 	return m, cmd
 }
@@ -772,7 +771,12 @@ func (m Model) View() string {
 		field := strings.TrimRight(m.prompt.View(), " ")
 		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
 	}
-	if m.notice != "" {
+	// A notice takes the line on its own: appended after a long preview
+	// it would be clamped away, and the notice carries ssh's own reason.
+	// The next keypress clears it and the preview returns.
+	if m.notice != "" && m.mode == promptNone {
+		preview = " " + m.styles.Notice.Render(m.notice)
+	} else if m.notice != "" {
 		preview += "  " + m.styles.Notice.Render(m.notice)
 	}
 	// Same width clamp as the panes: a long alias (or notice) must not
