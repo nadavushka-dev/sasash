@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -46,21 +47,49 @@ func (h *pathHist) observe(s probe.Status, now time.Time) {
 	}
 }
 
-// pathKey identifies a path in the session memory.
-func pathKey(alias string, i int) string { return fmt.Sprintf("%s\x00%d", alias, i) }
+// pathKey identifies a path in the session memory by what it IS — host,
+// name, dial address — never by its position: a reload can reorder or
+// drop paths, and history must follow the path, not the slot.
+func pathKey(alias string, p probe.Path) string {
+	return alias + "\x00" + p.Name + "\x00" + p.Addr()
+}
 
-// observeProbes folds one probe round into the session memory.
+// observeProbes folds one probe round into the session memory. Statuses
+// are index-aligned with each host's Paths, which is where the identity
+// comes from.
 func (m Model) observeProbes(statuses map[string][]probe.Status) Model {
 	now := m.clock.Now()
-	for alias, sts := range statuses {
-		for i, s := range sts {
-			k := pathKey(alias, i)
+	for _, host := range m.hosts {
+		sts := statuses[host.Alias]
+		for i, p := range host.Paths {
+			if i >= len(sts) {
+				break
+			}
+			k := pathKey(host.Alias, p)
 			h := m.hist[k]
 			if h == nil {
 				h = &pathHist{}
 				m.hist[k] = h
 			}
-			h.observe(s, now)
+			h.observe(sts[i], now)
+		}
+	}
+	return m
+}
+
+// pruneHist forgets paths that no longer exist after a reload, so the
+// memory is bounded by the live config and a removed path's history can
+// never be shown under another.
+func (m Model) pruneHist() Model {
+	live := make(map[string]bool)
+	for _, host := range m.hosts {
+		for _, p := range host.Paths {
+			live[pathKey(host.Alias, p)] = true
+		}
+	}
+	for k := range m.hist {
+		if !live[k] {
+			delete(m.hist, k)
 		}
 	}
 	return m
@@ -101,6 +130,15 @@ func sparkline(ring []time.Duration) string {
 	return b.String()
 }
 
+// spellLatency is the range's spelling: milliseconds, or the finer unit
+// when a round trip is under one — never "0s" for a path that answered.
+func spellLatency(d time.Duration) string {
+	if d < time.Millisecond {
+		return d.Round(time.Microsecond).String()
+	}
+	return d.Round(time.Millisecond).String()
+}
+
 // latencyRange spells the ring's min–max, "" when nothing answered.
 func latencyRange(ring []time.Duration) string {
 	var lo, hi time.Duration = -1, -1
@@ -119,9 +157,20 @@ func latencyRange(ring []time.Duration) string {
 		return ""
 	}
 	if lo == hi {
-		return lo.Round(time.Millisecond).String()
+		return spellLatency(lo)
 	}
-	return fmt.Sprintf("%v–%v", lo.Round(time.Millisecond), hi.Round(time.Millisecond))
+	return spellLatency(lo) + "–" + spellLatency(hi)
+}
+
+// newest keeps the last n entries of the ring.
+func newest(ring []time.Duration, n int) []time.Duration {
+	if n < 0 {
+		n = 0
+	}
+	if len(ring) > n {
+		return ring[len(ring)-n:]
+	}
+	return ring
 }
 
 // since spells how long ago t was as of now: 42s, 12m, 1h03m, 2d04h.
@@ -154,20 +203,44 @@ func runWord(now, upSince, downSince time.Time) string {
 	return ""
 }
 
-// handoffRecordedMsg reports the RecordHandoff stamp after enter/H.
-type handoffRecordedMsg struct {
-	host string
-	err  error
+// stampHandoff arranges the RecordHandoff stamp for a managed host after
+// enter/H came back. The store wants one writer per host, and a status
+// poll (which observes and writes) may be in flight: the stamp rides the
+// next poll's goroutine — issued now when none is running, or deferred
+// until the running one lands — so the two never race. Nothing to stamp
+// when no hook is wired or the handoff had no managed host.
+func (m Model) stampHandoff(host string) (Model, tea.Cmd) {
+	if m.recordHandoff == nil || host == "" {
+		return m, nil
+	}
+	m.pendingStamp[host] = true
+	if m.tinflight[host] {
+		return m, nil // the landing poll re-polls with the stamp
+	}
+	return m.stampedPollCmd(host)
 }
 
-// recordHandoffCmd stamps the handoff through the hook, off the UI
-// thread; nil when nothing is wired or the handoff had no managed host.
-func (m Model) recordHandoffCmd(host string) tea.Cmd {
-	if m.recordHandoff == nil || host == "" {
-		return nil
+// stampedPollCmd issues the deferred stamp followed by a fresh poll on
+// one goroutine, so the stamp is on disk before the render that shows it.
+func (m Model) stampedPollCmd(host string) (Model, tea.Cmd) {
+	if !m.pendingStamp[host] {
+		return m, nil
 	}
-	rec := m.recordHandoff
-	return func() tea.Msg { return handoffRecordedMsg{host: host, err: rec(host)} }
+	h, ok := m.hostByAlias(host)
+	if !ok || m.tunnels == nil {
+		delete(m.pendingStamp, host)
+		return m, nil
+	}
+	delete(m.pendingStamp, host)
+	m.tinflight[host] = true
+	rec, eng := m.recordHandoff, m.tunnels
+	return m, func() tea.Msg {
+		stampErr := rec(host)
+		ctx, cancel := context.WithTimeout(context.Background(), tunnelStatusTimeout)
+		defer cancel()
+		st, err := eng.Status(ctx, host, h.Forwards)
+		return tunnelStatusMsg{host: host, status: st, err: err, stampErr: stampErr}
+	}
 }
 
 // summaryLine is the header's tally: hosts, hosts with a path alive, and

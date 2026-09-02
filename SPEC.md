@@ -200,6 +200,16 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 
 `e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.
 
+The header carries a tally — `N hosts · M reachable · K tunnels up (P polled)` — that is
+honest about partial knowledge: `probing…` before the first round, tunnels counted only over
+hosts polled so far, and dropped when it would not fit beside an applied filter term. Rows
+say `up 12m` / `down 3m` from the stats store's observed transitions — since first *observed*
+alive or dead, not since the master started — and nothing when unknown; `last connected` and
+`last switch → path` appear once recorded (the `p` path-switch key is not implemented yet, so
+`last switch` waits for its caller). Paths carry session memory only: a sparkline of the
+newest probe latencies that fit (`·` for a miss), their min–max, and `answered/rounds` this
+session — forgotten when the TUI exits.
+
 The tunnels section renders the engine's three states verbatim, with one presentation
 cap: when two forwards claim the same local port, only the first claimant (declared sets
 first, in meta order, then remembered ad-hoc ones) can be the one answering, so every

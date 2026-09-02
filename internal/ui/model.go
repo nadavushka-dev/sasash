@@ -83,10 +83,7 @@ type refreshTickMsg struct{}
 
 // sshExitMsg arrives when the terminal comes back from an ssh handoff.
 // err reports only a failure to start; ssh's own exit code is not news.
-type sshExitMsg struct {
-	host string // the managed alias handed off to; "" for an ad-hoc target
-	err  error
-}
+type sshExitMsg struct{ err error }
 
 // copyDoneMsg reports the outcome of a clipboard write.
 type copyDoneMsg struct{ err error }
@@ -119,10 +116,7 @@ func herdrExec(alias string) *exec.Cmd {
 
 // herdrExitMsg arrives when the terminal comes back from herdr. err
 // reports only a failure to start; herdr's own exit code is not news.
-type herdrExitMsg struct {
-	host string
-	err  error
-}
+type herdrExitMsg struct{ err error }
 
 // editorArgv is the exact invocation `e` hands the terminal to.
 func editorArgv(editor []string, confPath string) []string {
@@ -259,6 +253,11 @@ type Model struct {
 	clock         stats.Clock
 	hist          map[string]*pathHist
 	recordHandoff func(alias string) error
+	// handoffHost is the managed alias the running handoff (enter/H) was
+	// made to, stamped when the terminal comes back; pendingStamp holds
+	// stamps waiting for an in-flight poll of that host to land.
+	handoffHost  string
+	pendingStamp map[string]bool
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -429,6 +428,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		clock:           clockOr(cfg.Clock),
 		hist:            make(map[string]*pathHist),
 		recordHandoff:   cfg.RecordHandoff,
+		pendingStamp:    make(map[string]bool),
 		notice:          cfg.ActionsWarn,
 		fwdIdx:          -1,
 	}
@@ -573,7 +573,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tunnelStatusMsg:
 		delete(m.tinflight, msg.host)
 		m.tstatus[msg.host] = tunnelState{status: msg.status, err: msg.err}
-		return m, nil
+		if msg.stampErr != nil {
+			m.notice = "stats not recorded: " + msg.stampErr.Error()
+		}
+		// A handoff stamp that waited for this poll rides the next one.
+		return m.stampedPollCmd(msg.host)
 
 	case forwardConflictMsg:
 		return m.forwardConflict(msg)
@@ -634,18 +638,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil && !errors.As(msg.err, &exitErr) {
 			m.notice = "herdr: " + msg.err.Error()
 		}
-		return m, tea.Batch(probeCmd(m.prober, m.hosts), m.recordHandoffCmd(msg.host))
-
-	case handoffRecordedMsg:
-		if msg.err != nil {
-			m.notice = "stats not recorded: " + msg.err.Error()
-			return m, nil
-		}
-		// The stamp is on disk: the next status shows it.
-		if host, ok := m.hostByAlias(msg.host); ok {
-			return m, m.tunnelStatusCmd(host)
-		}
-		return m, nil
+		m, stamp := m.stampHandoff(m.handoffHost)
+		m.handoffHost = ""
+		return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
 
 	case sshExitMsg:
 		// A non-zero ssh exit is not news — ssh printed its own diagnosis
@@ -657,7 +652,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The world may have changed while the terminal was handed away;
 		// and the handoff itself is worth remembering.
-		return m, tea.Batch(probeCmd(m.prober, m.hosts), m.recordHandoffCmd(msg.host))
+		m, stamp := m.stampHandoff(m.handoffHost)
+		m.handoffHost = ""
+		return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
 
 	case copyDoneMsg:
 		if msg.err != nil {
@@ -763,6 +760,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = warningNotice(msg.warnings)
 		}
 		m.hosts = msg.hosts
+		m = m.pruneHist()
+		// The last probe round is index-aligned with the OLD paths: a
+		// reordered or edited host would read another path's state until
+		// the batched re-probe lands. Pending is the honest state.
+		m.statuses = nil
 		items := make([]list.Item, len(msg.hosts))
 		for i, h := range msg.hosts {
 			items[i] = hostItem{host: h}
@@ -813,9 +815,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.submitNewConn()
 				case promptOffer:
 					m.mode = promptNone
-					alias := m.offerAlias
-					return m, tea.ExecProcess(sshExec(alias), func(err error) tea.Msg {
-						return sshExitMsg{host: alias, err: err}
+					m.handoffHost = m.offerAlias
+					return m, tea.ExecProcess(sshExec(m.offerAlias), func(err error) tea.Msg {
+						return sshExitMsg{err: err}
 					})
 				case promptTunnelHost, promptTunnelName, promptTunnelSpecs:
 					return m.submitTunnel()
@@ -850,18 +852,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				alias := host.Alias
-				return m, tea.ExecProcess(sshExec(alias), func(err error) tea.Msg {
-					return sshExitMsg{host: alias, err: err}
+				m.handoffHost = host.Alias
+				return m, tea.ExecProcess(sshExec(host.Alias), func(err error) tea.Msg {
+					return sshExitMsg{err: err}
 				})
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()
 				if !ok {
 					return m, nil
 				}
-				alias := host.Alias
-				return m, tea.ExecProcess(herdrExec(alias), func(err error) tea.Msg {
-					return herdrExitMsg{host: alias, err: err}
+				m.handoffHost = host.Alias
+				return m, tea.ExecProcess(herdrExec(host.Alias), func(err error) tea.Msg {
+					return herdrExitMsg{err: err}
 				})
 			case key.Matches(msg, m.keys.CopyAddr):
 				host, ok := m.Selected()
@@ -1088,11 +1090,15 @@ func (m Model) View() string {
 	}
 
 	header := " " + m.styles.Title.Render("sasash")
-	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff {
-		header += "   " + m.styles.PathExtra.Render(sum)
-	}
 	if m.list.FilterState() == list.FilterApplied {
 		header += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
+	}
+	// The tally is decoration next to the filter term, which explains
+	// why the list is a subset: it is appended only when both fit whole.
+	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff {
+		if with := header + "   " + m.styles.PathExtra.Render(sum); lipgloss.Width(with) <= m.width {
+			header = with
+		}
 	}
 	// The applied-filter term is user content: clamp like all chrome.
 	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
@@ -1225,17 +1231,25 @@ func (m Model) detailView() string {
 		// Session memory: the recent latencies as a shape, their range,
 		// how many rounds answered, and — for a dead path — since when
 		// this session saw it down after being up.
-		if h := m.hist[pathKey(host.Alias, i)]; h != nil && h.total > 0 {
+		if h := m.hist[pathKey(host.Alias, p)]; h != nil && h.total > 0 {
 			if i < len(sts) && !sts[i].Alive() {
 				if d := since(m.clock.Now(), h.downSince); d != "" {
 					b.WriteString(" " + m.styles.PathExtra.Render(d))
 				}
 			}
-			b.WriteString("  " + m.styles.PathExtra.Render(sparkline(h.ring)))
+			// The shape is sized to what is left of the pane after the
+			// range and the count, and shows the NEWEST samples: a
+			// truncated ring would otherwise show the oldest.
+			tail := " " + fmt.Sprintf("%d/%d", h.up, h.total)
 			if r := latencyRange(h.ring); r != "" {
-				b.WriteString(" " + m.styles.PathExtra.Render(r))
+				tail = " " + r + tail
 			}
-			b.WriteString(" " + m.styles.PathExtra.Render(fmt.Sprintf("%d/%d", h.up, h.total)))
+			lineSoFar := lipgloss.Width(strings.TrimLeft(b.String()[strings.LastIndex(b.String(), "\n")+1:], "\n"))
+			room := m.width - m.listWidth() - 2 - lineSoFar - lipgloss.Width(tail) - 2
+			if shape := sparkline(newest(h.ring, room)); shape != "" {
+				b.WriteString("  " + m.styles.PathExtra.Render(shape))
+			}
+			b.WriteString(m.styles.PathExtra.Render(tail))
 		}
 	}
 	if m.tunnels != nil {

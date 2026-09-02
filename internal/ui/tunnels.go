@@ -40,11 +40,13 @@ type tunnelState struct {
 	err    error
 }
 
-// tunnelStatusMsg carries one host's Status result.
+// tunnelStatusMsg carries one host's Status result. stampErr reports a
+// RecordHandoff stamp that rode this poll and failed (best-effort).
 type tunnelStatusMsg struct {
-	host   string
-	status tunnel.HostStatus
-	err    error
+	host     string
+	status   tunnel.HostStatus
+	err      error
+	stampErr error
 }
 
 // tunnelDoneMsg reports the outcome of space / r / X. label names the
@@ -352,9 +354,6 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 	}
 
 	rows, pending := m.forwardRows(host)
-	if len(rows) == 0 && known && ts.err == nil {
-		b.WriteString(m.lastSeenLine(ts.status, now))
-	}
 	nameWidth, specWidth := 0, 0
 	for _, f := range rows {
 		nameWidth = max(nameWidth, len(setLabel(f.Set)))
@@ -399,9 +398,6 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 				b.WriteString(" " + m.styles.Notice.Render("unverified: :"+f.Port+" claimed by "+with))
 			}
 		}
-		if i == len(rows)-1 {
-			b.WriteString(m.lastSeenLine(ts.status, now))
-		}
 		// While this row is being edited, the exact commands enter will
 		// run sit under it and follow the typing: nothing silent. The
 		// plan belongs to the row the edit is BOUND to — a poll can move
@@ -411,6 +407,11 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 				b.WriteString("\n       " + m.styles.CmdPreview.Render(line))
 			}
 		}
+	}
+	// After every row (and any edit plan under it): what the store
+	// remembers about this host.
+	if known && ts.err == nil {
+		b.WriteString(m.lastSeenLine(ts.status, now))
 	}
 	return b.String()
 }

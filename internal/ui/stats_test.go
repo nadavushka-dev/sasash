@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
@@ -230,39 +231,309 @@ func TestModel_View_CorruptStats(t *testing.T) {
 
 func TestModel_Update_HandoffIsRecorded(t *testing.T) {
 	t.Parallel()
+	// enter and H remember the managed alias they hand off to; when the
+	// terminal comes back the stamp rides a fresh status poll (one writer
+	// per host) and the render that follows can show it.
 	tests := []struct {
 		name     string
+		key      string
 		exit     func(error) tea.Msg
 		hookErr  error
-		wantHost string
 		wantNote string
 	}{
-		{name: "enter on a managed host", exit: func(err error) tea.Msg { return ui.SSHExitFrom("web", err) }, wantHost: "web"},
-		{name: "H on a managed host", exit: func(err error) tea.Msg { return ui.HerdrExit(err) }},
-		{name: "a failed stamp is a notice", exit: func(err error) tea.Msg { return ui.SSHExitFrom("web", err) }, hookErr: errors.New("read-only"), wantHost: "web", wantNote: "stats not recorded: read-only"},
-		{name: "an ad-hoc target has no managed host", exit: ui.SSHExit},
+		{name: "enter", key: "enter", exit: ui.SSHExit},
+		{name: "H", key: "H", exit: ui.HerdrExit},
+		{name: "a failed stamp is a notice", key: "enter", exit: ui.SSHExit, hookErr: errors.New("read-only"), wantNote: "stats not recorded: read-only"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var stamped []string
-			m := ui.WithRecordHandoff(probedModel(t, fakerun.New()), func(alias string) error {
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+			m := polled(t, r, fakedial.New())
+			m = ui.WithRecordHandoff(m, func(alias string) error {
 				stamped = append(stamped, alias)
 				return tt.hookErr
 			})
-			next, cmd := m.Update(tt.exit(nil))
-			m = feed(t, next.(ui.Model), cmd)
-			var want []string
-			if tt.wantHost != "" {
-				want = []string{tt.wantHost}
+			next, handoff := m.Update(keyMsg(tt.key))
+			m = next.(ui.Model)
+			if handoff == nil || ui.HandoffHost(m) != "ubuntu" {
+				t.Fatalf("%s: cmd %v, HandoffHost %q; want the handoff bound to ubuntu", tt.key, handoff != nil, ui.HandoffHost(m))
 			}
-			if !reflect.DeepEqual(stamped, want) {
-				t.Errorf("stamped = %v, want %v", stamped, want)
+			before := len(r.CallKeys())
+			next, cmd := m.Update(tt.exit(nil))
+			m = next.(ui.Model)
+			if ui.HandoffHost(m) != "" {
+				t.Errorf("HandoffHost() after the return = %q, want cleared", ui.HandoffHost(m))
+			}
+			m = feed(t, m, cmd) // probe + the stamp-then-poll
+			if !reflect.DeepEqual(stamped, []string{"ubuntu"}) {
+				t.Errorf("stamped = %v, want [ubuntu]", stamped)
+			}
+			if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check ubuntu"}) {
+				t.Errorf("calls after the return = %v, want the re-poll", got)
 			}
 			if tt.wantNote != "" && !strings.Contains(m.View(), tt.wantNote) {
 				t.Errorf("View() missing %q:\n%s", tt.wantNote, m.View())
 			}
 		})
+	}
+}
+
+func TestModel_Update_HandoffStampWaitsForInFlightPoll(t *testing.T) {
+	t.Parallel()
+	// A poll is out when the terminal returns: the stamp must not race
+	// it — it rides the poll issued when that one lands.
+	var stamped []string
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m := polled(t, r, fakedial.New())
+	m = ui.WithRecordHandoff(m, func(alias string) error { stamped = append(stamped, alias); return nil })
+	next, poll := m.Update(ui.RefreshTick()) // a poll in flight
+	m = next.(ui.Model)
+	next, _ = m.Update(keyMsg("enter"))
+	next, back := next.(ui.Model).Update(ui.SSHExit(nil))
+	m = feed(t, next.(ui.Model), back)
+	if len(stamped) != 0 {
+		t.Fatalf("stamped while a poll was in flight: %v", stamped)
+	}
+	m = feedAll(t, m, poll) // the in-flight poll lands: now the stamped poll runs
+	if !reflect.DeepEqual(stamped, []string{"ubuntu"}) {
+		t.Errorf("stamped after the poll landed = %v, want [ubuntu]", stamped)
+	}
+}
+
+func TestModel_Update_AdhocHandoffNotStamped(t *testing.T) {
+	t.Parallel()
+	var stamped []string
+	m := ui.WithRecordHandoff(probedModel(t, fakerun.New()), func(alias string) error { stamped = append(stamped, alias); return nil })
+	m = connectPending(t, m, "192.0.2.50") // ad-hoc: no managed alias
+	if len(stamped) != 0 || ui.HandoffHost(m) != "" {
+		t.Errorf("ad-hoc handoff stamped %v, HandoffHost %q", stamped, ui.HandoffHost(m))
+	}
+}
+
+func TestModel_Update_PathHistoryFollowsThePath(t *testing.T) {
+	t.Parallel()
+	// History is keyed by what a path is, never by its slot: a reload
+	// that reorders the paths keeps each path's own ring, and a removed
+	// path's history is forgotten, not shown under its successor.
+	clock := &fakeClock{t: t0}
+	lan := probe.Path{Name: "lan", Host: "192.0.2.10"}
+	wan := probe.Path{Name: "wan", Host: "203.0.113.5"}
+	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{lan, wan}}}
+	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond).Down("203.0.113.5:22")
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = feed(t, m, m.Init())
+	m = feed(t, m, m.Init())
+	// A reload with the paths reordered; its batched re-probe lands.
+	m = reloadAndProbe(t, m, []hostmodel.Host{{Alias: "web", Paths: []probe.Path{wan, lan}}})
+	view := m.View()
+	// Two rounds before the reload plus the reload's own re-probe.
+	if !lineHas(view, "○ wan", "···", "0/3") || lineHas(view, "○ wan", "down 0s") || lineHas(view, "○ wan", "20ms") {
+		t.Errorf("wan inherited lan's history after the reorder:\n%s", view)
+	}
+	if !lineHas(view, "● lan", "▁▁▁", "20ms", "3/3") {
+		t.Errorf("lan lost its history after the reorder:\n%s", view)
+	}
+	// Dropping wan forgets it; a later re-add starts fresh.
+	m = reloadAndProbe(t, m, []hostmodel.Host{{Alias: "web", Paths: []probe.Path{lan}}})
+	if ring := ui.PathRing(m, "web", wan); ring != nil {
+		t.Errorf("removed path still remembered: %v", ring)
+	}
+	if got := len(ui.PathRing(m, "web", lan)); got != 4 {
+		t.Errorf("lan ring after the prune = %d samples, want 4 (two rounds + two reload re-probes)", got)
+	}
+}
+
+// reloadAndProbe replays the editor returning with hosts and delivers
+// the reload's batched re-probe and status poll, the way the runtime
+// would, so the frame after a reload is settled.
+func reloadAndProbe(t *testing.T, m ui.Model, hosts []hostmodel.Host) ui.Model {
+	t.Helper()
+	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) { return hosts, nil, nil })
+	next, reload := m.Update(ui.EditorExit(nil))
+	next, after := next.(ui.Model).Update(reload())
+	return feedAll(t, next.(ui.Model), after)
+}
+
+// feedAll runs a cmd tree one level deep and, unlike feed, also runs the
+// cmds the deliveries return once more — enough for a stamp that rides
+// the poll after the one in flight.
+func feedAll(t *testing.T, m ui.Model, cmd tea.Cmd) ui.Model {
+	t.Helper()
+	if cmd == nil {
+		return m
+	}
+	msgs := []tea.Msg{cmd()}
+	if batch, ok := msgs[0].(tea.BatchMsg); ok {
+		msgs = nil
+		for _, c := range batch {
+			msgs = append(msgs, c())
+		}
+	}
+	for _, msg := range msgs {
+		next, again := m.Update(msg)
+		m = next.(ui.Model)
+		if again != nil {
+			if follow := again(); follow != nil {
+				if _, isBatch := follow.(tea.BatchMsg); !isBatch {
+					next, _ = m.Update(follow) // a single follow-up: deliver it too
+					m = next.(ui.Model)
+				}
+			}
+		}
+	}
+	return m
+}
+
+func TestModel_View_UnnamedPathsKeepSeparateHistory(t *testing.T) {
+	t.Parallel()
+	// Two unnamed paths on one host are told apart by address: each
+	// keeps its own ring and count.
+	clock := &fakeClock{t: t0}
+	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{{Host: "192.0.2.10"}, {Host: "203.0.113.5"}}}}
+	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond).Down("203.0.113.5:22")
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = feed(t, m, m.Init())
+	view := m.View()
+	if !lineHas(view, "● 192.0.2.10:22", "1/1") || !lineHas(view, "○ 203.0.113.5:22", "0/1") {
+		t.Errorf("unnamed paths share a history:\n%s", view)
+	}
+}
+
+func TestModel_View_ReloadReadsPendingUntilReprobed(t *testing.T) {
+	t.Parallel()
+	// The round before a reload is aligned with the OLD paths: until the
+	// re-probe lands, rows are pending — never another path's state.
+	clock := &fakeClock{t: t0}
+	lan := probe.Path{Name: "lan", Host: "192.0.2.10"}
+	wan := probe.Path{Name: "wan", Host: "203.0.113.5"}
+	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond).Down("203.0.113.5:22")
+	m := ui.New([]hostmodel.Host{{Alias: "web", Paths: []probe.Path{lan, wan}}}, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = feed(t, m, m.Init())
+	m = ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf")
+	m = editReload(t, m, []hostmodel.Host{{Alias: "web", Paths: []probe.Path{wan, lan}}}) // re-probe NOT delivered
+	view := m.View()
+	if lineHas(view, "● wan") || lineHas(view, "○ lan") || !lineHas(view, "◌ wan") || !lineHas(view, "◌ lan") {
+		t.Errorf("rows after a reload should be pending, not the old round's states:\n%s", view)
+	}
+	if !strings.Contains(view, "probing…") {
+		t.Errorf("the tally should be unknown until the re-probe:\n%s", view)
+	}
+}
+
+func TestModel_Update_PathRingIsBounded(t *testing.T) {
+	t.Parallel()
+	clock := &fakeClock{t: t0}
+	lan := probe.Path{Name: "lan", Host: "192.0.2.10"}
+	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{lan}}}
+	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	for i := 0; i < 35; i++ {
+		m = feed(t, m, m.Init())
+	}
+	if got := len(ui.PathRing(m, "web", lan)); got != 30 {
+		t.Errorf("ring after 35 rounds = %d samples, want the 30 newest", got)
+	}
+	if view := m.View(); !lineHas(view, "● lan", "35/35") {
+		t.Errorf("stability should count every round:\n%s", view)
+	}
+}
+
+func TestModel_View_SparklineFitsThePane(t *testing.T) {
+	t.Parallel()
+	// The range and the count are the honest part and always stay; the
+	// shape takes what is left of the pane and shows the NEWEST samples —
+	// never the oldest — so a narrow pane may show none at all.
+	clock := &fakeClock{t: t0}
+	lan := probe.Path{Name: "lan", Host: "192.0.2.10"}
+	hosts := []hostmodel.Host{{Alias: "build-eu-west-bastion-01", Paths: []probe.Path{lan}}}
+	d := fakedial.New().Up("192.0.2.10:22", 10*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	for i := 0; i < 29; i++ {
+		m = feed(t, m, m.Init())
+	}
+	d.Up("192.0.2.10:22", 90*time.Millisecond) // the newest sample is the tallest
+	m = feed(t, m, m.Init())
+	view := m.View()
+	if !lineHas(view, "● lan", "10ms–90ms", "30/30") {
+		t.Errorf("range and count must survive at 80 cols:\n%s", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > 80 {
+			t.Errorf("line wider than the frame (%d): %q", w, line)
+		}
+	}
+	// Wider: part of the ring fits, and it is the newest part.
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
+	view = m.View()
+	if !lineHas(view, "● lan", "█", "10ms–90ms", "30/30") {
+		t.Errorf("the newest (tallest) sample must be drawn at 100 cols:\n%s", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "● lan") && strings.Count(line, "▁") >= 29 {
+			t.Errorf("the whole ring was drawn instead of the newest part: %q", line)
+		}
+	}
+}
+
+func TestModel_View_HeaderKeepsTheFilterTerm(t *testing.T) {
+	t.Parallel()
+	// The filter term explains a subset list; at a width where the tally
+	// cannot sit beside it whole, the tally goes, not the term.
+	clock := &fakeClock{t: t0}
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m, _ := statsModel(t, r, fakedial.New(), clock)
+	m = feed(t, m, m.Init())
+	m = update(t, m, tea.WindowSizeMsg{Width: 60, Height: 24})
+	m = press(t, m, "/", "u", "b", "u", "n", "t", "u", "enter")
+	view := m.View()
+	if !strings.Contains(view, "/ubuntu") || strings.Contains(view, "reachable") {
+		t.Errorf("View() at 60 cols should keep the term and drop the tally:\n%s", view)
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	if view := m.View(); !strings.Contains(view, "/ubuntu") || !strings.Contains(view, "reachable") {
+		t.Errorf("View() at 120 cols should show both:\n%s", view)
+	}
+}
+
+func TestModel_View_TallySkipsErroredPolls(t *testing.T) {
+	t.Parallel()
+	// A host whose poll failed (the seam, not ssh) is not "polled": the
+	// tunnels clause never counts it, and with no polled host at all it
+	// is absent.
+	clock := &fakeClock{t: t0}
+	r := fakerun.New().Stub(fakerun.Reply{Err: errors.New("no ssh binary")}, "ssh", "-O", "check", "ubuntu")
+	m, _ := statsModel(t, r, fakedial.New(), clock)
+	m = feed(t, m, m.Init())
+	header := strings.SplitN(m.View(), "\n", 2)[0]
+	if !strings.Contains(header, "3 hosts · 0 reachable") || strings.Contains(header, "tunnel") {
+		t.Errorf("header should tally hosts only when no poll succeeded: %q", header)
+	}
+}
+
+func TestModel_View_LastSeenAfterEditPlan(t *testing.T) {
+	t.Parallel()
+	// The last-seen line comes after the rows and any edit plan under
+	// them, so the plan reads as the row's, not as the line's.
+	clock := &fakeClock{t: t0}
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m, store := statsModel(t, r, fakedial.New(), clock)
+	if err := store.RecordHandoff("ubuntu"); err != nil {
+		t.Fatalf("RecordHandoff: %v", err)
+	}
+	m = feed(t, m, m.Init())
+	m = ui.WithSaveForwardEdit(m, func(string, string, string, string) error { return nil })
+	m = press(t, m, "l", "G", "E")
+	view := m.View()
+	plan, seen := strings.Index(view, "sasash.conf: forwards api"), strings.Index(view, "last connected")
+	if plan < 0 || seen < 0 || plan > seen {
+		t.Errorf("edit plan (%d) should precede the last-seen line (%d):\n%s", plan, seen, view)
 	}
 }
 

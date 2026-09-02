@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os/exec"
+	"time"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/help"
@@ -9,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/probe"
 )
 
 // RefreshTick lets the external test package drive the live-refresh loop
@@ -18,10 +20,19 @@ func RefreshTick() tea.Msg { return refreshTickMsg{} }
 // ProbeChunk exposes the refresh fan-out bound for the regression test.
 const ProbeChunk = probeChunk
 
-// SSHExit lets tests replay the terminal returning from an ssh handoff;
-// SSHExitFrom names the managed host it came back from.
-func SSHExit(err error) tea.Msg                  { return sshExitMsg{err: err} }
-func SSHExitFrom(host string, err error) tea.Msg { return sshExitMsg{host: host, err: err} }
+// SSHExit lets tests replay the terminal returning from an ssh handoff.
+func SSHExit(err error) tea.Msg { return sshExitMsg{err: err} }
+
+// HandoffHost exposes the managed alias the running handoff was made to
+// (stamped when the terminal comes back); PathRing exposes one path's
+// session ring.
+func HandoffHost(m Model) string { return m.handoffHost }
+func PathRing(m Model, alias string, p probe.Path) []time.Duration {
+	if h := m.hist[pathKey(alias, p)]; h != nil {
+		return append([]time.Duration(nil), h.ring...)
+	}
+	return nil
+}
 
 // Since, Sparkline, and LatencyRange expose the stats spellings for
 // table tests (SASASH.4.8).
