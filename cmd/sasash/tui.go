@@ -108,7 +108,7 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 	// missing file, and the editor creates it.
 	editorWarn := ""
 	if st, err := setup.Check(home); err == nil && !st.IncludePresent {
-		editorWarn = "sasash.conf is not wired into ssh yet — run `sasash setup`"
+		editorWarn = "sasash.conf is not wired into ssh yet — o → create config file, or `sasash setup`"
 	}
 	cfg := ui.Config{
 		Theme:      theme,

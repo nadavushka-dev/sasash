@@ -74,7 +74,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.NextFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Theme, k.Settings, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.NextFwd, k.Toggle, k.AddFwd, k.CancelFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /

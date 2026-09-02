@@ -72,9 +72,16 @@ func setupEnsureCmd(home string) tea.Cmd {
 	return func() tea.Msg { return setupDoneMsg{err: setup.Ensure(home)} }
 }
 
-// openSettings is `o`.
+// openSettings is `o`. The panel supplies its own help, so an expanded
+// `?` is folded away; a save-first flag from an earlier run cannot
+// outlive this point.
 func (m Model) openSettings() Model {
 	m.settings = settingsState{pane: settingsMenu}
+	m.saveThenConnect = false
+	if m.help.ShowAll {
+		m.help.ShowAll = false
+		m.list.SetSize(m.listWidth(), m.contentHeight())
+	}
 	return m
 }
 
@@ -103,6 +110,10 @@ func (m Model) settingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Bottom):
 		s.cursor = m.settingsRows() - 1
+		return m, nil
+	case key.Matches(msg, m.keys.Help):
+		m.help.ShowAll = !m.help.ShowAll
+		m.list.SetSize(m.listWidth(), m.contentHeight())
 		return m, nil
 	case msg.Type == tea.KeyEnter:
 		return m.settingsEnter()
@@ -166,6 +177,11 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 			return m, m.prompt.Focus()
 		}
 	case settingsSetup:
+		if s.checkErr != nil {
+			// Unknown state is not a state to write from.
+			m.notice = "cannot inspect ~/.ssh: " + s.checkErr.Error()
+			return m, nil
+		}
 		if s.status == nil {
 			return m, nil // still checking
 		}
@@ -222,13 +238,15 @@ func (m Model) settingsView() string {
 			present func(setup.Status) bool
 		}
 		pieces := []piece{
-			{setup.IncludeLine + "  → " + m.tildePath("config"), func(st setup.Status) bool { return st.IncludePresent }},
-			{m.tildePath("config.d", "sasash.conf") + "  (managed header)", func(st setup.Status) bool { return st.ConfPresent }},
+			{setup.IncludeLine + "  → top of " + m.tildePath("config"), func(st setup.Status) bool { return st.IncludePresent }},
+			{m.tildePath("config.d", "sasash.conf") + "  (one managed-header comment line)", func(st setup.Status) bool { return st.ConfPresent }},
 			{m.tildePath("cm") + "/  (control sockets)", func(st setup.Status) bool { return st.CMDirPresent }},
 		}
 		for _, p := range pieces {
 			glyph, word := m.styles.StatusWait.Render("◌"), "…"
-			if s.status != nil {
+			// An inspection failure leaves every piece unknown — never
+			// "missing", which would invite a write from a guess.
+			if s.status != nil && s.checkErr == nil {
 				glyph, word = m.styles.StatusDown.Render("○"), "missing"
 				if p.present(*s.status) {
 					glyph, word = m.styles.StatusUp.Render("●"), "present"

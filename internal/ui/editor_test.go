@@ -327,7 +327,7 @@ func TestModel_View_HelpListsEdit(t *testing.T) {
 		width int
 		full  bool
 	}{
-		{name: "short help at 100", width: 100},
+		{name: "short help at 120", width: 120},
 		{name: "full help at 70", width: 70, full: true},
 	}
 	for _, tt := range tests {

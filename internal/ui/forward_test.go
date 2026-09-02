@@ -393,6 +393,15 @@ func TestModel_Update_ConflictYieldsToKeyboardOwner(t *testing.T) {
 			},
 		},
 		{
+			name:  "settings panel keeps the keyboard",
+			setup: func(t *testing.T, m ui.Model) ui.Model { return press(t, m, "o") },
+			check: func(t *testing.T, m ui.Model) {
+				if !ui.SettingsOpen(m) || ui.Prompting(m) {
+					t.Errorf("settings lost: open %v, prompting %v", ui.SettingsOpen(m), ui.Prompting(m))
+				}
+			},
+		},
+		{
 			name:  "filter stays focused",
 			setup: func(t *testing.T, m ui.Model) ui.Model { return press(t, m, "/", "u") },
 			check: func(t *testing.T, m ui.Model) {

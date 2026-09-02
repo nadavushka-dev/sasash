@@ -431,8 +431,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupStatusMsg:
 		if m.settings.pane == settingsSetup {
-			st := msg.status
-			m.settings.status, m.settings.checkErr = &st, msg.err
+			m.settings.checkErr = msg.err
+			if msg.err == nil {
+				st := msg.status
+				m.settings.status = &st
+			}
 		}
 		return m, nil
 
@@ -737,6 +740,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return editorExitMsg{err: err}
 				})
 			case key.Matches(msg, m.keys.Adhoc):
+				m.saveThenConnect = false // the ad-hoc flow connects first
 				m.mode = promptConnect
 				m.prompt.Reset()
 				m.prompt.Placeholder = "[user@]host[:port] [-L local:host:port]"

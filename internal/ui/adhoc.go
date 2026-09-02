@@ -194,6 +194,7 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 		alias := strings.TrimSpace(m.prompt.Value())
 		if alias == "" {
 			m.mode = promptNone
+			m.saveThenConnect = false
 			m.prompt.Blur()
 			m.notice = "not saved"
 			return m, nil
