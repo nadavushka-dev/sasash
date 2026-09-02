@@ -2,7 +2,9 @@ package ui_test
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -102,11 +104,46 @@ func TestModel_View_HerdrPreviewFitsOrGoes(t *testing.T) {
 		t.Errorf("View() at 100 cols missing the whole H segment:\n%s", wide)
 	}
 	narrow := update(t, m, tea.WindowSizeMsg{Width: 60, Height: 24}).View()
-	if strings.Contains(narrow, "herd") {
-		t.Errorf("View() at 60 cols shows a clipped H segment:\n%s", narrow)
+	preview := ""
+	for _, line := range strings.Split(narrow, "\n") {
+		if strings.Contains(line, "$ ") {
+			preview = line
+		}
 	}
-	if !strings.Contains(narrow, "$ ssh build-eu-west-bastion-01") {
-		t.Errorf("View() at 60 cols lost the enter preview:\n%s", narrow)
+	if strings.Contains(preview, "herd") {
+		t.Errorf("preview at 60 cols shows a clipped H segment: %q", preview)
+	}
+	if !strings.Contains(preview, "$ ssh build-eu-west-bastion-01") {
+		t.Errorf("preview at 60 cols lost the enter command: %q", preview)
+	}
+}
+
+func TestModel_View_HerdrPreviewAfterRowsShrink(t *testing.T) {
+	t.Parallel()
+	// A poll can return fewer rows than the highlight index (tab clamps
+	// only at press time). The preview then falls back to the host row
+	// — and the H segment must follow the same judgement, not a stale
+	// index.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	stateDir := t.TempDir()
+	two := `{"forwards":[{"set":"","spec":"5000:localhost:5000"},{"set":"","spec":"5001:localhost:5001"}]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(two), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	m := tunnelModel(t, r, fakedial.New(), stateDir)
+	m = feed(t, m, m.Init())
+	m = press(t, m, "shift+tab") // last row: 5001
+	if view := m.View(); strings.Contains(view, "herdr --remote") {
+		t.Fatalf("View() with a row highlighted should not name H:\n%s", view)
+	}
+	one := `{"forwards":[{"set":"","spec":"5000:localhost:5000"}]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(one), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, tick := m.Update(ui.RefreshTick())
+	m = feed(t, m, tick)
+	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H herdr --remote ubuntu") {
+		t.Errorf("View() after the rows shrank under the highlight should show the host row's two handoffs:\n%s", view)
 	}
 }
 

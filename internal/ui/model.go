@@ -934,11 +934,12 @@ func (m Model) previewView() string {
 	// H is the other handoff on the host row: named beside enter's when
 	// it fits whole — a half-rendered command would be a lie, so a long
 	// alias drops it rather than clipping it.
-	host, ok := m.Selected()
-	if _, hl := m.highlighted(host); ok && !hl {
-		seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
-		if lipgloss.Width(v+seg) <= m.width {
-			v += seg
+	if host, ok := m.Selected(); ok {
+		if _, hl := m.highlighted(host); !hl {
+			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
+			if lipgloss.Width(v+seg) <= m.width {
+				v += seg
+			}
 		}
 	}
 	return v
