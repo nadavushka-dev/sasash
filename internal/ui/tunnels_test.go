@@ -597,6 +597,35 @@ func TestModel_View_TunnelStatusProblems(t *testing.T) {
 	}
 }
 
+func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
+	t.Parallel()
+	// A forward the state file remembers outside any declared set shows
+	// as its own ad-hoc row — attributed, but with a live state like the
+	// rest (here down: nothing answers on its port).
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	stateDir := t.TempDir()
+	state := `{"forwards":[{"set":"","spec":"5000:localhost:5000"}]}`
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	m := tunnelModel(t, r, fakedial.New(), stateDir)
+	m = feed(t, m, m.Init())
+	row := ""
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "5000:localhost:5000") {
+			row = line
+		}
+	}
+	if !strings.Contains(row, "ad-hoc") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
+		t.Errorf("recorded ad-hoc row = %q, want an ad-hoc row marked down", row)
+	}
+	// It is the fourth row: tab reaches it and space would cancel it.
+	m = press(t, m, "shift+tab")
+	if view := m.View(); !strings.Contains(view, "$ ssh -fN ubuntu") && !strings.Contains(view, "5000:localhost:5000 ubuntu") {
+		t.Errorf("View() after shift+tab should preview the ad-hoc row's action:\n%s", view)
+	}
+}
+
 func TestModel_View_HelpListsTunnelKeys(t *testing.T) {
 	t.Parallel()
 	// Presence only at a width where the tunnels column fits.
