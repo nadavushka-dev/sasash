@@ -115,6 +115,15 @@ func (s Store) ObserveHost(host string, master bool, forwards map[string]bool) (
 }
 
 // RecordMasterStart marks the about-to-be alive run as sasash-started.
+//
+// The stamp is deliberately UNCONDITIONAL (Orchestrator ruling, 2026-09-02):
+// callers only reach here after ssh -O check witnessed the master down, so
+// an alive-run already in the store means an unobserved death — restamping
+// starts an honest new run. Carrying the old Since across that death would
+// inflate uptime, the unacceptable direction. The residual is the auto-join
+// race: if a master comes alive between the check and the start, ssh joins
+// it and the restamp undercounts its uptime — conservative, never claiming
+// more than was observed.
 func (s Store) RecordMasterStart(host string) error {
 	return s.mutate(host, func(h *Host) {
 		h.MasterBySasash = true
