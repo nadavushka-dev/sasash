@@ -361,6 +361,14 @@ func (m Model) submitTunnel() (tea.Model, tea.Cmd) {
 			m.notice = "at least one spec"
 			return m, nil
 		}
+		// The writer refuses these too; refusing here keeps the host
+		// and name the user already typed.
+		for _, spec := range specs {
+			if port, _ := localPort(spec); port == "" {
+				m.notice = "spec " + strconv.Quote(spec) + ": no local port — want local:host:port"
+				return m, nil
+			}
+		}
 		m.mode = promptNone
 		m.prompt.Blur()
 		save, host, name := m.saveForwardSet, m.tunnel.host, m.tunnel.name

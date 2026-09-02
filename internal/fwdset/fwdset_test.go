@@ -1,15 +1,21 @@
 package fwdset_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nadavushka-dev/sasash/internal/fwdset"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
+	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 func writeConf(t *testing.T, content string) string {
@@ -198,6 +204,71 @@ func TestAdd_Errors(t *testing.T) {
 			got, rerr := os.ReadFile(path)
 			if rerr != nil || string(got) != in {
 				t.Errorf("file after a rejected Add = %q, want untouched", got)
+			}
+		})
+	}
+}
+
+func TestAdd_ThroughSymlink(t *testing.T) {
+	t.Parallel()
+	// A dotfiles-managed sasash.conf is a symlink: the link survives and
+	// the target gets the bytes.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dotfiles", "sasash.conf")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("Host web\n  HostName 192.0.2.10\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	link := filepath.Join(dir, "sasash.conf")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if err := fwdset.Add(link, "web", "db", []string{"5432:localhost:5432"}); err != nil {
+		t.Fatalf("Add() = %v", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("link after Add: %v, %v; want still a symlink", fi, err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if want := "# @sasash forwards db 5432:localhost:5432\nHost web\n  HostName 192.0.2.10\n"; string(got) != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+}
+
+func TestAdd_LocalPortRuleMatchesEngine(t *testing.T) {
+	t.Parallel()
+	// The writer's "no local port" rule is the engine's (CONTRACT-tunnel
+	// §5): whatever the engine can judge by a port, Add accepts, and only
+	// that. Pinned against Engine.Status's Port for each spec shape.
+	specs := []string{
+		"8080:localhost:80",
+		"127.0.0.1:8080:localhost:80",
+		"*:8080:localhost:80",
+		"[::1]:8080:localhost:80",
+		"localhost:8080:localhost:80",
+		"localhost:5432",
+		"nonsense",
+		":8080:localhost:80",
+	}
+	for _, spec := range specs {
+		t.Run(strconv.Quote(spec), func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web")
+			eng := tunnel.Engine{Runner: r, Dialer: fakedial.New(), StateDir: t.TempDir(), Timeout: time.Millisecond}
+			st, err := eng.Status(context.Background(), "web", []hostmodel.ForwardSet{{Name: "s", Specs: []string{spec}}})
+			if err != nil {
+				t.Fatalf("Status() = %v", err)
+			}
+			engineAccepts := len(st.Forwards) == 1 && st.Forwards[0].Port != ""
+			path := writeConf(t, "Host web\n  HostName 192.0.2.10\n")
+			addErr := fwdset.Add(path, "web", "s", []string{spec})
+			if (addErr == nil) != engineAccepts {
+				t.Errorf("Add(%q) error = %v; engine judges it by a port = %v — the rules diverge", spec, addErr, engineAccepts)
 			}
 		})
 	}

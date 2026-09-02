@@ -453,6 +453,15 @@ func TestModel_Update_SettingsHelpToggle(t *testing.T) {
 	if view := m.View(); !ui.SettingsOpen(m) || !strings.Contains(view, "back / close") {
 		t.Errorf("View() after ? in the panel: open %v:\n%s", ui.SettingsOpen(m), view)
 	}
+	// The fold is what keeps the confirmation whole on a short terminal:
+	// at 80x10 with ? expanded before o, the footer must still render.
+	short := ui.WithHome(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 10}), t.TempDir())
+	short = press(t, short, "?", "o")
+	next, check := short.Update(keyMsg("enter"))
+	short = update(t, next.(ui.Model), check())
+	if view := short.View(); !strings.Contains(view, "enter writes") {
+		t.Errorf("View() at 80x10 lost the confirmation footer:\n%s", view)
+	}
 }
 
 func TestModel_Update_SettingsAddTunnel(t *testing.T) {
@@ -462,7 +471,8 @@ func TestModel_Update_SettingsAddTunnel(t *testing.T) {
 		specs       []string
 	}
 	var calls []call
-	m := ui.WithSaveForwardSet(settingsModel(t, fakerun.New()), func(alias, name string, specs []string) error {
+	r := fakerun.New()
+	m := ui.WithSaveForwardSet(settingsModel(t, r), func(alias, name string, specs []string) error {
 		calls = append(calls, call{alias, name, specs})
 		return nil
 	})
@@ -504,6 +514,15 @@ func TestModel_Update_SettingsAddTunnel(t *testing.T) {
 	if !strings.Contains(m.View(), "at least one spec") {
 		t.Fatalf("enter with no specs should stay in the prompt:\n%s", m.View())
 	}
+	// A spec without a local port is refused here, keeping host and name.
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("nonsense")})
+	m = press(t, m, "enter")
+	if !strings.Contains(m.View(), "no local port") || !strings.Contains(m.View(), "specs:") {
+		t.Fatalf("enter on a portless spec should stay in the specs prompt:\n%s", m.View())
+	}
+	for range "nonsense" {
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5432:localhost:5432  5433:localhost:5433")})
 	next, save := m.Update(keyMsg("enter"))
 	m = next.(ui.Model)
@@ -528,6 +547,10 @@ func TestModel_Update_SettingsAddTunnel(t *testing.T) {
 	feed(t, m, reload)
 	if !loaded {
 		t.Errorf("LoadHosts not called after declaring a set")
+	}
+	// Settings writes desire: nothing was started along the way.
+	if got := r.CallKeys(); len(got) != 0 {
+		t.Errorf("calls during the add-tunnel flow = %v, want none", got)
 	}
 }
 
