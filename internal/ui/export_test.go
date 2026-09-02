@@ -50,8 +50,8 @@ var (
 	SwitchNotice = switchNotice
 )
 
-func WithSwitcher(m Model, sw func(string) (pathswitch.Result, error), hn func(string) (string, bool), rec func(string, string) error) Model {
-	m.switchPath, m.hostName, m.recordSwitch = sw, hn, rec
+func WithSwitcher(m Model, sw func(string) (pathswitch.Result, error), pb func(string) ([]probe.Path, string, bool), rec func(string, string) error) Model {
+	m.switchPath, m.pathBlock, m.recordSwitch = sw, pb, rec
 	return m
 }
 

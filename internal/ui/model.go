@@ -260,11 +260,15 @@ type Model struct {
 	handoffHost  string
 	pendingStamp map[string]func() error // stamp to run on the host's next poll
 
-	// p (SASASH.2.6): the cycle hook, the HostName read behind its
-	// preview, and the switch stamp.
+	// p (SASASH.2.6): the cycle hook, the block read behind its preview
+	// (cached per alias in blocks), the switch stamp, and the hosts with
+	// a switch running — a marker of its own, so finishing a switch can
+	// never release a poll's gate.
 	switchPath   func(alias string) (pathswitch.Result, error)
-	hostName     func(alias string) (string, bool)
+	pathBlock    func(alias string) (paths []probe.Path, hostName string, managed bool)
 	recordSwitch func(alias, pathName string) error
+	blocks       map[string]pathBlock
+	switching    map[string]bool
 
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
@@ -335,12 +339,13 @@ type Config struct {
 	// sleep.
 	Clock stats.Clock
 	// SwitchPath cycles a host's active path (the p key): the cmd layer
-	// wires pathswitch.Cycle on sasash.conf; nil disables p. HostName reads
-	// the block's current HostName from sasash.conf (false when the alias
-	// is not managed there) so the preview can name the exact target;
+	// wires pathswitch.Cycle on sasash.conf; nil disables p. PathBlock
+	// reads the alias's sasash.conf block — its paths and HostName, the
+	// exact inputs the switcher uses; managed is false when there is no
+	// block — so the preview names the switcher's own target.
 	// RecordSwitch stamps a successful switch through stats.Store.
 	SwitchPath   func(alias string) (pathswitch.Result, error)
-	HostName     func(alias string) (string, bool)
+	PathBlock    func(alias string) (paths []probe.Path, hostName string, managed bool)
 	RecordSwitch func(alias, pathName string) error
 	// RecordHandoff stamps the last interactive handoff (enter/H) for a
 	// managed host after the terminal comes back; nil disables. The cmd
@@ -447,8 +452,10 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		recordHandoff:   cfg.RecordHandoff,
 		pendingStamp:    make(map[string]func() error),
 		switchPath:      cfg.SwitchPath,
-		hostName:        cfg.HostName,
+		pathBlock:       cfg.PathBlock,
 		recordSwitch:    cfg.RecordSwitch,
+		blocks:          make(map[string]pathBlock),
+		switching:       make(map[string]bool),
 		notice:          cfg.ActionsWarn,
 		fwdIdx:          -1,
 	}
@@ -731,12 +738,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.offerSave()
 
 	case switchDoneMsg:
-		delete(m.tinflight, msg.host)
+		delete(m.switching, msg.host)
+		delete(m.blocks, msg.host) // the block changed: re-read on the next frame
 		if msg.err != nil {
 			m.notice = "path: " + msg.err.Error()
 			return m, nil
 		}
-		m.notice = switchNotice(msg.res)
+		m.notice = switchNotice(msg.res, len(namedPaths(msg.before.paths)), msg.before.hostName)
 		if !msg.res.Changed {
 			return m, nil
 		}
@@ -802,6 +810,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		before := pathList(m.hosts)
 		m.hosts = msg.hosts
 		m = m.pruneHist()
+		clear(m.blocks) // sasash.conf may have changed under the preview
 		// The last probe round is index-aligned with the OLD paths: when
 		// they changed in any way — order included — a host would read
 		// another path's state until the batched re-probe lands, so
@@ -906,9 +915,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok || m.switchPath == nil {
 					return m, nil
 				}
-				// The write and the stamp both touch this host's files:
-				// no poll meanwhile.
-				m.tinflight[host.Alias] = true
+				if m.switching[host.Alias] {
+					m.notice = "a switch is already running for " + host.Alias
+					return m, nil
+				}
+				// The write touches this host's files: no poll meanwhile
+				// (a marker of its own, so it never frees a poll's gate).
+				m.switching[host.Alias] = true
 				return m, m.switchCmd(host)
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -219,12 +220,16 @@ func (m Model) stampHandoff(host string) (Model, tea.Cmd) {
 }
 
 // stampVia queues one stamp for host and issues it with the next poll —
-// now, or when the in-flight one lands. A later stamp replaces an
-// unissued one for the same host.
+// now, or when the in-flight one lands. Stamps of different kinds
+// (a handoff, then a switch) compose: both run, in order, on that poll.
 func (m Model) stampVia(host string, stamp func() error) (Model, tea.Cmd) {
+	if prev := m.pendingStamp[host]; prev != nil {
+		next := stamp
+		stamp = func() error { return errors.Join(prev(), next()) }
+	}
 	m.pendingStamp[host] = stamp
-	if m.tinflight[host] {
-		return m, nil // the landing poll re-polls with the stamp
+	if m.tinflight[host] || m.switching[host] {
+		return m, nil // the landing poll (or the switch's done arm) re-polls with the stamp
 	}
 	return m.stampedPollCmd(host)
 }

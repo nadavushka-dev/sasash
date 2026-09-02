@@ -133,7 +133,7 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		// p: the switcher on sasash.conf, the HostName read behind its
 		// preview, and the switch stamp.
 		SwitchPath:   func(alias string) (pathswitch.Result, error) { return pathswitch.Cycle(confPath, alias) },
-		HostName:     hostNameIn(confPath),
+		PathBlock:    pathBlockIn(confPath),
 		RecordSwitch: store.RecordSwitch,
 		SaveForwardSet: func(alias, name string, specs []string) error {
 			return fwdset.Add(confPath, alias, name, specs)
@@ -146,21 +146,24 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 	return cfg
 }
 
-// hostNameIn reads a managed host's HostName from sasash.conf for the p
-// preview: the alias must have a Host block there (the switcher's own
-// rule), else false. A missing or unreadable file is "not managed" too.
-func hostNameIn(confPath string) func(alias string) (string, bool) {
-	return func(alias string) (string, bool) {
+// pathBlockIn reads a host's sasash.conf block for the p preview: its
+// paths (hostmodel.Build over that block alone — the switcher's own
+// inputs, not the include-following model) and its HostName. The alias
+// must have a Host block there, else not managed; a missing or
+// unreadable file is not managed either.
+func pathBlockIn(confPath string) func(alias string) ([]probe.Path, string, bool) {
+	return func(alias string) ([]probe.Path, string, bool) {
 		f, err := sshconf.ParseFile(confPath)
 		if err != nil {
-			return "", false
+			return nil, "", false
 		}
 		h, ok := f.Host(alias)
 		if !ok {
-			return "", false
+			return nil, "", false
 		}
+		model, _ := hostmodel.Build(h) // meta warnings never block a switch either
 		v, _ := h.Get("HostName")
-		return v, true
+		return model.Paths, v, true
 	}
 }
 

@@ -196,8 +196,8 @@ func TestTuiConfig(t *testing.T) {
 			if !ok || eng.StateDir != stateDir(tt.home) {
 				t.Errorf("tuiConfig().Tunnels = %#v, want tunnel.Engine with StateDir %q", cfg.Tunnels, stateDir(tt.home))
 			}
-			if cfg.SwitchPath == nil || cfg.HostName == nil || cfg.RecordSwitch == nil {
-				t.Errorf("tuiConfig() p hooks: switch %v, hostName %v, record %v; want all wired", cfg.SwitchPath != nil, cfg.HostName != nil, cfg.RecordSwitch != nil)
+			if cfg.SwitchPath == nil || cfg.PathBlock == nil || cfg.RecordSwitch == nil {
+				t.Errorf("tuiConfig() p hooks: switch %v, block %v, record %v; want all wired", cfg.SwitchPath != nil, cfg.PathBlock != nil, cfg.RecordSwitch != nil)
 			}
 			if eng.Stats == nil || eng.Stats.Dir != stateDir(tt.home) || cfg.RecordHandoff == nil {
 				t.Errorf("tuiConfig() stats: engine store %+v, RecordHandoff wired %v; want the store on %q and the hook", eng.Stats, cfg.RecordHandoff != nil, stateDir(tt.home))
@@ -265,22 +265,32 @@ func TestLoadActionNames(t *testing.T) {
 
 func TestTuiConfig_PathCycleHooks(t *testing.T) {
 	t.Parallel()
-	// Two named paths in sasash.conf: HostName reads the current one, and
-	// SwitchPath really cycles the file through pathswitch.
+	// Two named paths in sasash.conf: PathBlock reads that block's paths
+	// and HostName — even when ~/.ssh/config's own earlier block for the
+	// alias would win the host model — and SwitchPath really cycles the
+	// file through pathswitch.
 	conf := "# @sasash path lan 192.0.2.10\n# @sasash path ts 198.51.100.5\nHost web\n  HostName 192.0.2.10\n"
 	home := wiredHome(t, conf)
-	cfg := tuiConfig(home, filepath.Join(home, "theme"), "", "vi")
-	if got, ok := cfg.HostName("web"); !ok || got != "192.0.2.10" {
-		t.Errorf("HostName(web) = %q, %v; want the current HostName", got, ok)
+	root := filepath.Join(home, ".ssh", "config")
+	if err := os.WriteFile(root, []byte("# @sasash path office 203.0.113.9\nHost web\n  HostName 203.0.113.9\nInclude ~/.ssh/config.d/sasash.conf\n"), 0o600); err != nil {
+		t.Fatalf("write root: %v", err)
 	}
-	if _, ok := cfg.HostName("nope"); ok {
-		t.Errorf("HostName(nope) ok = true, want false for an unmanaged alias")
+	cfg := tuiConfig(home, filepath.Join(home, "theme"), "", "vi")
+	paths, hostName, ok := cfg.PathBlock("web")
+	if !ok || hostName != "192.0.2.10" {
+		t.Errorf("PathBlock(web) = %v, %q, %v; want the sasash.conf block", paths, hostName, ok)
+	}
+	if len(paths) != 2 || paths[0].Name != "lan" || paths[1].Name != "ts" {
+		t.Errorf("PathBlock(web) paths = %+v, want lan, ts from sasash.conf (not office from the root)", paths)
+	}
+	if _, _, ok := cfg.PathBlock("nope"); ok {
+		t.Errorf("PathBlock(nope) ok = true, want false for an unmanaged alias")
 	}
 	res, err := cfg.SwitchPath("web")
 	if err != nil || !res.Changed || res.To.Name != "ts" {
 		t.Fatalf("SwitchPath(web) = %+v, %v; want a switch to ts", res, err)
 	}
-	if got, _ := cfg.HostName("web"); got != "198.51.100.5" {
+	if _, got, _ := cfg.PathBlock("web"); got != "198.51.100.5" {
 		t.Errorf("HostName after the switch = %q, want 198.51.100.5", got)
 	}
 	if err := cfg.RecordSwitch("web", "ts"); err != nil {

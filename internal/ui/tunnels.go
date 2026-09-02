@@ -73,7 +73,7 @@ func exitArgv(host string) []string         { return []string{"ssh", "-O", "exit
 // cannot fan out a process per keystroke, and results cannot land out of
 // order.
 func (m Model) tunnelStatusCmd(host hostmodel.Host) tea.Cmd {
-	if m.tunnels == nil || m.tinflight[host.Alias] {
+	if m.tunnels == nil || m.tinflight[host.Alias] || m.switching[host.Alias] {
 		return nil
 	}
 	m.tinflight[host.Alias] = true
