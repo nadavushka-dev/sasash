@@ -676,11 +676,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.help.Width = msg.Width
 		if m.popup.open() {
-			// The room changed: a parked offset would eat the next key.
+			// The room changed (help width included): a parked offset
+			// would eat the next key.
 			m.popup.offset = min(m.popup.offset, max(len(m.popupBody())-m.popupRoom(), 0))
 		}
-		m.help.Width = msg.Width
 		// The prompt needs an explicit width to get textinput's horizontal
 		// viewport: without one, long input silently loses its tail and
 		// cursor past the terminal edge.

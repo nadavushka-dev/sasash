@@ -138,10 +138,11 @@ func reasonLines(err error) []string {
 	return out
 }
 
-// cleanLine drops control characters from one line of remote-influenced
-// text (tabs become spaces) and trims its end: every reason either tier
-// shows — ssh's stderr, a tool's reply, a config warning — passes
-// through it, so none can redraw the frame.
+// cleanLine drops control characters from one line of remote- or
+// file-influenced text (tabs become spaces) and trims its end: ssh's
+// stderr, a tool's reply and a config warning pass through it on both
+// tiers, so none of them can redraw the frame. (A Go exec error naming
+// the user's own argv is not that kind of text and is shown as is.)
 func cleanLine(l string) string {
 	l = strings.Map(func(r rune) rune {
 		switch {
