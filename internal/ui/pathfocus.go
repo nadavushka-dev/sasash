@@ -17,12 +17,19 @@ import (
 // pathswitch.Set (the same pipeline the cycle and the 2.8 overlay used),
 // esc/h return to the list. Any host change drops the focus (settleFocus).
 
-// pathRows are the rows p moves over: the rendered named paths, in the
-// pane's order, with their index among ALL rendered paths (unnamed ones
-// cannot be made active, so they are skipped but keep their line).
-func pathRows(host hostmodel.Host) (rows []probe.Path, at []int) {
+// pathRows are the rows p moves over: the rendered named paths that the
+// sasash.conf block also declares (by name — Set works by name), in the
+// pane's order, with their index among ALL rendered paths. Unnamed
+// paths cannot be made active, and a rendered name the block lacks
+// would only be refused at enter, so both are skipped but keep their
+// line. The block is the caller's: read fresh at p, cached for frames.
+func pathRows(host hostmodel.Host, b pathBlock) (rows []probe.Path, at []int) {
+	declared := make(map[string]bool)
+	for _, p := range namedPaths(b.paths) {
+		declared[p.Name] = true
+	}
 	for i, p := range host.Paths {
-		if p.Name != "" {
+		if p.Name != "" && declared[p.Name] {
 			rows = append(rows, p)
 			at = append(at, i)
 		}
@@ -59,9 +66,11 @@ func (m Model) focusPathsOn(host hostmodel.Host) Model {
 		m.notice = switchNotice(pathswitchNoop, len(namedPaths(b.paths)), b.hostName)
 		return m
 	}
-	rows, _ := pathRows(host)
-	if len(rows) == 0 {
-		m.notice = "p: no named paths rendered for " + host.Alias
+	rows, _ := pathRows(host, b)
+	if len(rows) < 2 {
+		// The pane renders another block's paths (a Host declared above
+		// the sasash Include shadows it) or an edit not yet reloaded.
+		m.notice = "p: the paths on screen are not sasash.conf's — e reloads on return"
 		return m
 	}
 	m = m.setFocus(focusPaths)
@@ -75,7 +84,10 @@ func (m Model) focusPathsOn(host hostmodel.Host) Model {
 // here — action keys keep their meanings, as under the tunnels focus.
 func (m Model) pathsFocusKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	host, _ := m.Selected()
-	rows, _ := pathRows(host)
+	rows, _ := pathRows(host, m.block(host.Alias))
+	if m.pathIdx < 0 || m.pathIdx >= len(rows) {
+		return m.setFocus(focusList), nil, true // settleFocus keeps this true; belt and braces
+	}
 	move := func(d int) Model {
 		m.pathIdx = min(max(m.pathIdx+d, 0), len(rows)-1)
 		return m
@@ -114,24 +126,42 @@ func (m Model) highlightedPath(host hostmodel.Host) int {
 	if m.focus != focusPaths {
 		return -1
 	}
-	rows, at := pathRows(host)
+	rows, at := pathRows(host, m.block(host.Alias))
 	if m.pathIdx < 0 || m.pathIdx >= len(rows) {
 		return -1
 	}
 	return at[m.pathIdx]
 }
 
+// activePath is the rendered path index the block's HostName makes
+// active under the paths focus (what enter changes), -1 when the pane
+// does not hold focus or the HostName matches no named path.
+func (m Model) activePath(host hostmodel.Host) int {
+	if m.focus != focusPaths {
+		return -1
+	}
+	rows, at := pathRows(host, m.block(host.Alias))
+	if i := activeIndex(rows, m.block(host.Alias).hostName); i >= 0 {
+		return at[i]
+	}
+	return -1
+}
+
 // pathPlan is the bottom line under the paths focus: exactly what enter
 // will make active, by name and host (the port follows the switcher's
 // ownership rule at write time, so it is not guessed).
 func (m Model) pathPlan(host hostmodel.Host) string {
-	rows, _ := pathRows(host)
+	b := m.block(host.Alias)
+	rows, _ := pathRows(host, b)
 	if m.pathIdx < 0 || m.pathIdx >= len(rows) {
 		return ""
 	}
 	row := rows[m.pathIdx]
 	plan := "p → " + row.Name + " " + row.Host
-	if m.pathIdx == activeIndex(rows, m.block(host.Alias).hostName) {
+	switch active := activeIndex(rows, b.hostName); {
+	case active < 0:
+		plan += "  (HostName " + b.hostName + " matches no named path)"
+	case active == m.pathIdx:
 		plan += "  (already active — variants regenerate)"
 	}
 	return plan

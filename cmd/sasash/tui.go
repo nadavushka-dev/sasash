@@ -133,8 +133,8 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		Tunnels:       tunnel.Engine{StateDir: stateDir(home), Stats: &store},
 		Home:          home,
 		RecordHandoff: store.RecordHandoff,
-		// p: the picker's switcher on sasash.conf, the block read behind
-		// its rows, and the switch stamp.
+		// p: the switcher on sasash.conf, the block read behind the rows
+		// it offers, and the switch stamp.
 		SetPath:      func(alias, name string) (pathswitch.Result, error) { return pathswitch.Set(confPath, alias, name) },
 		PathBlock:    pathBlockIn(confPath),
 		RecordSwitch: store.RecordSwitch,

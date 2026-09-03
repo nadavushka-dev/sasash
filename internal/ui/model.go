@@ -394,7 +394,7 @@ type Config struct {
 	// layer wires pathswitch.Set on sasash.conf; nil disables p.
 	// PathBlock reads the alias's sasash.conf block — its paths and
 	// HostName, the exact inputs the switcher uses; managed is false when
-	// there is no block — so the picker offers the switcher's own rows.
+	// there is no block — so p offers only rows the switcher knows.
 	// RecordSwitch stamps a successful switch through stats.Store.
 	SetPath      func(alias, name string) (pathswitch.Result, error)
 	PathBlock    func(alias string) (paths []probe.Path, hostName string, managed bool)
@@ -581,7 +581,7 @@ func (m Model) settleFocus() Model {
 		}
 		m.fwdIdx = min(m.fwdIdx, len(rows)-1)
 	case focusPaths:
-		rows, _ := pathRows(host)
+		rows, _ := pathRows(host, m.block(host.Alias))
 		if !ok || host.Alias != m.focusHost || len(rows) == 0 {
 			return m.setFocus(focusList)
 		}
@@ -1052,6 +1052,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice = "a switch is already running for " + host.Alias
 					return m, nil
 				}
+				if m.focus == focusPaths {
+					return m, nil // already there: p is idempotent, like l
+				}
 				return m.focusPathsOn(host), nil
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()
@@ -1295,15 +1298,18 @@ func (m Model) contentHeight() int {
 // pushing the alt screen around.
 func (m Model) helpView() string {
 	var k help.KeyMap = m.keys
+	// A keyboard owner (a panel, a prompt, the filter) describes enter
+	// before a pane focus does: the line must never promise a path switch
+	// while a prompt has the key.
 	switch {
-	case m.focus == focusPaths:
-		k = pathsKeys{}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:
 		k = promptKeys{mode: m.mode}
 	case m.list.FilterState() == list.Filtering:
 		k = filterKeys{}
+	case m.focus == focusPaths:
+		k = pathsKeys{}
 	}
 	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
 	if m.help.ShowAll && m.mode == promptNone && m.list.FilterState() != list.Filtering {
@@ -1455,12 +1461,18 @@ func (m Model) detailView() string {
 	}
 	sts := m.statuses[host.Alias]
 
+	// The marker names the first alive path — what ssh reaches through
+	// this config — except under the paths focus, where it names the
+	// block's HostName row: the thing enter changes.
 	active := -1
 	for i, s := range sts {
 		if s.Alive() {
 			active = i
 			break
 		}
+	}
+	if m.focus == focusPaths {
+		active = m.activePath(host)
 	}
 
 	nameWidth := 0

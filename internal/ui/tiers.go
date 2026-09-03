@@ -75,9 +75,9 @@ func (m Model) tierRows(hosts []hostmodel.Host) []list.Item {
 
 // rowKey identifies a row for change detection.
 func rowKey(it list.Item) string {
-	switch it.(type) {
+	switch v := it.(type) {
 	case hostItem:
-		return it.(hostItem).host.Alias
+		return v.host.Alias
 	case spacerItem:
 		return "\x00spacer"
 	}

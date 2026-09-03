@@ -87,10 +87,10 @@ func switcherModel(t *testing.T, r *fakerun.Fake, res pathswitch.Result, swErr e
 // alias absent from it is not managed.
 func switcherModelReads(t *testing.T, r *fakerun.Fake, res pathswitch.Result, swErr error) (ui.Model, *[]string, *[][]string, *int) {
 	t.Helper()
-	// dual's HOST MODEL carries other paths than its sasash.conf block
-	// (an earlier block in another included file wins the model): the
-	// preview must follow the block, never the model.
-	hosts := append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{{Name: "office", Host: "203.0.113.9"}, {Name: "vpn", Host: "203.0.113.10"}}})
+	// dual's HOST MODEL renders the same named paths its sasash.conf
+	// block declares (the usual case); TestModel_View_SwitchPlan covers
+	// a pane that renders another block's paths.
+	hosts := append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS}})
 	r.StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "check", "dual")
 	d := fakedial.New()
 	eng := tunnelEngine(t, r, d)
@@ -138,9 +138,20 @@ func TestModel_View_SwitchPlan(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "p: not managed by sasash") {
 		t.Errorf("View() on spare missing the not-managed plan:\n%s", view)
 	}
-	m = press(t, m, "G") // dual: the block allows a switch; the pane's rows are what gets picked
-	if view := m.View(); !strings.Contains(view, "p: pick office / vpn") {
+	m = press(t, m, "G") // dual: the pane's lan/ts are the block's too
+	if view := m.View(); !strings.Contains(view, "p: pick lan / ts") {
 		t.Errorf("View() on dual missing the pick plan:\n%s", view)
+	}
+	// A pane rendering another block's paths (a Host above the sasash
+	// Include shadows it): nothing to offer, said on the line and at p.
+	other := reloadAndProbe(t, ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf"), append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{{Name: "office", Host: "203.0.113.9"}, {Name: "vpn", Host: "203.0.113.10"}}}))
+	other = press(t, other, "G")
+	if view := other.View(); !strings.Contains(view, "p: pane rows are not sasash.conf's") {
+		t.Errorf("View() with a shadowed block should say so:\n%s", view)
+	}
+	next, cmd := other.Update(keyMsg("p"))
+	if cmd != nil || ui.PathsFocused(next.(ui.Model)) || !strings.Contains(next.(ui.Model).View(), "not sasash.conf's — e reloads") {
+		t.Errorf("p with a shadowed block: cmd %v, focused %v:\n%s", cmd != nil, ui.PathsFocused(next.(ui.Model)), next.(ui.Model).View())
 	}
 	// The block is read once per alias per frame set, not on every frame.
 	before := *reads
@@ -233,9 +244,8 @@ func TestModel_Update_CyclePathOutcomes(t *testing.T) {
 			}
 			next, after := m.Update(cmd())
 			m = next.(ui.Model)
-			// The name is the rendered row's (dual's pane shows office/vpn).
-			if !reflect.DeepEqual(*switched, []string{"dual vpn"}) {
-				t.Errorf("switch hook calls = %v, want [dual vpn]", *switched)
+			if !reflect.DeepEqual(*switched, []string{"dual ts"}) {
+				t.Errorf("switch hook calls = %v, want [dual ts]", *switched)
 			}
 			if view := m.View(); !strings.Contains(view, tt.wantNotice) {
 				t.Errorf("View() missing %q:\n%s", tt.wantNotice, view)
@@ -339,7 +349,7 @@ func TestModel_Update_CyclePathTwiceRunsOnce(t *testing.T) {
 		t.Errorf("second p while a switch runs: cmd %v, picker %v, view:\n%s", second != nil, ui.PathsFocused(m), m.View())
 	}
 	first()
-	if !reflect.DeepEqual(*switched, []string{"dual office"}) {
+	if !reflect.DeepEqual(*switched, []string{"dual lan"}) {
 		t.Errorf("switch hook calls = %v, want exactly one", *switched)
 	}
 }
@@ -490,6 +500,15 @@ func TestModel_View_PathsFocus(t *testing.T) {
 	if view := press(t, m, "g", "k", "k").View(); !strings.Contains(view, "› ● lan") || !strings.Contains(view, "p → lan") {
 		t.Errorf("View() after k past the top should stay on lan:\n%s", view)
 	}
+	// A rendered row is offered when the block declares its NAME — the
+	// hosts may differ (Set works by name; the block's wins at write).
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(string) ([]probe.Path, string, bool) {
+			return []probe.Path{pathLAN, {Name: "ts", Host: "203.0.113.50"}}, "192.0.2.10", true
+		}, nil)
+	if view := press(t, m, "esc", "p", "j").View(); !strings.Contains(view, "› ○ ts  198.51.100.5:2222") {
+		t.Errorf("View() should offer ts by name though its host differs in the block:\n%s", view)
+	}
 	// The mark starts on the active row even when it is not the first.
 	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
 		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "198.51.100.5", true }, nil)
@@ -548,11 +567,8 @@ func TestModel_Update_PathsFocusKeys(t *testing.T) {
 	if s := press(t, m, "o"); !ui.SettingsOpen(s) {
 		t.Errorf("o under paths focus should open settings")
 	}
-	// A host change drops the focus (settleFocus).
-	if moved := press(t, m, "k"); ui.PathsFocused(moved) {
-		// k is the pane's key here, so the selection did not move;
-		// force a selection change through the filter instead.
-	}
+	// A host change drops the focus (settleFocus): k is the pane's key
+	// here, so the change comes through the filter.
 	if f := press(t, m, "/", "u", "b", "enter"); ui.PathsFocused(f) {
 		t.Errorf("selecting another host should drop the paths focus:\n%s", f.View())
 	}
@@ -610,5 +626,100 @@ func TestModel_Update_PathsFocusRowGoneBeforeEnter(t *testing.T) {
 	m = next.(ui.Model)
 	if !reflect.DeepEqual(*switched, []string{"dual ts"}) || !strings.Contains(m.View(), `path: host "dual" has no path "ts" (have lan, wan)`) {
 		t.Errorf("switched %v, view:\n%s", *switched, m.View())
+	}
+}
+
+func TestModel_View_PathsFocusActiveIsTheBlocksRow(t *testing.T) {
+	t.Parallel()
+	// Under the focus, ← active names the block's HostName row — the
+	// thing enter changes — even when another path is the first alive
+	// one; outside it, the pane's usual first-alive marker returns.
+	m, _ := pickerModel(t, fakerun.New()) // lan up, ts down
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "198.51.100.5", true }, nil)
+	if view := m.View(); !strings.Contains(view, "● lan 192.0.2.10:22 5ms ← active") {
+		t.Fatalf("View() before p should mark the first alive path:\n%s", view)
+	}
+	m = press(t, m, "p")
+	view := m.View()
+	if !strings.Contains(view, "› ○ ts  198.51.100.5:2222 down ← active") || strings.Count(view, "← active") != 1 || !strings.Contains(view, "already active") {
+		t.Errorf("View() under p should mark the block's HostName row as active:\n%s", view)
+	}
+	if view := press(t, m, "esc").View(); !strings.Contains(view, "● lan 192.0.2.10:22 5ms ← active") {
+		t.Errorf("View() after esc should mark the first alive path again:\n%s", view)
+	}
+	// A hand-edited HostName that matches nothing: no active marker, the
+	// plan says so, the mark starts on the first row.
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "203.0.113.99", true }, nil)
+	view = press(t, m, "esc", "p").View()
+	if strings.Contains(view, "← active") || !strings.Contains(view, "› ● lan") || !strings.Contains(view, "(HostName 203.0.113.99 matches no named path)") {
+		t.Errorf("View() with a hand-edited HostName:\n%s", view)
+	}
+}
+
+func TestModel_Update_PathsFocusOwnersAndEsc(t *testing.T) {
+	t.Parallel()
+	m, switched := pickerModel(t, fakerun.New())
+	// A keyboard owner describes enter, not the pane: settings, a prompt
+	// (+ keeps its meaning under the focus) and the filter each show
+	// their own help; the pane's never leaks under them.
+	if view := press(t, m, "p", "o").View(); strings.Contains(view, "make active") || !strings.Contains(view, "enter select") {
+		t.Errorf("View() with settings over the paths focus should show the settings help:\n%s", view)
+	}
+	if view := press(t, m, "p", "+").View(); strings.Contains(view, "make active") || !strings.Contains(view, "enter add") {
+		t.Errorf("View() with a prompt over the paths focus should show the prompt's help:\n%s", view)
+	}
+	if f := press(t, m, "p", "/"); ui.PathsFocused(f) || strings.Contains(f.View(), "make active") || !strings.Contains(f.View(), "apply filter") {
+		t.Errorf("/ drops the paths focus and shows the filter's help: focused %v:\n%s", ui.PathsFocused(f), f.View())
+	}
+	// esc folds an expanded ? first and keeps the focus; the next esc
+	// returns to the list.
+	m = press(t, m, "p", "?")
+	m = press(t, m, "esc")
+	if !ui.PathsFocused(m) || strings.Contains(m.View(), "host list") {
+		t.Errorf("first esc should fold the help and keep the focus: focused %v:\n%s", ui.PathsFocused(m), m.View())
+	}
+	m = press(t, m, "esc")
+	if ui.PathsFocused(m) || len(*switched) != 0 {
+		t.Errorf("second esc should return to the list: focused %v, switched %v", ui.PathsFocused(m), *switched)
+	}
+	// p under the focus is idempotent: the mark stays where it was.
+	m = press(t, m, "p", "j", "p")
+	if view := m.View(); !ui.PathsFocused(m) || !strings.Contains(view, "› ○ ts") {
+		t.Errorf("p under the focus should keep the mark:\n%s", view)
+	}
+}
+
+func TestModel_Update_PathsFocusShrinkClamp(t *testing.T) {
+	t.Parallel()
+	// The mark sits on the third row; a reload drops that path: the mark
+	// clamps onto the last remaining row and enter acts on it, never past
+	// the slice.
+	r := fakerun.New()
+	m, switched := pickerModel(t, r)
+	three := func(string) ([]probe.Path, string, bool) {
+		return []probe.Path{pathLAN, pathTS, pathWAN}, "192.0.2.10", true
+	}
+	m = ui.WithSwitcher(m, func(alias, name string) (pathswitch.Result, error) {
+		*switched = append(*switched, alias+" "+name)
+		return pathswitch.Result{Alias: alias, From: pathLAN, To: pathTS, Changed: true}, nil
+	}, three, nil)
+	m = reloadAndProbe(t, ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf"), append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS, pathWAN}}))
+	m = press(t, m, "G", "p", "G")
+	if view := m.View(); !strings.Contains(view, "› ○ wan") {
+		t.Fatalf("View() should mark wan:\n%s", view)
+	}
+	m = reloadAndProbe(t, m, append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS}}))
+	if view := m.View(); !ui.PathsFocused(m) || !strings.Contains(view, "› ○ ts") || !strings.Contains(view, "p → ts") {
+		t.Errorf("the mark should clamp onto the last remaining row:\n%s", view)
+	}
+	next, cmd := m.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatalf("enter after the clamp cmd = nil")
+	}
+	cmd()
+	if !reflect.DeepEqual(*switched, []string{"dual ts"}) || ui.PathsFocused(next.(ui.Model)) {
+		t.Errorf("switched %v (want [dual ts]), focused %v", *switched, ui.PathsFocused(next.(ui.Model)))
 	}
 }

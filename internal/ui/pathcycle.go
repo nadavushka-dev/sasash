@@ -58,9 +58,8 @@ func namedPaths(paths []probe.Path) []probe.Path {
 }
 
 // switchPlan is the p segment of the host row's preview line: the
-// rendered paths p will offer, by name — the block decides whether a
-// switch is possible at all, the pane's rows are what gets picked —
-// or why there is nothing to pick.
+// rendered paths p will offer, by name — those the block also declares
+// — or why there is nothing to pick.
 func (m Model) switchPlan(host hostmodel.Host) string {
 	if m.setPath == nil || m.pathBlock == nil {
 		return ""
@@ -75,7 +74,10 @@ func (m Model) switchPlan(host hostmodel.Host) string {
 	case 1:
 		return "p: only one path"
 	}
-	rows, _ := pathRows(host)
+	rows, _ := pathRows(host, b)
+	if len(rows) < 2 {
+		return "p: pane rows are not sasash.conf's"
+	}
 	names := make([]string, len(rows))
 	for i, p := range rows {
 		names[i] = p.Name
