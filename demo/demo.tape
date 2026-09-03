@@ -28,6 +28,11 @@ Sleep 1s
 Screenshot demo/out/frame-b.png
 Type "k"
 Sleep 500ms
+Type "?"
+Sleep 1.5s
+Screenshot demo/out/frame-keys.png
+Escape
+Sleep 500ms
 Hide
 Type "q"
 Sleep 500ms

@@ -43,7 +43,9 @@ func (m Model) show(title string, lines ...string) Model {
 // popupKey routes a key while the popup owns the keyboard: esc and enter
 // close, j/k and the half pages scroll, everything else is inert.
 func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, m.keys.ClearFilter) || msg.Type == tea.KeyEnter || (key.Matches(msg, m.keys.Help) && m.popup.title == helpTitle) {
+	// The keys panel is a reference, not an acknowledgement: ? and q
+	// close it too.
+	if key.Matches(msg, m.keys.ClearFilter) || msg.Type == tea.KeyEnter || (m.popup.title == helpTitle && (key.Matches(msg, m.keys.Help) || key.Matches(msg, m.keys.Quit))) {
 		m.popup = popup{}
 		return m, nil
 	}
@@ -96,11 +98,13 @@ func (m Model) popupView() string {
 	p := m.popup
 	offset := min(max(p.offset, 0), max(len(body)-room, 0))
 	var b strings.Builder
-	glyph := p.glyph
+	glyph, title := p.glyph, m.styles.Notice
 	if glyph == "" {
 		glyph = "!"
+	} else {
+		title = m.styles.SectionLabel // a reference, not a warning
 	}
-	b.WriteString(" " + m.styles.Notice.Render(glyph+" "+p.title))
+	b.WriteString(" " + title.Render(glyph+" "+p.title))
 	b.WriteString("\n")
 	end := min(offset+room, len(body))
 	for _, l := range body[offset:end] {

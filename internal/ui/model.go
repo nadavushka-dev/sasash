@@ -115,6 +115,14 @@ func sshExec(alias string) *exec.Cmd {
 	return execCommand(sshCommand(alias))
 }
 
+// contextHelp is the footer renderer for a surface's hints, spelled with
+// the same separator as the whisper.
+func contextHelp() help.Model {
+	h := help.New()
+	h.ShortSeparator = helpSeparator
+	return h
+}
+
 // handoff is the classic full-terminal ssh (S, and enter's last resort).
 func (m Model) handoff(alias string) (tea.Model, tea.Cmd) {
 	m.handoffHost = alias
@@ -495,7 +503,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		hosts:      hosts,
 		fold:       fold,
 		list:       l,
-		help:       help.New(),
+		help:       contextHelp(),
 		keys:       keys,
 		prober:     prober,
 		runner:     runner,
@@ -1311,8 +1319,8 @@ func (m Model) listWidth() int {
 }
 
 // contentHeight is the pane area: total minus header (2), the preview
-// line, and the help block — one line normally, taller while `?` has it
-// expanded.
+// line, and the footer — one line always: the whisper, or a surface's
+// context hint (SASASH.4.13).
 func (m Model) contentHeight() int {
 	h := m.height - 3 - lipgloss.Height(m.helpView())
 	if m.expansionLine() != "" {
@@ -1324,16 +1332,15 @@ func (m Model) contentHeight() int {
 	return h
 }
 
-// helpView renders the bottom help block, generated from the key
-// bindings; while the filter input is focused it shows the two keys that
-// actually do anything there. help.Width makes bubbles truncate with an
-// ellipsis, but its truncation has an off-by-a-few edge (an item landing
-// within two cells of the limit is added anyway, and everything after it
-// too), so the block gets the same hard clamp as the rest of the chrome —
-// and a height clamp, so `?` on a short terminal degrades instead of
-// pushing the alt screen around.
+// helpView renders the footer: a surface's one-line context hint,
+// generated from its key bindings, while one holds the keys, else the
+// whisper. help.Width makes bubbles truncate with an ellipsis, but its
+// truncation has an off-by-a-few edge (an item landing within two cells
+// of the limit is added anyway, and everything after it too), so the
+// line gets the same hard clamp as the rest of the chrome, and a height
+// clamp for a very short terminal.
 func (m Model) helpView() string {
-	var k help.KeyMap = m.keys
+	var k help.KeyMap
 	// A keyboard owner (a panel, a prompt, the filter) describes enter
 	// before a pane focus does: the line must never promise a path switch
 	// while a prompt has the key.
@@ -1349,12 +1356,12 @@ func (m Model) helpView() string {
 	case m.focus == focusPaths:
 		k = pathsKeys{}
 	case m.focus == focusTunnels:
-		k = tunnelsKeys{}
+		k = tunnelsKeys{k: m.keys}
 	}
 	// The main view's footer is a whisper (SASASH.4.13): every key lives
 	// in the ? panel. A keyboard owner or a pane focus keeps its one-line
 	// context help, because that line says what the keys do there.
-	if _, whisper := k.(KeyMap); whisper {
+	if k == nil {
 		return m.styles.Clamp.MaxWidth(m.width).Render(" " + m.whisper())
 	}
 	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))

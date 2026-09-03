@@ -73,26 +73,23 @@ func DefaultKeyMap() KeyMap {
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Settings:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
 		Variants:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "pinned variants")),
-		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
+		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "keys")),
 		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
 	}
 }
 
-// ShortHelp implements help.KeyMap; the help bar truncates by width, so
-// the most-reached-for keys come first.
-func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.Handoff, k.PickPath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Variants, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
-}
+// The KeyMap renders nowhere as a strip (SASASH.4.13): the main view's
+// footer is a whisper and `?` opens the keys panel, which helpGroups
+// builds from these bindings. The context keymaps below are what the
+// footer shows while a surface holds the keys.
 
-// FullHelp implements help.KeyMap. The expanding help bar is retired
-// (SASASH.4.13: `?` opens the keys panel, generated from the same
-// bindings by helpGroups); the interface still wants it.
-func (k KeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
+// moveKeys is the j/k row every focus and panel shares.
+var moveKeys = key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "move"))
 
-// actionsLine is the full-help line naming the actions.toml entries
-// (SPEC §6): listed so the file is discoverable, and honest about not
-// being runnable from the TUI yet.
+// actionsLine is the keys panel's last section, naming the actions.toml
+// entries (SPEC §6): listed so the file is discoverable, and honest about
+// not being runnable from the TUI yet.
 func actionsLine(names []string) string {
 	if len(names) == 0 {
 		return ""
@@ -132,16 +129,16 @@ func (p promptKeys) FullHelp() [][]key.Binding {
 }
 
 // tunnelsKeys is the context help shown while the tunnels pane holds
-// focus: what the pane's keys do there (action keys keep their meanings
-// and live in the ? panel).
-type tunnelsKeys struct{}
+// focus: what the pane's keys do there, spelled by the same bindings
+// the keys panel lists (action keys keep their meanings).
+type tunnelsKeys struct{ k KeyMap }
 
-func (tunnelsKeys) ShortHelp() []key.Binding {
+func (t tunnelsKeys) ShortHelp() []key.Binding {
 	return []key.Binding{
-		key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "move")),
-		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
-		key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel")),
-		key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit")),
+		moveKeys,
+		t.k.Toggle,
+		t.k.CancelFwd,
+		t.k.EditFwd,
 		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "host list")),
 	}
 }

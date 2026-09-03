@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The ? panel (SASASH.4.13): every named binding, grouped by the surface
@@ -20,15 +21,17 @@ type helpGroup struct {
 	keys []key.Binding
 }
 
-// helpGroups lists the panel's sections in their base order.
+// helpGroups lists the panel's sections in their base order. Group
+// MEMBERSHIP is this list (a new binding must be placed here — the
+// every-binding test catches one that is not); the keys and their
+// wording come from the bindings.
 func (m Model) helpGroups() []helpGroup {
 	k := m.keys
 	groups := []helpGroup{
-		{"global", []key.Binding{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Theme, k.Variants, k.Quit}},
-		{"hosts", []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit}},
+		{"host list", []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.Filter, k.ClearFilter, k.Help, k.Settings, k.Theme, k.Variants, k.Quit}},
 		{"paths (p)", pathsKeys{}.ShortHelp()},
-		{"tunnels (l)", append([]key.Binding{k.FocusRight, k.FocusLeft, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit}, tunnelsKeys{}.ShortHelp()[0])},
-		{"prompts", promptKeys{}.ShortHelp()},
+		{"tunnels (l)", append([]key.Binding{k.FocusRight, k.FocusLeft, k.AddFwd, k.Restart, k.Exit}, tunnelsKeys{k: k}.ShortHelp()...)},
+		{"prompts", promptGroupKeys()},
 		{"settings (o)", settingsKeys{}.ShortHelp()},
 		{"popups", popupKeys{}.ShortHelp()},
 	}
@@ -53,14 +56,41 @@ func (m Model) helpGroups() []helpGroup {
 	return groups
 }
 
+// promptGroupKeys is the prompts section: enter and esc mean different
+// things in different prompts, so the row unions every prompt's verbs
+// and points at the prompt's own footer, which says which applies.
+func promptGroupKeys() []key.Binding {
+	var enters, escs []string
+	seen := map[string]bool{}
+	for mode := promptConnect; mode <= promptEditFwd; mode++ {
+		for _, b := range (promptKeys{mode: mode}).ShortHelp() {
+			h := b.Help()
+			if seen[h.Key+h.Desc] {
+				continue
+			}
+			seen[h.Key+h.Desc] = true
+			if h.Key == "enter" {
+				enters = append(enters, h.Desc)
+			} else {
+				escs = append(escs, h.Desc)
+			}
+		}
+	}
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", strings.Join(enters, " / ")+" — the prompt's own line says which")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", strings.Join(escs, " / "))),
+	}
+}
+
 // helpLines renders the groups as the popup's lines: a heading, then
-// one `key  description` row per binding, keys padded to a column.
+// one `key  description` row per binding, keys padded to a column
+// (measured in cells: ↑/k is three wide, not five).
 func (m Model) helpLines() []string {
 	groups := m.helpGroups()
 	width := 0
 	for _, g := range groups {
 		for _, b := range g.keys {
-			width = max(width, len(b.Help().Key))
+			width = max(width, lipgloss.Width(b.Help().Key))
 		}
 	}
 	var out []string
@@ -71,9 +101,6 @@ func (m Model) helpLines() []string {
 		out = append(out, m.styles.SectionLabel.Render(g.name))
 		for _, b := range g.keys {
 			h := b.Help()
-			if h.Key == "" {
-				continue // ctrl+c: an always-on escape hatch with no help text
-			}
 			out = append(out, m.styles.HelpKey.Render(padRight(h.Key, width))+"  "+m.styles.HelpDesc.Render(h.Desc))
 		}
 	}
@@ -84,13 +111,14 @@ func (m Model) helpLines() []string {
 }
 
 func padRight(s string, w int) string {
-	if len(s) >= w {
-		return s
+	if n := lipgloss.Width(s); n < w {
+		return s + strings.Repeat(" ", w-n)
 	}
-	return s + strings.Repeat(" ", w-len(s))
+	return s
 }
 
-// helpTitle marks the panel: ? closes it, unlike an attention popup.
+// helpTitle marks the panel: ? and q close it, unlike an attention
+// popup, which wants esc or enter.
 const helpTitle = "keys — ? or esc closes"
 
 // openHelp shows the panel. (While it is open the popup owns the keys,
@@ -101,7 +129,11 @@ func (m Model) openHelp() Model {
 	return m
 }
 
-// whisper is the main view's footer: the one key that leads everywhere.
+// whisper is the main view's footer: the one key that leads everywhere,
+// spelled with the same separator as every context hint.
 func (m Model) whisper() string {
-	return m.styles.HelpKey.Render("?") + " " + m.styles.HelpDesc.Render("keys") + m.styles.HelpSep.Render(" · ") + m.styles.HelpKey.Render("q") + " " + m.styles.HelpDesc.Render("quit")
+	return m.styles.HelpKey.Render("?") + " " + m.styles.HelpDesc.Render("keys") + m.styles.HelpSep.Render(helpSeparator) + m.styles.HelpKey.Render("q") + " " + m.styles.HelpDesc.Render("quit")
 }
+
+// helpSeparator is the footer's separator between hints.
+const helpSeparator = " · "

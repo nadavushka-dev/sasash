@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
@@ -29,6 +30,16 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 	if !ui.HelpOpen(m) || !strings.Contains(view, "? keys — ? or esc closes") {
 		t.Fatalf("? should open the keys panel:\n%s", view)
 	}
+	// A row is the key, padding, then the description on ONE line: a
+	// key and a description found apart do not count.
+	row := func(h key.Help) bool {
+		for _, l := range strings.Split(view, "\n") {
+			if i := strings.Index(l, h.Key); i >= 0 && strings.Contains(l[i+len(h.Key):], "  "+h.Desc) {
+				return true
+			}
+		}
+		return false
+	}
 	km := reflect.ValueOf(ui.DefaultKeyMap())
 	listed := 0
 	for i := 0; i < km.NumField(); i++ {
@@ -37,20 +48,50 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 			continue // ctrl+c carries no help text on purpose
 		}
 		listed++
-		if h := b.Help(); !strings.Contains(view, h.Key) || !strings.Contains(view, h.Desc) {
-			t.Errorf("panel missing %s: %q %q", km.Type().Field(i).Name, h.Key, h.Desc)
+		if h := b.Help(); !row(h) {
+			t.Errorf("panel missing %s as a row: %q %q", km.Type().Field(i).Name, h.Key, h.Desc)
 		}
 	}
 	if listed < 25 {
 		t.Errorf("only %d bindings carry help text; the reflection walk found too few", listed)
 	}
+	// The context keymaps too: every hint a surface's footer can show is
+	// a row here (the prompts' verbs are unioned into one row).
+	for _, km := range ui.ContextKeymaps() {
+		for _, b := range km.ShortHelp() {
+			h := b.Help()
+			if h.Key == "enter" || h.Key == "esc" {
+				if !strings.Contains(view, h.Desc) {
+					t.Errorf("panel missing the prompt verb %q", h.Desc)
+				}
+				continue
+			}
+			if !row(h) {
+				t.Errorf("panel missing the context row %q %q", h.Key, h.Desc)
+			}
+		}
+	}
 	// Grouped by surface, in the base order when nothing holds the keys.
-	if !order(view, "   global", "   hosts", "   paths (p)", "   tunnels (l)", "   prompts", "   settings (o)", "   popups") {
+	if !order(view, "   host list", "   paths (p)", "   tunnels (l)", "   prompts", "   settings (o)", "   popups") {
 		t.Errorf("panel groups out of order:\n%s", view)
 	}
-	for _, want := range []string{"make active", "keep current", "toggle set", "enter      connect", "back / close", "close"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("panel missing the context surface's row %q:\n%s", want, view)
+	// The prompts row is honest about enter meaning different things.
+	if !strings.Contains(view, "connect / save / add / next / declare") || !strings.Contains(view, "cancel / skip") || !strings.Contains(view, "the prompt's own line says which") {
+		t.Errorf("panel prompts row should union the verbs:\n%s", view)
+	}
+	// Cells, not bytes: the arrow rows' descriptions start in the same
+	// column as everyone else's.
+	col := -1
+	for _, l := range strings.Split(view, "\n") {
+		for _, k := range []string{"↑/k ", "ctrl+d ", "g "} {
+			if strings.HasPrefix(l, "   "+k) {
+				rest := strings.TrimLeft(l[3+len(k):], " ")
+				c := lipgloss.Width(l[:len(l)-len(rest)])
+				if col >= 0 && c != col {
+					t.Errorf("description column drifts at %q: %d vs %d", k, c, col)
+				}
+				col = c
+			}
 		}
 	}
 }
@@ -58,13 +99,15 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 func TestModel_Update_HelpPanelKeys(t *testing.T) {
 	t.Parallel()
 	m := tallHelp(t)
-	// ? and esc close it; enter does too (a popup); action keys are inert.
-	for _, k := range []string{"?", "esc", "enter"} {
+	// ?, q and esc close it; enter does too (a popup); action keys are
+	// inert — the panel never lists a key that would not work under it
+	// as anything but "close".
+	for _, k := range []string{"?", "q", "esc", "enter"} {
 		if c := press(t, m, k); ui.HelpOpen(c) || ui.PopupOpen(c) {
 			t.Errorf("%s should close the panel", k)
 		}
 	}
-	for _, k := range []string{"S", "o", "/", "q", "a", "+", "l", "p", "t", "v"} {
+	for _, k := range []string{"S", "o", "/", "a", "+", "l", "p", "t", "v"} {
 		next, cmd := m.Update(keyMsg(k))
 		if cmd != nil || !ui.HelpOpen(next.(ui.Model)) {
 			t.Errorf("key %q under the panel: cmd %v, open %v", k, cmd != nil, ui.HelpOpen(next.(ui.Model)))
@@ -109,9 +152,9 @@ func TestModel_View_HelpPanelContextGroupFirst(t *testing.T) {
 	if c := press(t, pm, "esc"); ui.HelpOpen(c) || !ui.PathsFocused(c) {
 		t.Errorf("esc should close the panel and keep the paths focus: help %v, focused %v", ui.HelpOpen(c), ui.PathsFocused(c))
 	}
-	// Nothing holding the keys: global leads.
-	if g := group(press(t, m, "?")); !strings.HasPrefix(g, "global") {
-		t.Errorf("first group = %q, want global", g)
+	// Nothing holding the keys: the host list leads.
+	if g := group(press(t, m, "?")); !strings.HasPrefix(g, "host list") {
+		t.Errorf("first group = %q, want host list", g)
 	}
 }
 
@@ -139,7 +182,7 @@ func TestModel_View_FooterIsAWhisper(t *testing.T) {
 	}{
 		{name: "tunnels focus", keys: []string{"l"}, want: "space toggle set"},
 		{name: "filter", keys: []string{"/"}, want: "apply filter"},
-		{name: "prompt", keys: []string{"a"}, want: "esc cancel"},
+		{name: "prompt", keys: []string{"a"}, want: "connect · esc cancel"}, // the same separator as the whisper
 		{name: "settings", keys: []string{"o"}, want: "back / close"},
 	}
 	for _, tt := range tests {
