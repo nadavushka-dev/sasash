@@ -171,9 +171,9 @@ func tmuxArgv(target, alias string) []string {
 }
 
 // tmuxName is an alias as a tmux window name.
-func tmuxName(alias string) string {
-	return strings.NewReplacer(".", "_", ":", "_").Replace(alias)
-}
+func tmuxName(alias string) string { return tmuxNamer.Replace(alias) }
+
+var tmuxNamer = strings.NewReplacer(".", "_", ":", "_")
 
 // windowArgv expands the OS-window template with the alias as {host}
 // (actions.toml discipline: tokenize, then substitute per token).

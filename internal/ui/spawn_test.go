@@ -254,6 +254,9 @@ func TestModel_Update_EnterSpawnFailures(t *testing.T) {
 		{name: "herdr's error envelope gives its message", stub: func(r *fakerun.Fake) {
 			r.Stub(fakerun.Reply{Result: run1(`{"error":{"code":"workspace_not_found","message":"workspace w99 not found"},"id":"cli:tab:create"}` + "\n")}, "herdr", "tab", "create", "--label", "web", "--no-focus")
 		}, wantNotice: "herdr tab create failed: workspace w99 not found"},
+		{name: "valid json with no message falls through to the text", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run1(`{"id":"x","result":{"type":"ok"}}` + "\n")}, "herdr", "tab", "create", "--label", "web", "--no-focus")
+		}, wantNotice: `herdr tab create failed: {"id":"x","result":{"type":"ok"}}`},
 		{name: "a tool that speaks on stdout", stub: func(r *fakerun.Fake) {
 			r.Stub(fakerun.Reply{Result: run.Result{Stdout: []byte("no display\n"), Code: 1}}, "herdr", "tab", "create", "--label", "web", "--no-focus")
 		}, wantNotice: "herdr tab create failed: no display"},

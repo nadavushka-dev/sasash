@@ -245,9 +245,9 @@ reports it up — a stale remembered spec cannot ride a live one's listener.
 switchboard never leaves the screen: sasash runs the surrounding multiplexer's own CLI — a
 previewed command the user could type — through the run seam. Detection order, innermost
 first, first match wins: `TMUX` set → tmux; `HERDR_ENV` set → herdr; neither → the
-OS-window template; no template → the `S` handoff with a notice. The spawn target is a settings entry, persisted
-beside the theme (`~/.local/state/sasash/spawn-target`; default `tab`), and maps per
-multiplexer:
+OS-window template; no template → the `S` handoff with a notice. The spawn target is a
+settings entry, persisted beside the theme (`~/.local/state/sasash/spawn-target`; default
+`tab`), and maps per multiplexer:
 
 | target | herdr (two steps: create, then `herdr pane run <pane> ssh <host>`) | tmux |
 |---|---|---|
@@ -273,9 +273,9 @@ host row copies `ssh <host>`, the connection the line makes — the spawn line i
 steps and a placeholder, not a shell command. tmux comes before herdr because a tmux
 started inside a herdr pane sets both — and carries that pane's `HERDR_*` into every pane it
 ever creates, even once the pane is gone — while the user is in the tmux; the reverse
-nesting does not exist. Every spawned session rides the alias's ControlMaster, so `X` (`ssh -O
-exit`) tears down the master and every session on it, tabs included — sasash cannot
-enumerate those sessions (OpenSSH exposes master liveness only), and closing a tab closes
+nesting does not exist. Every spawned session rides the alias's ControlMaster, so `X`
+(`ssh -O exit`) tears down the master and every session on it, tabs included — sasash
+cannot enumerate those sessions (OpenSSH exposes master liveness only), and closing a tab closes
 just that session. No embedded terminal, no daemon: the master socket is the state.
 
 **Handoff:** `S` (and `H`) use `tea.ExecProcess` to suspend the TUI and give the terminal
