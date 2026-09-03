@@ -227,11 +227,11 @@ func (m Model) actionPreview() (argv []string, more int) {
 	}
 	row, ok := m.highlighted(host)
 	if !ok {
-		return sshCommand(host.Alias), 0
+		return m.enterPreview(host.Alias), 0
 	}
 	specs, allUp := m.setSpecs(host, row.Set)
 	if len(specs) == 0 {
-		return sshCommand(host.Alias), 0
+		return m.enterPreview(host.Alias), 0
 	}
 	if allUp {
 		return cancelArgv(host.Alias, specs[0]), len(specs) - 1
@@ -240,6 +240,20 @@ func (m Model) actionPreview() (argv []string, more int) {
 		return startArgv(host.Alias), len(specs)
 	}
 	return forwardArgv(host.Alias, specs[0]), len(specs) - 1
+}
+
+// enterPreview is what enter runs on the host row: the spawn plan when
+// there is something to spawn into (a template that cannot expand shows
+// its error on the line instead of a command), else the handoff's ssh.
+func (m Model) enterPreview(alias string) []string {
+	plan := m.spawn.planFor(alias)
+	switch {
+	case plan == nil:
+		return sshCommand(alias)
+	case plan.err != nil:
+		return []string{"spawn:", plan.err.Error()}
+	}
+	return plan.preview()
 }
 
 // toggleCmd is space: bring the highlighted row's set up, or — when every

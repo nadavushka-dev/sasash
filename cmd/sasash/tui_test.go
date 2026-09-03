@@ -69,15 +69,15 @@ func TestSaveThemeTo_RoundTrip(t *testing.T) {
 	if err := saveThemeTo(path)("nord"); err != nil {
 		t.Fatalf("saveThemeTo() = %v", err)
 	}
-	if got := readTheme(path); got != "nord" {
-		t.Errorf("readTheme() = %q, want %q", got, "nord")
+	if got := readState(path); got != "nord" {
+		t.Errorf("readState() = %q, want %q", got, "nord")
 	}
 	// Overwrite sticks.
 	if err := saveThemeTo(path)("mocha"); err != nil {
 		t.Fatalf("saveThemeTo() overwrite = %v", err)
 	}
-	if got := readTheme(path); got != "mocha" {
-		t.Errorf("readTheme() after overwrite = %q, want %q", got, "mocha")
+	if got := readState(path); got != "mocha" {
+		t.Errorf("readState() after overwrite = %q, want %q", got, "mocha")
 	}
 }
 

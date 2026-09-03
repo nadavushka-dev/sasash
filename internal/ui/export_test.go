@@ -186,6 +186,19 @@ func HerdrExit(err error) tea.Msg { return herdrExitMsg{err: err} }
 // ExpandSpec exposes the shorthand expansion for its table test.
 var ExpandSpec = expandSpec
 
+// Spawn (SASASH.4.10): the argv matrix and the plan preview, for exact-
+// string tests; HerdrPaneID for the reply parser.
+var (
+	HerdrCreateArgv = herdrCreateArgv
+	HerdrRunArgv    = herdrRunArgv
+	TmuxArgv        = tmuxArgv
+	WindowArgv      = windowArgv
+	HerdrPaneID     = herdrPaneID
+)
+
+// SpawnTargetOf reports the live spawn target.
+func SpawnTargetOf(m Model) string { return m.spawnTarget() }
+
 // LocalPort and WithLocalPort expose the forward-spec port rule so it can
 // be pinned to the engine's and to exact rewrites.
 var (

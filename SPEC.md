@@ -180,7 +180,8 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 
 | key | action |
 |---|---|
-| `enter` | ssh to host |
+| `enter` | spawn `ssh <host>` beside the TUI through the surrounding multiplexer (see *Spawn* below); with nothing to spawn into it is the `S` handoff plus a notice |
+| `S` | ssh to host in this terminal — the classic handoff: the TUI suspends until the session ends |
 | `H` | `herdr --remote <host>` |
 | `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
 | `p` | cycle the selected host's active path: rewrites `HostName` in `sasash.conf` to the next named path of that block (after the last one matching the current `HostName`, wrapping; the first when none matches) and regenerates the pinned variants; the host row's line previews the target by name and host — `p → ts 198.51.100.5` (the port follows the switcher's ownership rule at write time, so it is not guessed) — or says `p: only one path`, `p: no named paths`, or `p: not managed by sasash`; the outcome is a notice — `HostName: lan … → ts …`, plus `N pinned variants left as-is (names)` when the generator does not own a variant block — then the config is re-read and re-probed and the switch is remembered for `last switch` |
@@ -194,7 +195,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
 | `c` | copy the displayed `$` command instead of running it |
 | `t` | cycle theme (choice persists) |
-| `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
+| `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, spawn target picker (`pane` / `tab` / `workspace`, persisted), add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]… [-p port]` in any order — a pasted `ssh …` command works, the leading `ssh` is dropped; offer to save on return. With `-N` it is tunnel-only: `ssh -fN -o BatchMode=yes …` runs in the background through the run seam with no handoff and the result is a notice — BatchMode makes ssh refuse to prompt (`-f` would otherwise open `/dev/tty` over the TUI), so auth must be keys/agent or the notice says so with the hint to connect once without `-N`; the save offer is unchanged |
 | `v` | list the generated pinned variants (`<alias>.<path>` blocks), or fold them again |
 | `/` `?` `q` | filter, help, quit |
@@ -240,8 +241,35 @@ first, in meta order, then remembered ad-hoc ones) can be the one answering, so 
 later claimant shows as `◐ listening` with an "unverified" note even when the engine
 reports it up — a stale remembered spec cannot ride a live one's listener.
 
-**Handoff:** use `tea.ExecProcess` to suspend the TUI and give the terminal fully to `ssh`.
-Native resize, mouse, colors, `~.`, nested tmux — all free. On exit you're back in the list.
+**Spawn (ratified 2026-09-03):** `enter` opens the connection *beside* the TUI so the
+switchboard never leaves the screen: sasash runs the surrounding multiplexer's own CLI — a
+previewed command the user could type — through the run seam. Detection order, first match
+wins: `HERDR_ENV` set → herdr; `TMUX` set → tmux; neither → the OS-window template; no
+template → the `S` handoff with a notice. The spawn target is a settings entry, persisted
+beside the theme (`~/.local/state/sasash/spawn-target`; default `tab`), and maps per
+multiplexer:
+
+| target | herdr (two steps: create, then `herdr pane run <pane> ssh <host>`) | tmux |
+|---|---|---|
+| `pane` | `herdr pane split --pane $HERDR_PANE_ID --direction right --no-focus` (`--current` without the id) | `tmux split-window -h -d ssh <host>` |
+| `tab` | `herdr tab create --label <host> --no-focus` | `tmux new-window -d -n <host> ssh <host>` |
+| `workspace` | `herdr workspace create --label <host> --no-focus` | `tmux new-session -d -s <host> ssh <host>` |
+
+The created pane's id comes from the herdr reply (`result.root_pane.pane_id` for a tab or
+workspace, `result.pane.pane_id` for a split); the bottom line shows both steps with the id
+as `<pane>` until it is known. `--no-focus` / `-d` keep the TUI where it is — switch when
+you want to. Outside any multiplexer the template in `~/.config/sasash/spawn-window` (one
+line, actions.toml placeholders, `{host}` is the alias; macOS default `osascript -e 'tell
+application "Terminal" to do script "ssh {host}"'`) runs instead. The outcome is a notice
+(`spawned ssh web → herdr tab`, or the failing command and its stderr); a spawn counts as
+`last connected`. Every spawned session rides the alias's ControlMaster, so `X` (`ssh -O
+exit`) tears down the master and every session on it, tabs included — sasash cannot
+enumerate those sessions (OpenSSH exposes master liveness only), and closing a tab closes
+just that session. No embedded terminal, no daemon: the master socket is the state.
+
+**Handoff:** `S` (and `H`) use `tea.ExecProcess` to suspend the TUI and give the terminal
+fully to `ssh`. Native resize, mouse, colors, `~.`, nested tmux — all free. On exit you're
+back in the list.
 
 ### Keybindings & themes (ratified addendum)
 

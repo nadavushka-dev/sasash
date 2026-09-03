@@ -104,6 +104,14 @@ func sshExec(alias string) *exec.Cmd {
 	return execCommand(sshCommand(alias))
 }
 
+// handoff is the classic full-terminal ssh (S, and enter's last resort).
+func (m Model) handoff(alias string) (tea.Model, tea.Cmd) {
+	m.handoffHost = alias
+	return m, tea.ExecProcess(sshExec(alias), func(err error) tea.Msg {
+		return sshExitMsg{err: err}
+	})
+}
+
 // herdrCommand is the argv `H` hands the terminal to (SPEC §5/§6): herdr
 // reads ssh_config itself, so it needs no actions.toml template.
 func herdrCommand(alias string) []string {
@@ -260,6 +268,10 @@ type Model struct {
 	handoffHost  string
 	pendingStamp map[string]func() error // stamp to run on the host's next poll
 
+	// Spawn (SASASH.4.10): enter opens beside the TUI through the
+	// multiplexer; S is the classic handoff.
+	spawn spawnState
+
 	// p (SASASH.2.6): the cycle hook, the block read behind its preview
 	// (cached per alias in blocks), the switch stamp, and the hosts with
 	// a switch running — a marker of its own, so finishing a switch can
@@ -360,6 +372,9 @@ type Config struct {
 	// Best-effort: a failed stamp is a notice, never a blocked action. A
 	// handoff that never started (ssh missing) is not stamped.
 	RecordHandoff func(alias string) error
+	// Spawn is enter's multiplexer wiring (SASASH.4.10): what was
+	// detected, the OS-window template, and the persisted target.
+	Spawn SpawnConfig
 }
 
 // paneFocus says which pane the navigation keys move (SPEC §5: l/tab
@@ -468,8 +483,15 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		recordSwitch:    cfg.RecordSwitch,
 		blocks:          make(map[string]pathBlock),
 		switching:       make(map[string]bool),
-		notice:          cfg.ActionsWarn,
-		fwdIdx:          -1,
+		spawn: spawnState{
+			mux:        cfg.Spawn.Mux,
+			herdrPane:  cfg.Spawn.HerdrPane,
+			window:     cfg.Spawn.WindowTemplate,
+			target:     cfg.Spawn.Target,
+			saveTarget: cfg.Spawn.SaveTarget,
+		},
+		notice: cfg.ActionsWarn,
+		fwdIdx: -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
 	return m.applyTheme(idx)
@@ -681,6 +703,22 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "herdr: " + msg.err.Error()
 		}
 		return m.handoffReturned(started)
+
+	case spawnDoneMsg:
+		if msg.err != nil {
+			m.notice = msg.err.Error()
+			return m, nil
+		}
+		m.notice = "spawned ssh " + msg.alias + " → " + msg.where
+		// A spawn is a connection: it counts as the last one made.
+		m, stamp := m.stampHandoff(msg.alias)
+		return m, stamp
+
+	case spawnTargetSavedMsg:
+		if msg.err != nil {
+			m.notice = "spawn target not saved: " + msg.err.Error()
+		}
+		return m, nil
 
 	case sshExitMsg:
 		// A non-zero ssh exit is not news — ssh printed its own diagnosis
@@ -924,10 +962,24 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				m.handoffHost = host.Alias
-				return m, tea.ExecProcess(sshExec(host.Alias), func(err error) tea.Msg {
-					return sshExitMsg{err: err}
-				})
+				plan := m.spawn.planFor(host.Alias)
+				if plan == nil {
+					// Nothing to spawn into: the classic handoff, and the
+					// notice waits on the line for the terminal's return.
+					m.notice = "nothing to spawn into — handed off; S does this on purpose"
+					return m.handoff(host.Alias)
+				}
+				if plan.err != nil {
+					m.notice = "spawn: " + plan.err.Error()
+					return m, nil
+				}
+				return m, spawnCmd(m.runner, host.Alias, plan)
+			case key.Matches(msg, m.keys.Handoff):
+				host, ok := m.Selected()
+				if !ok {
+					return m, nil
+				}
+				return m.handoff(host.Alias)
 			case key.Matches(msg, m.keys.CyclePath):
 				host, ok := m.Selected()
 				if !ok || m.switchPath == nil || m.pathBlock == nil {
@@ -1423,6 +1475,14 @@ func (m Model) previewView() string {
 	// alias drops it rather than clipping it.
 	if host, ok := m.Selected(); ok {
 		if _, hl := m.highlighted(host); !hl {
+			// With a spawn on enter, S is the plain ssh handoff — named
+			// first, since the spawn line is the one that hides it.
+			if m.spawn.planFor(host.Alias) != nil {
+				seg := "   " + m.styles.HelpKey.Render("S") + " " + m.styles.HelpDesc.Render(strings.Join(sshCommand(host.Alias), " "))
+				if lipgloss.Width(v+seg) <= m.width {
+					v += seg
+				}
+			}
 			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
 			if lipgloss.Width(v+seg) <= m.width {
 				v += seg

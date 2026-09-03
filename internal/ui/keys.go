@@ -16,6 +16,7 @@ type KeyMap struct {
 	HalfDown    key.Binding
 	HalfUp      key.Binding
 	Connect     key.Binding
+	Handoff     key.Binding
 	Herdr       key.Binding
 	CyclePath   key.Binding
 	CopyAddr    key.Binding
@@ -51,7 +52,8 @@ func DefaultKeyMap() KeyMap {
 		Bottom:      key.NewBinding(key.WithKeys("G", "end"), key.WithHelp("G", "last")),
 		HalfDown:    key.NewBinding(key.WithKeys("ctrl+d", "pgdown"), key.WithHelp("ctrl+d", "½ page down")),
 		HalfUp:      key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
-		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "ssh")),
+		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "spawn ssh")),
+		Handoff:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "ssh here")),
 		Herdr:       key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "herdr")),
 		CyclePath:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle path")),
 		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
@@ -80,7 +82,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.CyclePath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Variants, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.Handoff, k.CyclePath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Variants, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /
@@ -93,7 +95,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Variants, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.FocusRight, k.FocusLeft},
-		{k.Connect, k.Herdr, k.CyclePath, k.Adhoc, k.CopyAddr, k.CopyCmd},
+		{k.Connect, k.Handoff, k.Herdr, k.CyclePath, k.Adhoc, k.CopyAddr, k.CopyCmd},
 		{k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit},
 	}
 }

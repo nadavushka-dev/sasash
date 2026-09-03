@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,7 +65,9 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
-	m := ui.New(hosts, probe.Prober{}, run.OS{}, tuiConfig(home, statePath, theme, os.Getenv("EDITOR")))
+	cfg := tuiConfig(home, statePath, theme, os.Getenv("EDITOR"))
+	cfg.Spawn = spawnConfig(home, os.Getenv)
+	m := ui.New(hosts, probe.Prober{}, run.OS{}, cfg)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(stderr, "sasash:", err)
@@ -90,7 +93,7 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 		}
 		warn = fmt.Sprintf("SASASH_THEME=%q is not a theme (themes: %s); using the default", envVal, themeNames())
 	}
-	if v := readTheme(statePath); v != "" {
+	if v := readState(statePath); v != "" {
 		if _, ok := ui.ThemeIndex(v); ok {
 			return v, warn, false
 		}
@@ -229,6 +232,52 @@ func saveHostTo(confPath string) func(ui.AdhocEntry) error {
 	}
 }
 
+// spawnConfig wires enter's spawn (SASASH.4.10): the multiplexer from
+// the environment, the OS-window template from ~/.config/sasash/
+// spawn-window (one line, actions.toml placeholders; the macOS default
+// opens Terminal), and the persisted target beside the theme state.
+func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
+	mux, pane := ui.DetectMux(getenv)
+	target := readState(spawnStatePath(home))
+	if _, ok := ui.SpawnTargetIndex(target); !ok {
+		target = ui.DefaultSpawnTarget // a stale file never keeps enter from working
+	}
+	tmpl := readState(spawnWindowPath(home, getenv))
+	if tmpl == "" {
+		tmpl = defaultWindowTemplate(runtime.GOOS)
+	}
+	return ui.SpawnConfig{
+		Mux:            mux,
+		HerdrPane:      pane,
+		WindowTemplate: tmpl,
+		Target:         target,
+		SaveTarget:     saveStateTo(spawnStatePath(home)),
+	}
+}
+
+// defaultWindowTemplate is the OS-window spawn outside any multiplexer:
+// on macOS, Terminal runs the ssh; elsewhere there is no default, so
+// enter hands off until ~/.config/sasash/spawn-window says otherwise.
+func defaultWindowTemplate(goos string) string {
+	if goos == "darwin" {
+		return `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`
+	}
+	return ""
+}
+
+// spawnStatePath persists the spawn target beside the theme.
+func spawnStatePath(home string) string {
+	return filepath.Join(filepath.Dir(themeStatePath(home)), "spawn-target")
+}
+
+// spawnWindowPath is the user's OS-window template (config, not state).
+func spawnWindowPath(home string, getenv func(string) string) string {
+	if x := getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "sasash", "spawn-window")
+	}
+	return filepath.Join(home, ".config", "sasash", "spawn-window")
+}
+
 // themeStatePath is where the `t` key persists the choice — state, not
 // config (SPEC §4 puts sasash's cache-tier files under ~/.local/state).
 func themeStatePath(home string) string {
@@ -238,8 +287,9 @@ func themeStatePath(home string) string {
 	return filepath.Join(home, ".local", "state", "sasash", "theme")
 }
 
-// readTheme returns the persisted theme name, or "" when there is none.
-func readTheme(path string) string {
+// readState returns a one-line state file's content, or "" when there is
+// none (the theme name, the spawn target, the window template).
+func readState(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -248,7 +298,10 @@ func readTheme(path string) string {
 }
 
 // saveThemeTo gives the model its write-through persistence hook.
-func saveThemeTo(path string) func(string) error {
+func saveThemeTo(path string) func(string) error { return saveStateTo(path) }
+
+// saveStateTo writes one line to a state file, creating its directory.
+func saveStateTo(path string) func(string) error {
 	return func(name string) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err

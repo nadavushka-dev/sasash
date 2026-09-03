@@ -19,6 +19,7 @@ const (
 	settingsMenu               // the entry list
 	settingsSetup              // create config file: what will be written
 	settingsTheme              // the theme picker
+	settingsSpawn              // the spawn target picker
 )
 
 // Settings entries, in menu order.
@@ -26,6 +27,7 @@ const (
 	entryCreate = iota
 	entryEdit
 	entryTheme
+	entrySpawn
 	entryConnection
 	entryTunnel
 	entryCount
@@ -35,6 +37,7 @@ var entryLabels = [entryCount]string{
 	entryCreate:     "create config file",
 	entryEdit:       "edit config file",
 	entryTheme:      "theme",
+	entrySpawn:      "spawn target",
 	entryConnection: "add new connection",
 	entryTunnel:     "add new tunnel",
 }
@@ -129,6 +132,8 @@ func (m Model) settingsRows() int {
 	switch m.settings.pane {
 	case settingsTheme:
 		return len(Themes)
+	case settingsSpawn:
+		return len(SpawnTargets)
 	case settingsMenu:
 		return entryCount
 	}
@@ -143,6 +148,8 @@ func (m Model) settingsEntry(pane settingsPane) int {
 		return entryCreate
 	case settingsTheme:
 		return entryTheme
+	case settingsSpawn:
+		return entrySpawn
 	}
 	return 0
 }
@@ -171,6 +178,10 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 			})
 		case entryTheme:
 			s.pane, s.cursor = settingsTheme, m.themeIdx
+			return m, nil
+		case entrySpawn:
+			s.pane = settingsSpawn
+			s.cursor, _ = SpawnTargetIndex(m.spawnTarget())
 			return m, nil
 		case entryConnection:
 			s.pane = settingsOff
@@ -202,8 +213,18 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 		return m, setupEnsureCmd(m.home)
 	case settingsTheme:
 		return m.setTheme(s.cursor)
+	case settingsSpawn:
+		return m.setSpawnTarget(s.cursor)
 	}
 	return m, nil
+}
+
+// spawnTarget is the live target, defaulted.
+func (m Model) spawnTarget() string {
+	if _, ok := SpawnTargetIndex(m.spawn.target); ok {
+		return m.spawn.target
+	}
+	return DefaultSpawnTarget
 }
 
 // setTheme applies and persists a theme choice: the `t` cycle and the
@@ -234,6 +255,7 @@ func (m Model) settingsView() string {
 		detail := [entryCount]string{
 			entryEdit:  m.confPath,
 			entryTheme: Themes[m.themeIdx].Name,
+			entrySpawn: m.spawnTarget() + " (" + muxWord(m.spawn.mux, m.spawnTarget()) + ")",
 		}
 		for i, label := range entryLabels {
 			b.WriteString("\n " + mark(i, s.cursor) + m.styles.PathName.Render(label))
@@ -271,6 +293,18 @@ func (m Model) settingsView() string {
 			b.WriteString("\n\n " + m.styles.Empty.Render("already set up — nothing to write; esc back"))
 		case s.status != nil:
 			b.WriteString("\n\n " + m.styles.Empty.Render("enter writes the missing pieces (atomically, nothing else touched) · esc back"))
+		}
+	case settingsSpawn:
+		b.WriteString(" " + m.styles.SectionLabel.Render("spawn target — where enter opens the connection; enter applies and persists"))
+		for i, t := range SpawnTargets {
+			glyph := m.styles.StatusDown.Render("○")
+			if t == m.spawnTarget() {
+				glyph = m.styles.StatusUp.Render("●")
+			}
+			b.WriteString("\n " + mark(i, s.cursor) + glyph + " " + m.styles.PathName.Render(t) + "  " + m.styles.PathExtra.Render("herdr "+t+" · tmux "+tmuxWord(t)))
+		}
+		if m.spawn.mux == MuxNone {
+			b.WriteString("\n\n " + m.styles.Empty.Render("no herdr or tmux around this terminal: enter uses the OS-window template, or hands off"))
 		}
 	case settingsTheme:
 		b.WriteString(" " + m.styles.SectionLabel.Render("theme — enter applies and persists"))
