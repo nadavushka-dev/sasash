@@ -34,6 +34,7 @@ type KeyMap struct {
 	ClearFilter key.Binding
 	Theme       key.Binding
 	Settings    key.Binding
+	Variants    key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 	ForceQuit   key.Binding
@@ -69,6 +70,7 @@ func DefaultKeyMap() KeyMap {
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Settings:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
+		Variants:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "pinned variants")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
@@ -78,7 +80,7 @@ func DefaultKeyMap() KeyMap {
 // ShortHelp implements help.KeyMap; the help bar truncates by width, so
 // the most-reached-for keys come first.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.CyclePath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
+	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.CyclePath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Variants, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
 // FullHelp implements help.KeyMap, grouped general / navigation / actions /
@@ -89,7 +91,7 @@ func (k KeyMap) ShortHelp() []key.Binding {
 // (o) is their discoverable home (SASASH.4.5).
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Quit},
+		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Variants, k.Quit},
 		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.FocusRight, k.FocusLeft},
 		{k.Connect, k.Herdr, k.CyclePath, k.Adhoc, k.CopyAddr, k.CopyCmd},
 		{k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit},

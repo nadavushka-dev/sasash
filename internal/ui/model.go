@@ -270,6 +270,10 @@ type Model struct {
 	blocks       map[string]pathBlock
 	switching    map[string]bool
 
+	// showVariants lists generated <alias>.<path> variants (SASASH.2.7);
+	// off by default, they fold into their parent's detail pane.
+	showVariants bool
+
 	editor     []string // argv prefix for `e`; empty disables the key
 	editorHint string
 	editorWarn string
@@ -387,9 +391,12 @@ const (
 func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Config) Model {
 	keys := DefaultKeyMap()
 
-	items := make([]list.Item, len(hosts))
-	for i, h := range hosts {
-		items[i] = hostItem{host: h}
+	// Generated pinned variants fold into their parent by default.
+	var items []list.Item
+	for _, h := range hosts {
+		if _, _, variant := variantOf(h.Alias, hosts); !variant {
+			items = append(items, hostItem{host: h})
+		}
 	}
 	l := list.New(items, hostDelegate{}, 0, 0)
 	l.SetShowTitle(false)
@@ -819,16 +826,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !samePaths(before, pathList(m.hosts)) {
 			m.statuses = nil
 		}
-		items := make([]list.Item, len(msg.hosts))
-		for i, h := range msg.hosts {
-			items[i] = hostItem{host: h}
+		// The visible rows (variants folded) replace the list; the
+		// selection stays on its alias when still listed, else clamped —
+		// SetItems never moves the cursor by itself. Under an applied
+		// filter the visible items are empty until the FilterMatchesMsg
+		// lands — that arm clamps too.
+		var cmd tea.Cmd
+		if _, c := m.forceRebuild(); c != nil {
+			cmd = c
 		}
-		cmd := m.list.SetItems(items)
-		// SetItems never moves the cursor: a list that shrank under it
-		// (the editor deleted the selected host) would otherwise show no
-		// selection at all. Under an applied filter the visible items are
-		// empty until the FilterMatchesMsg lands — that arm clamps too.
-		clampCursor(&m.list)
 		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
 	case list.FilterMatchesMsg:
@@ -1037,6 +1043,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.setTheme((m.themeIdx + 1) % len(Themes))
 			case key.Matches(msg, m.keys.Settings):
 				return m.openSettings(), nil
+			case key.Matches(msg, m.keys.Variants):
+				m.showVariants = !m.showVariants
+				_, cmd := m.rebuildItems()
+				m.notice = "pinned variants hidden"
+				if m.showVariants {
+					m.notice = "pinned variants listed"
+				}
+				return m, cmd
 			case key.Matches(msg, m.keys.Help):
 				m.help.ShowAll = !m.help.ShowAll
 				m.list.SetSize(m.listWidth(), m.contentHeight())
@@ -1065,6 +1079,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	// The filter term decides which folded variants are listed: while a
+	// filter is typed, cleared, or accepted, the rows follow the term.
+	if _, isKey := msg.(tea.KeyMsg); isKey && !m.showVariants {
+		if _, c := m.rebuildItems(); c != nil {
+			cmd = tea.Batch(cmd, c)
+		}
+	}
 	// A new host under the cursor: whatever status it had is stale — the
 	// tick refreshes only the selected host — so its rows go back to
 	// pending while a fresh poll runs. Never show a stale state as live.
@@ -1324,6 +1345,7 @@ func (m Model) detailView() string {
 			}
 		}
 	}
+	b.WriteString(m.pinnedLine(host))
 	if m.tunnels != nil {
 		b.WriteString(m.tunnelsView(host))
 	}

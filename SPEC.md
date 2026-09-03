@@ -196,7 +196,16 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `t` | cycle theme (choice persists) |
 | `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]… [-p port]` in any order — a pasted `ssh …` command works, the leading `ssh` is dropped; offer to save on return. With `-N` it is tunnel-only: `ssh -fN -o BatchMode=yes …` runs in the background through the run seam with no handoff and the result is a notice — BatchMode makes ssh refuse to prompt (`-f` would otherwise open `/dev/tty` over the TUI), so auth must be keys/agent or the notice says so with the hint to connect once without `-N`; the save offer is unchanged |
+| `v` | list the generated pinned variants (`<alias>.<path>` blocks), or fold them again |
 | `/` `?` `q` | filter, help, quit |
+
+Generated pinned variants fold into their parent by default: a host whose alias is
+`<parent>.<name>` is a variant only when BOTH witnesses hold — `<parent>` is a listed host and
+`<name>` is one of its path names — so a user host that merely looks dotted stays listed. A
+folded variant is still a real host (ssh, herdr, everything) once surfaced: the parent's
+detail pane names them (`pinned .office .nat`), `v` lists them, the header tally counts
+listed hosts only, and a filter term naming the `.name` suffix (`office`, `.office`,
+`web.office`) surfaces that variant while the term stands — a bare `web` does not.
 
 `e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.
 

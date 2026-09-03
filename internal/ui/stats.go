@@ -262,7 +262,10 @@ func (m Model) stampedPollCmd(host string) (Model, tea.Cmd) {
 // forwards up across the hosts polled so far. Before the first probe
 // round the tally is unknown and says so.
 func (m Model) summaryLine() string {
-	n := len(m.hosts)
+	// Folded variants are not hosts the user counts; the tally follows
+	// the list.
+	hosts := m.visibleHosts()
+	n := len(hosts)
 	if n == 0 {
 		return ""
 	}
@@ -270,7 +273,7 @@ func (m Model) summaryLine() string {
 		return fmt.Sprintf("%d %s · probing…", n, plural(n, "host"))
 	}
 	reachable := 0
-	for _, h := range m.hosts {
+	for _, h := range hosts {
 		if _, ok := probe.Select(m.statuses[h.Alias]); ok {
 			reachable++
 		}
@@ -280,7 +283,7 @@ func (m Model) summaryLine() string {
 		return line
 	}
 	up, polled := 0, 0
-	for _, h := range m.hosts {
+	for _, h := range hosts {
 		ts, ok := m.tstatus[h.Alias]
 		if !ok || ts.err != nil {
 			continue
