@@ -211,7 +211,7 @@ func TestModel_Update_AddForwardRejectsBadSpec(t *testing.T) {
 	if cmd != nil || !ui.Prompting(m) {
 		t.Errorf("enter on a bad spec: cmd %v, prompting %v; want no cmd and the prompt kept", cmd != nil, ui.Prompting(m))
 	}
-	if view := m.View(); !strings.Contains(view, `spec "nonsense": want local:host:port, port, or local:port`) {
+	if view := m.View(); !strings.Contains(view, `no local port in "nonsense" — want local:host:port`) {
 		t.Errorf("View() missing the rejection:\n%s", view)
 	}
 	if got := r.CallKeys()[before:]; len(got) != 0 {

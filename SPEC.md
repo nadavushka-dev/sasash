@@ -222,13 +222,17 @@ alive or dead, not since the master started — and nothing when unknown; `last 
 newest probe latencies that fit (`·` for a miss), their min–max, and `answered/rounds` this
 session — forgotten when the TUI exits.
 
-Forward specs accept two shorthands wherever one is typed — `+`, `E`, settings' add-tunnel,
-and `-L` in `a`: `3000` is `3000:localhost:3000` and `2000:3000` (two all-digit fields) is
-`2000:localhost:3000`. Expansion happens as the input is parsed, so the writer, the engine,
-the meta lines, and the status matching only ever see canonical three-part specs; the prompt
-line shows the expansion beside the field as you type (`→ 3000:localhost:3000`). Three-part
-specs pass through unchanged, and a two-field input whose second field is not all digits is
-the malformed spec it always was — a hostname is never guessed into a shorthand.
+Forward specs accept two shorthands wherever one is typed — `+`, `E`, both settings prompts
+that take specs, and `-L` in `a`: `3000` is `3000:localhost:3000` and `2000:3000` (two
+all-digit fields) is `2000:localhost:3000`. Expansion happens as the input is parsed, so the
+writer, the engine, the meta lines, and the status matching only ever see canonical
+three-part specs; while you type, a line under the prompt shows the expansion (`→
+3000:localhost:3000`, or the whole expanded `ssh …` command in `a`), cut with a visible `…`
+if it cannot fit. Anything else passes through as typed and meets the surface's usual rule
+— a two-field input like `3000:web` is the malformed spec it always was in `a`; a hostname
+is never guessed into a shorthand; an ssh-valid form the engine can judge by its local port
+(`3000:/var/run/docker.sock`) is untouched. Shorthands are an input convenience only: a
+hand-written `# @sasash forwards web 3000` in `sasash.conf` is not expanded.
 
 The tunnels section renders the engine's three states verbatim, with one presentation
 cap: when two forwards claim the same local port, only the first claimant (declared sets
@@ -276,6 +280,9 @@ value needs evaluation, write it explicitly into `cmd`, e.g.
 ---
 
 ## 7. CLI (non-TUI surface)
+
+The CLI takes no typed forward specs — `up` applies declared sets, which are canonical
+three-part specs on their meta lines (the §5 shorthands are a TUI input convenience).
 
 ```
 sasash                    # TUI

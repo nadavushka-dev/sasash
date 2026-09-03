@@ -1151,6 +1151,9 @@ func (m Model) listWidth() int {
 // expanded.
 func (m Model) contentHeight() int {
 	h := m.height - 3 - lipgloss.Height(m.helpView())
+	if m.expansionLine() != "" {
+		h-- // the expansion line under the prompt
+	}
 	if h < 1 {
 		h = 1
 	}
@@ -1276,11 +1279,6 @@ func (m Model) View() string {
 			field = ""
 		}
 		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
-		// A shorthand shows its full expansion beside the field: what
-		// enter will really use is never hidden.
-		if full := m.promptExpansion(); full != "" {
-			preview += "  " + m.styles.PathExtra.Render("→ "+full)
-		}
 	}
 	// A notice takes the line on its own: appended after a long preview
 	// it would be clamped away, and the notice carries ssh's own reason.
@@ -1293,7 +1291,31 @@ func (m Model) View() string {
 	// Same width clamp as the panes: a long alias (or notice) must not
 	// wrap the preview line and push the alt screen around.
 	preview = m.styles.Clamp.MaxWidth(m.width).Render(preview)
+	// A shorthand's full expansion gets a line of its own under the
+	// prompt — what enter will really use is never hidden — cut with a
+	// visible ellipsis rather than silently when even that is too long.
+	if line := m.expansionLine(); line != "" {
+		preview += "\n" + line
+	}
 	return strings.Join([]string{header, "", body, preview, m.helpView()}, "\n")
+}
+
+// expansionLine renders promptExpansion for the frame, "" when none.
+func (m Model) expansionLine() string {
+	full := m.promptExpansion()
+	if full == "" {
+		return ""
+	}
+	line := " " + m.styles.PathExtra.Render("→ "+full)
+	if lipgloss.Width(line) > m.width {
+		r := []rune(" → " + full)
+		keep := max(m.width-1, 1)
+		if keep < len(r) {
+			r = append(r[:keep], '…')
+		}
+		line = m.styles.PathExtra.Render(string(r))
+	}
+	return line
 }
 
 // detailView renders the right pane for the selected host: one line per

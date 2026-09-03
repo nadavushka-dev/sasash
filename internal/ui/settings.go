@@ -363,17 +363,20 @@ func (m Model) submitTunnel() (tea.Model, tea.Cmd) {
 		}
 		// Shorthands expand here, before the writer sees them; the writer
 		// refuses the rest too, but refusing here keeps the host and name
-		// the user already typed.
+		// the user already typed — including a duplicate that only the
+		// expansion reveals.
+		seen := make(map[string]bool)
 		for i, spec := range specs {
-			full, err := expandSpec(spec)
-			if err != nil {
-				m.notice = err.Error()
-				return m, nil
-			}
+			full, _ := expandSpec(spec)
 			if port, _ := localPort(full); port == "" {
 				m.notice = "spec " + strconv.Quote(spec) + ": no local port — want local:host:port"
 				return m, nil
 			}
+			if seen[full] {
+				m.notice = "spec " + strconv.Quote(full) + " repeated"
+				return m, nil
+			}
+			seen[full] = true
 			specs[i] = full
 		}
 		m.mode = promptNone

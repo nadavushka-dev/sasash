@@ -18,7 +18,7 @@ type AdhocEntry struct {
 	User     string
 	Host     string
 	Port     string
-	Forwards []string // -L specs, verbatim
+	Forwards []string // -L specs, canonical (shorthands expanded at parse time)
 }
 
 // adhocTarget is a parsed "[user@]host[:port] [-L spec]..." input.
@@ -103,13 +103,12 @@ func parseAdhoc(input string) (adhocTarget, error) {
 	return t, nil
 }
 
-// addForward accepts one -L spec, shorthand expanded to its canonical
-// three-part form so everything downstream sees only that.
+// addForward accepts one -L spec, a shorthand expanded to its canonical
+// three-part form so everything downstream sees only that; the prompt's
+// own rule — a spec has at least two colons — still rejects the rest
+// (3000:web is malformed, never 3000:localhost:web).
 func addForward(t *adhocTarget, spec string) error {
-	full, err := expandSpec(spec)
-	if err != nil {
-		return err
-	}
+	full, _ := expandSpec(spec)
 	if strings.Count(full, ":") < 2 {
 		return fmt.Errorf("forward %q: want local:host:port", spec)
 	}

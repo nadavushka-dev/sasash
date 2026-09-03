@@ -72,11 +72,7 @@ func (m Model) editFwdPlan(newSpec string) []string {
 
 // submitEditFwd is enter in the edit prompt.
 func (m Model) submitEditFwd() (tea.Model, tea.Cmd) {
-	newSpec, err := expandSpec(m.prompt.Value())
-	if err != nil {
-		m.notice = err.Error()
-		return m, nil
-	}
+	newSpec, _ := expandSpec(m.prompt.Value())
 	if port, _ := localPort(newSpec); port == "" {
 		m.notice = "spec " + strconv.Quote(newSpec) + ": no local port — want local:host:port"
 		return m, nil
@@ -126,17 +122,15 @@ func oneLineText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// expandedOrTyped is the canonical form of a typed spec for display, or
-// the text as typed when it does not expand.
+// expandedOrTyped is the canonical form of a typed spec for display: the
+// expansion, or the text as typed when it is not a shorthand.
 func expandedOrTyped(input string) string {
-	if full, err := expandSpec(input); err == nil {
-		return full
-	}
-	return strings.TrimSpace(input)
+	full, _ := expandSpec(input)
+	return full
 }
 
-// promptExpansion is the full expansion the prompt line shows beside a
-// shorthand: what enter will really use. Empty when the input is not a
+// promptExpansion is the full expansion the prompt shows under a
+// shorthand: what enter will really use. Empty when nothing typed is a
 // shorthand (already canonical, or not parseable).
 func (m Model) promptExpansion() string {
 	v := strings.TrimSpace(m.prompt.Value())
@@ -145,35 +139,54 @@ func (m Model) promptExpansion() string {
 	}
 	switch m.mode {
 	case promptForward, promptEditFwd:
-		if full, err := expandSpec(v); err == nil && full != v {
+		if full, expanded := expandSpec(v); expanded {
 			return full
 		}
 	case promptTunnelSpecs:
 		var out []string
 		changed := false
 		for _, s := range strings.Fields(v) {
-			full, err := expandSpec(s)
-			if err != nil {
-				return ""
-			}
-			changed = changed || full != s
+			full, expanded := expandSpec(s)
+			changed = changed || expanded
 			out = append(out, full)
 		}
 		if changed {
 			return strings.Join(out, " ")
 		}
-	case promptConnect:
-		if t, err := parseAdhoc(v); err == nil && len(t.Forwards) > 0 {
+	case promptConnect, promptNewConn:
+		// Token by token: any -L value that is a shorthand means the
+		// command ssh gets differs from what was typed.
+		if t, err := parseAdhoc(v); err == nil && anyForwardShorthand(v) {
 			argv := adhocArgv(t)
 			if t.TunnelOnly {
+				if m.mode == promptNewConn {
+					return "" // enter refuses -N there; no command to show
+				}
 				argv = adhocTunnelArgv(t)
 			}
-			for _, f := range t.Forwards {
-				if !strings.Contains(v, f) { // a forward was expanded
-					return strings.Join(argv, " ")
-				}
-			}
+			return strings.Join(argv, " ")
 		}
 	}
 	return ""
+}
+
+// anyForwardShorthand reports whether any -L value in the input (bare or
+// glued) is a shorthand.
+func anyForwardShorthand(input string) bool {
+	fields := strings.Fields(input)
+	for i, f := range fields {
+		spec := ""
+		switch {
+		case f == "-L" && i+1 < len(fields):
+			spec = fields[i+1]
+		case strings.HasPrefix(f, "-L") && len(f) > 2:
+			spec = f[2:]
+		}
+		if spec != "" {
+			if _, expanded := expandSpec(spec); expanded {
+				return true
+			}
+		}
+	}
+	return false
 }

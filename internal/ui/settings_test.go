@@ -517,7 +517,7 @@ func TestModel_Update_SettingsAddTunnel(t *testing.T) {
 	// A spec without a local port is refused here, keeping host and name.
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("nonsense")})
 	m = press(t, m, "enter")
-	if !strings.Contains(m.View(), "want local:host:port, port, or local:port") || !strings.Contains(m.View(), "specs:") {
+	if !strings.Contains(m.View(), "no local port — want local:host:port") || !strings.Contains(m.View(), "specs:") {
 		t.Fatalf("enter on a portless spec should stay in the specs prompt:\n%s", m.View())
 	}
 	for range "nonsense" {
