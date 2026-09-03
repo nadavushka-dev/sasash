@@ -196,8 +196,8 @@ func TestTuiConfig(t *testing.T) {
 			if !ok || eng.StateDir != stateDir(tt.home) {
 				t.Errorf("tuiConfig().Tunnels = %#v, want tunnel.Engine with StateDir %q", cfg.Tunnels, stateDir(tt.home))
 			}
-			if cfg.SwitchPath == nil || cfg.PathBlock == nil || cfg.RecordSwitch == nil {
-				t.Errorf("tuiConfig() p hooks: switch %v, block %v, record %v; want all wired", cfg.SwitchPath != nil, cfg.PathBlock != nil, cfg.RecordSwitch != nil)
+			if cfg.SetPath == nil || cfg.PathBlock == nil || cfg.RecordSwitch == nil {
+				t.Errorf("tuiConfig() p hooks: set %v, block %v, record %v; want all wired", cfg.SetPath != nil, cfg.PathBlock != nil, cfg.RecordSwitch != nil)
 			}
 			if eng.Stats == nil || eng.Stats.Dir != stateDir(tt.home) || cfg.RecordHandoff == nil {
 				t.Errorf("tuiConfig() stats: engine store %+v, RecordHandoff wired %v; want the store on %q and the hook", eng.Stats, cfg.RecordHandoff != nil, stateDir(tt.home))
@@ -286,9 +286,9 @@ func TestTuiConfig_PathCycleHooks(t *testing.T) {
 	if _, _, ok := cfg.PathBlock("nope"); ok {
 		t.Errorf("PathBlock(nope) ok = true, want false for an unmanaged alias")
 	}
-	res, err := cfg.SwitchPath("web")
+	res, err := cfg.SetPath("web", "ts")
 	if err != nil || !res.Changed || res.To.Name != "ts" {
-		t.Fatalf("SwitchPath(web) = %+v, %v; want a switch to ts", res, err)
+		t.Fatalf("SetPath(web, ts) = %+v, %v; want a switch to ts", res, err)
 	}
 	if _, got, _ := cfg.PathBlock("web"); got != "198.51.100.5" {
 		t.Errorf("HostName after the switch = %q, want 198.51.100.5", got)

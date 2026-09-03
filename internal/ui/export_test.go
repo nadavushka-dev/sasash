@@ -43,17 +43,20 @@ var (
 	LatencyRange = latencyRange
 )
 
-// NextPath and SwitchNotice expose the p rule and its rendering for
-// table tests; WithSwitcher wires the p hooks.
+// ActiveIndex and SwitchNotice expose the p rules and rendering for
+// table tests; WithSwitcher wires the p hooks; PickerOpen reports the
+// picker owning the keyboard.
 var (
-	NextPath     = nextPath
+	ActiveIndex  = activeIndex
 	SwitchNotice = switchNotice
 )
 
-func WithSwitcher(m Model, sw func(string) (pathswitch.Result, error), pb func(string) ([]probe.Path, string, bool), rec func(string, string) error) Model {
-	m.switchPath, m.pathBlock, m.recordSwitch = sw, pb, rec
+func WithSwitcher(m Model, sw func(alias, name string) (pathswitch.Result, error), pb func(string) ([]probe.Path, string, bool), rec func(string, string) error) Model {
+	m.setPath, m.pathBlock, m.recordSwitch = sw, pb, rec
 	return m
 }
+
+func PickerOpen(m Model) bool { return m.picker.open() }
 
 // WithRecordHandoff swaps the handoff stamp hook so tests can observe it.
 func WithRecordHandoff(m Model, f func(string) error) Model {

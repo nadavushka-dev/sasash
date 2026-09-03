@@ -55,7 +55,7 @@ func DefaultKeyMap() KeyMap {
 		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "spawn ssh")),
 		Handoff:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "ssh here")),
 		Herdr:       key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "herdr")),
-		CyclePath:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "cycle path")),
+		CyclePath:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pick path")),
 		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),

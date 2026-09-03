@@ -272,11 +272,14 @@ type Model struct {
 	// multiplexer; S is the classic handoff.
 	spawn spawnState
 
+	// Path picker (SASASH.2.8): p's panel while open.
+	picker pathPicker
+
 	// p (SASASH.2.6): the cycle hook, the block read behind its preview
 	// (cached per alias in blocks), the switch stamp, and the hosts with
 	// a switch running — a marker of its own, so finishing a switch can
 	// never release a poll's gate.
-	switchPath   func(alias string) (pathswitch.Result, error)
+	setPath      func(alias, name string) (pathswitch.Result, error)
 	pathBlock    func(alias string) (paths []probe.Path, hostName string, managed bool)
 	recordSwitch func(alias, pathName string) error
 	blocks       map[string]pathBlock
@@ -356,13 +359,13 @@ type Config struct {
 	// down-since, ago); nil is wall time. Tests inject a fake and never
 	// sleep.
 	Clock stats.Clock
-	// SwitchPath cycles a host's active path (the p key): the cmd layer
-	// wires pathswitch.Cycle on sasash.conf; nil disables p. PathBlock
-	// reads the alias's sasash.conf block — its paths and HostName, the
-	// exact inputs the switcher uses; managed is false when there is no
-	// block — so the preview names the switcher's own target.
+	// SetPath makes a named path active (the p picker's enter): the cmd
+	// layer wires pathswitch.Set on sasash.conf; nil disables p.
+	// PathBlock reads the alias's sasash.conf block — its paths and
+	// HostName, the exact inputs the switcher uses; managed is false when
+	// there is no block — so the picker offers the switcher's own rows.
 	// RecordSwitch stamps a successful switch through stats.Store.
-	SwitchPath   func(alias string) (pathswitch.Result, error)
+	SetPath      func(alias, name string) (pathswitch.Result, error)
 	PathBlock    func(alias string) (paths []probe.Path, hostName string, managed bool)
 	RecordSwitch func(alias, pathName string) error
 	// RecordHandoff stamps the last interactive handoff (enter/H) for a
@@ -478,7 +481,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		hist:            make(map[string]*pathHist),
 		recordHandoff:   cfg.RecordHandoff,
 		pendingStamp:    make(map[string]func() error),
-		switchPath:      cfg.SwitchPath,
+		setPath:         cfg.SetPath,
 		pathBlock:       cfg.PathBlock,
 		recordSwitch:    cfg.RecordSwitch,
 		blocks:          make(map[string]pathBlock),
@@ -898,8 +901,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.notice = ""
-		// The settings panel owns the keyboard while open (SPEC §5:
-		// action keys inert, like the filter).
+		// The settings panel and the path picker own the keyboard while
+		// open (SPEC §5: action keys inert, like the filter).
+		if m.picker.open() {
+			return m.pickerKey(msg)
+		}
 		if m.settings.pane != settingsOff {
 			return m.settingsKey(msg)
 		}
@@ -982,17 +988,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handoff(host.Alias)
 			case key.Matches(msg, m.keys.CyclePath):
 				host, ok := m.Selected()
-				if !ok || m.switchPath == nil || m.pathBlock == nil {
+				if !ok || m.setPath == nil || m.pathBlock == nil {
 					return m, nil // both hooks or neither: nil disables p
 				}
 				if m.switching[host.Alias] {
 					m.notice = "a switch is already running for " + host.Alias
 					return m, nil
 				}
-				// The write touches this host's files: no poll meanwhile
-				// (a marker of its own, so it never frees a poll's gate).
-				m.switching[host.Alias] = true
-				return m, m.switchCmd(host)
+				return m.openPicker(host), nil
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()
 				if !ok {
@@ -1231,6 +1234,8 @@ func (m Model) contentHeight() int {
 func (m Model) helpView() string {
 	var k help.KeyMap = m.keys
 	switch {
+	case m.picker.open():
+		k = pickerKeys{}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:
@@ -1281,7 +1286,12 @@ func (m Model) View() string {
 	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 
 	var body string
-	if m.settings.pane != settingsOff {
+	if m.picker.open() {
+		header += "   " + m.styles.CmdPreview.Render("path")
+		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
+		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.pickerView())
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
+	} else if m.settings.pane != settingsOff {
 		header += "   " + m.styles.CmdPreview.Render("settings")
 		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
@@ -1308,6 +1318,9 @@ func (m Model) View() string {
 	preview := m.previewView()
 	if m.settings.pane != settingsOff {
 		preview = "" // the panel's own footer says what enter does
+	}
+	if m.picker.open() {
+		preview = " " + m.styles.HelpDesc.Render(m.pickerPlan())
 	}
 	if m.mode != promptNone {
 		label := "connect:"

@@ -184,7 +184,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `S` | ssh to host in this terminal — the classic handoff: the TUI suspends until the session ends |
 | `H` | `herdr --remote <host>` |
 | `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
-| `p` | cycle the selected host's active path: rewrites `HostName` in `sasash.conf` to the next named path of that block (after the last one matching the current `HostName`, wrapping; the first when none matches) and regenerates the pinned variants; the host row's line previews the target by name and host — `p → ts 198.51.100.5` (the port follows the switcher's ownership rule at write time, so it is not guessed) — or says `p: only one path`, `p: no named paths`, or `p: not managed by sasash`; the outcome is a notice — `HostName: lan … → ts …`, plus `N pinned variants left as-is (names)` when the generator does not own a variant block — then the config is re-read and re-probed and the switch is remembered for `last switch` |
+| `p` | pick the selected host's active path: a small panel lists the named paths of its `sasash.conf` block in config order — each with its live probe (`● 2ms`, `○ down`, `◌ …` until probed) and the active one marked — `j`/`k` move, `enter` rewrites `HostName` to the highlighted path (`pathswitch.Set`; re-picking the active one still regenerates the pinned variants) and `esc` keeps things as they are; the bottom line names the highlighted plan (`p → ts 198.51.100.5` — the port follows the switcher's ownership rule at write time, so it is not guessed). Without a choice there is no panel, only a notice: `p: not managed by sasash`, `no named paths — nothing to switch`, or `only one named path — nothing to switch`; the host row's line previews the choice (`p: pick lan / ts`). The outcome is a notice — `HostName: lan … → ts …`, plus `N pinned variants left as-is (names)` when the generator does not own a variant block — then the config is re-read and re-probed and the switch is remembered for `last switch`. Action keys are inert while the panel is open |
 | `l` / `tab` | focus the tunnels pane (a host without tunnels says so instead): `j`/`k`, `ctrl+d`/`ctrl+u`, `g`/`G`, `tab`/`shift+tab` then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list, as does any host change. The focused pane's selection is lit and carries the `›` mark, the other's is dim and unmarked |
 | `space` | toggle highlighted forward set |
 | `+` | add ad-hoc forward (`-O forward`); a port shorthand expands first (see below) |
@@ -218,8 +218,7 @@ honest about partial knowledge: `probing…` before the first round, tunnels cou
 hosts polled so far, and dropped when it would not fit beside an applied filter term. Rows
 say `up 12m` / `down 3m` from the stats store's observed transitions — since first *observed*
 alive or dead, not since the master started — and nothing when unknown; `last connected` and
-`last switch → path` appear once recorded (the `p` path-switch key is not implemented yet, so
-`last switch` waits for its caller). Paths carry session memory only: a sparkline of the
+`last switch → path` appear once recorded. Paths carry session memory only: a sparkline of the
 newest probe latencies that fit (`·` for a miss), their min–max, and `answered/rounds` this
 session — forgotten when the TUI exits.
 

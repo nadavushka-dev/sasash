@@ -11,7 +11,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe"
 )
 
-// switchDoneMsg reports a path cycle (pathswitch.Cycle through the
+// switchDoneMsg reports a path switch (pathswitch.Set through the
 // hook). before is the block as it was at the keypress — the notice
 // needs the pre-switch HostName and path count, and the file has
 // changed by the time this lands.
@@ -46,7 +46,7 @@ func (m Model) block(alias string) pathBlock {
 	return b
 }
 
-// namedPaths are the paths p cycles over: the named ones, in config order.
+// namedPaths are the paths p offers: the named ones, in config order.
 func namedPaths(paths []probe.Path) []probe.Path {
 	var out []probe.Path
 	for _, p := range paths {
@@ -57,57 +57,44 @@ func namedPaths(paths []probe.Path) []probe.Path {
 	return out
 }
 
-// nextPath is what p will make active, by the switcher's own rule over
-// the block's paths: the one after the LAST named path whose host equals
-// the block's HostName, wrapping; the first named path when none matches
-// (a hand-edited HostName). ok is false with fewer than two named paths
-// — the switcher then changes nothing.
-func nextPath(paths []probe.Path, hostName string) (probe.Path, bool) {
-	named := namedPaths(paths)
-	if len(named) < 2 {
-		return probe.Path{}, false
-	}
-	cur := -1
-	for i, p := range named {
-		if strings.EqualFold(p.Host, hostName) {
-			cur = i
-		}
-	}
-	return named[(cur+1)%len(named)], true
-}
-
-// switchPlan is the p segment of the preview line: exactly which path p
-// will make active, or why it cannot. The target is named by host, not
-// port: the switcher's port-ownership rule decides the port at write
-// time, and a guessed one would be the one thing on the line that could
-// be wrong.
+// switchPlan is the p segment of the host row's preview line: the paths
+// the picker will offer, by name, or why there is nothing to pick.
 func (m Model) switchPlan(host hostmodel.Host) string {
-	if m.switchPath == nil || m.pathBlock == nil {
+	if m.setPath == nil || m.pathBlock == nil {
 		return ""
 	}
 	b := m.block(host.Alias)
 	if !b.managed {
 		return "p: not managed by sasash"
 	}
-	next, ok := nextPath(b.paths, b.hostName)
-	if !ok {
-		if len(namedPaths(b.paths)) == 0 {
-			return "p: no named paths"
-		}
+	named := namedPaths(b.paths)
+	switch len(named) {
+	case 0:
+		return "p: no named paths"
+	case 1:
 		return "p: only one path"
 	}
-	return "p → " + next.Name + " " + next.Host
+	names := make([]string, len(named))
+	for i, p := range named {
+		names[i] = p.Name
+	}
+	return "p: pick " + strings.Join(names, " / ")
 }
 
-// switchCmd runs the cycle off the UI thread. The block is read fresh
-// there, just before the switch — the cache may lag an out-of-band edit,
-// and the notice must state what was actually there.
-func (m Model) switchCmd(host hostmodel.Host) tea.Cmd {
-	sw, read, alias := m.switchPath, m.pathBlock, host.Alias
+// pathswitchNoop is the Result the picker's no-op notices render from:
+// nothing changed, which switchNotice words by the named-path count.
+var pathswitchNoop = pathswitch.Result{}
+
+// switchCmd runs pathswitch.Set for one named path off the UI thread.
+// The block is read fresh there, just before the switch — the cache may
+// lag an out-of-band edit, and the notice must state what was actually
+// there.
+func (m Model) switchCmd(host hostmodel.Host, name string) tea.Cmd {
+	sw, read, alias := m.setPath, m.pathBlock, host.Alias
 	return func() tea.Msg {
 		paths, hostName, managed := read(alias)
 		before := pathBlock{paths: paths, hostName: hostName, managed: managed}
-		res, err := sw(alias)
+		res, err := sw(alias, name)
 		return switchDoneMsg{host: alias, before: before, res: res, err: err}
 	}
 }

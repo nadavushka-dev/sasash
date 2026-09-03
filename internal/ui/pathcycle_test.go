@@ -23,29 +23,26 @@ var (
 	pathWAN = probe.Path{Name: "wan", Host: "203.0.113.5"}
 )
 
-func TestNextPath_Rule(t *testing.T) {
+func TestActiveIndex_Rule(t *testing.T) {
 	t.Parallel()
 	three := []probe.Path{pathLAN, pathTS, pathWAN}
 	tests := []struct {
 		name     string
-		paths    []probe.Path
+		rows     []probe.Path
 		hostName string
-		want     probe.Path
-		ok       bool
+		want     int
 	}{
-		{name: "after the current, wrapping", paths: three, hostName: "203.0.113.5", want: pathLAN, ok: true},
-		{name: "case-insensitive host match", paths: three, hostName: "198.51.100.5", want: pathWAN, ok: true},
-		{name: "no match starts at the first", paths: three, hostName: "192.0.2.99", want: pathLAN, ok: true},
-		{name: "last match wins when two share a host", paths: []probe.Path{pathLAN, {Name: "lan2", Host: "192.0.2.10"}, pathTS}, hostName: "192.0.2.10", want: pathTS, ok: true},
-		{name: "unnamed paths do not count", paths: []probe.Path{pathLAN, {Host: "192.0.2.77"}}, hostName: "192.0.2.10"},
-		{name: "one named path", paths: []probe.Path{pathLAN}, hostName: "192.0.2.10"},
+		{name: "the matching path", rows: three, hostName: "203.0.113.5", want: 2},
+		{name: "case-insensitive host match", rows: three, hostName: "198.51.100.5", want: 1},
+		{name: "no match is -1 (hand-edited HostName)", rows: three, hostName: "192.0.2.99", want: -1},
+		{name: "hostnames match case-insensitively", rows: []probe.Path{pathLAN, {Name: "dns", Host: "Db.Example.Invalid"}}, hostName: "db.example.invalid", want: 1},
+		{name: "last match wins when two share a host", rows: []probe.Path{pathLAN, {Name: "lan2", Host: "192.0.2.10"}, pathTS}, hostName: "192.0.2.10", want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := ui.NextPath(tt.paths, tt.hostName)
-			if ok != tt.ok || (ok && !reflect.DeepEqual(got, tt.want)) {
-				t.Errorf("NextPath() = %+v, %v; want %+v, %v", got, ok, tt.want, tt.ok)
+			if got := ui.ActiveIndex(tt.rows, tt.hostName); got != tt.want {
+				t.Errorf("ActiveIndex() = %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -104,7 +101,10 @@ func switcherModelReads(t *testing.T, r *fakerun.Fake, res pathswitch.Result, sw
 	var stamped [][]string
 	reads := 0
 	m = ui.WithSwitcher(m,
-		func(alias string) (pathswitch.Result, error) { switched = append(switched, alias); return res, swErr },
+		func(alias, name string) (pathswitch.Result, error) {
+			switched = append(switched, alias+" "+name)
+			return res, swErr
+		},
 		func(alias string) ([]probe.Path, string, bool) {
 			reads++
 			switch alias {
@@ -138,9 +138,9 @@ func TestModel_View_SwitchPlan(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "p: not managed by sasash") {
 		t.Errorf("View() on spare missing the not-managed plan:\n%s", view)
 	}
-	m = press(t, m, "G") // dual: lan is current, so p goes to ts — by host, no guessed port
-	if view := m.View(); !strings.Contains(view, "p → ts 198.51.100.5") || strings.Contains(view, "p → ts 198.51.100.5:") {
-		t.Errorf("View() on dual missing the exact target by host:\n%s", view)
+	m = press(t, m, "G") // dual: two named paths to pick from
+	if view := m.View(); !strings.Contains(view, "p: pick lan / ts") {
+		t.Errorf("View() on dual missing the pick plan:\n%s", view)
 	}
 	// The block is read once per alias per frame set, not on every frame.
 	before := *reads
@@ -151,17 +151,30 @@ func TestModel_View_SwitchPlan(t *testing.T) {
 	}
 	// Under tunnels focus the host row's segments are not shown.
 	m = press(t, m, "g", "l")
-	if view := m.View(); strings.Contains(view, "p → ") || strings.Contains(view, "p: only") {
+	if view := m.View(); strings.Contains(view, "p: pick") || strings.Contains(view, "p: only") {
 		t.Errorf("View() with a forward highlighted still previews p:\n%s", view)
 	}
 	// No hooks: no segment, and p does nothing.
 	plain := polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New())
-	if view := plain.View(); strings.Contains(view, "p →") || strings.Contains(view, "p: ") {
+	if view := plain.View(); strings.Contains(view, "p: ") {
 		t.Errorf("View() without a switcher previews p:\n%s", view)
 	}
 	if _, cmd := plain.Update(keyMsg("p")); cmd != nil {
 		t.Errorf("Update(p) without a switcher cmd = %v, want nil", cmd)
 	}
+}
+
+// pick presses p and enter: the picker opens on the active row and enter
+// makes it (or the row moved to) active through the hook.
+func pick(t *testing.T, m ui.Model, moves ...string) (ui.Model, tea.Cmd) {
+	t.Helper()
+	m = press(t, m, "p")
+	if !ui.PickerOpen(m) {
+		t.Fatalf("Update(p) should open the picker:\n%s", m.View())
+	}
+	m = press(t, m, moves...)
+	next, cmd := m.Update(keyMsg("enter"))
+	return next.(ui.Model), cmd
 }
 
 func TestModel_Update_CyclePathOutcomes(t *testing.T) {
@@ -189,11 +202,6 @@ func TestModel_Update_CyclePathOutcomes(t *testing.T) {
 			wantReload: true,
 		},
 		{
-			name:       "nothing to switch: no stamp, no reload",
-			res:        pathswitch.Result{Alias: "dual"},
-			wantNotice: "only one named path — nothing to switch",
-		},
-		{
 			name:       "switcher error is the notice",
 			err:        errors.New(`host "dual" is not managed by sasash: no Host block in sasash.conf`),
 			wantNotice: "path: host \"dual\" is not managed",
@@ -211,10 +219,9 @@ func TestModel_Update_CyclePathOutcomes(t *testing.T) {
 			})
 			next, sel := m.Update(keyMsg("G")) // dual: deliver its selection poll first
 			m = feed(t, next.(ui.Model), sel)
-			next, cmd := m.Update(keyMsg("p"))
-			m = next.(ui.Model)
+			m, cmd := pick(t, m, "j") // ts
 			if cmd == nil {
-				t.Fatalf("Update(p) cmd = nil, want the switch")
+				t.Fatalf("enter in the picker cmd = nil, want the switch")
 			}
 			// While the switch runs, the tick must not poll dual (one
 			// writer per host).
@@ -226,8 +233,8 @@ func TestModel_Update_CyclePathOutcomes(t *testing.T) {
 			}
 			next, after := m.Update(cmd())
 			m = next.(ui.Model)
-			if !reflect.DeepEqual(*switched, []string{"dual"}) {
-				t.Errorf("switch hook calls = %v, want [dual]", *switched)
+			if !reflect.DeepEqual(*switched, []string{"dual ts"}) {
+				t.Errorf("switch hook calls = %v, want [dual ts]", *switched)
 			}
 			if view := m.View(); !strings.Contains(view, tt.wantNotice) {
 				t.Errorf("View() missing %q:\n%s", tt.wantNotice, view)
@@ -261,23 +268,35 @@ func TestModel_Update_CyclePathInert(t *testing.T) {
 		t.Errorf("p with settings open: open %v, switches %v", ui.SettingsOpen(s), *switched)
 	}
 	// Help lists it.
-	if view := press(t, m, "?").View(); !strings.Contains(view, "cycle path") {
+	if view := press(t, m, "?").View(); !strings.Contains(view, "pick path") {
 		t.Errorf("View() full help missing p:\n%s", view)
 	}
 }
 
-func TestModel_Update_CyclePathOnUnmanagedHostCallsTheSwitcher(t *testing.T) {
+func TestModel_Update_PickPathWithoutAChoice(t *testing.T) {
 	t.Parallel()
-	// spare is in the host model but has no block in sasash.conf: the
-	// preview says so, and p still asks the switcher, whose refusal is
-	// the notice, verbatim.
-	r := fakerun.New()
-	m, switched, _ := switcherModel(t, r, pathswitch.Result{}, errors.New(`host "spare" is not managed by sasash: no Host block in /x/sasash.conf`))
-	m = press(t, m, "j", "j") // spare
-	next, cmd := m.Update(keyMsg("p"))
-	m = update(t, next.(ui.Model), cmd())
-	if !reflect.DeepEqual(*switched, []string{"spare"}) || !strings.Contains(m.View(), `path: host "spare" is not managed by sasash`) {
-		t.Errorf("p on an unmanaged host: switched %v, view:\n%s", *switched, m.View())
+	// No picker without two named paths: the cycle's own no-op wording
+	// is the notice, the hook is never asked, nothing is written.
+	tests := []struct {
+		name       string
+		moves      []string
+		wantNotice string
+	}{
+		{name: "unmanaged host", moves: []string{"j", "j"}, wantNotice: "p: not managed by sasash"},
+		{name: "one unnamed path", moves: nil, wantNotice: "no named paths — nothing to switch"},
+		{name: "one named path", moves: []string{"j"}, wantNotice: "only one named path — nothing to switch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m, switched, _ := switcherModel(t, fakerun.New(), pathswitch.Result{}, nil)
+			m = press(t, m, tt.moves...)
+			next, cmd := m.Update(keyMsg("p"))
+			m = next.(ui.Model)
+			if cmd != nil || ui.PickerOpen(m) || len(*switched) != 0 || !strings.Contains(m.View(), tt.wantNotice) {
+				t.Errorf("p: cmd %v, picker %v, switched %v:\n%s", cmd != nil, ui.PickerOpen(m), *switched, m.View())
+			}
+		})
 	}
 }
 
@@ -290,8 +309,7 @@ func TestModel_Update_CyclePathNeverFreesAPollsGate(t *testing.T) {
 	m, _, stamped := switcherModel(t, r, pathswitch.Result{Alias: "dual", From: pathLAN, To: pathTS, Changed: true}, nil)
 	next, poll := m.Update(keyMsg("G")) // dual: poll issued, not delivered
 	m = next.(ui.Model)
-	next, sw := m.Update(keyMsg("p"))
-	m = next.(ui.Model)
+	m, sw := pick(t, m, "j")
 	before := len(r.CallKeys())
 	next, after := m.Update(sw())
 	m = feedAll(t, next.(ui.Model), after) // reload + re-probe; no poll (gate held by poll #1)
@@ -313,15 +331,14 @@ func TestModel_Update_CyclePathTwiceRunsOnce(t *testing.T) {
 	m, switched, _ := switcherModel(t, r, pathswitch.Result{}, nil)
 	next, sel := m.Update(keyMsg("G"))
 	m = feed(t, next.(ui.Model), sel)
-	next, first := m.Update(keyMsg("p"))
-	m = next.(ui.Model)
+	m, first := pick(t, m)
 	next, second := m.Update(keyMsg("p"))
 	m = next.(ui.Model)
-	if second != nil || !strings.Contains(m.View(), "already running") {
-		t.Errorf("second p while a switch runs: cmd %v, view:\n%s", second != nil, m.View())
+	if second != nil || ui.PickerOpen(m) || !strings.Contains(m.View(), "already running") {
+		t.Errorf("second p while a switch runs: cmd %v, picker %v, view:\n%s", second != nil, ui.PickerOpen(m), m.View())
 	}
 	first()
-	if !reflect.DeepEqual(*switched, []string{"dual"}) {
+	if !reflect.DeepEqual(*switched, []string{"dual lan"}) {
 		t.Errorf("switch hook calls = %v, want exactly one", *switched)
 	}
 }
@@ -339,8 +356,8 @@ func TestModel_Update_QueuedStampsCompose(t *testing.T) {
 	next, _ = m.Update(keyMsg("enter"))
 	next, back := next.(ui.Model).Update(ui.SSHExit(nil)) // handoff stamp queued
 	m = feedAll(t, next.(ui.Model), back)
-	next, sw := m.Update(keyMsg("p"))
-	next, after := next.(ui.Model).Update(sw()) // switch stamp queued too
+	m, sw := pick(t, m, "j")
+	next, after := m.Update(sw()) // switch stamp queued too
 	m = feedAll(t, next.(ui.Model), after)
 	if len(handoffs) != 0 || len(*stamped) != 0 {
 		t.Fatalf("stamps ran before the poll landed: handoffs %v, switches %v", handoffs, *stamped)
@@ -362,31 +379,34 @@ func TestModel_Update_BlockCacheRefreshesOnReload(t *testing.T) {
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d)})
 	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = feed(t, m, m.Init())
-	m = ui.WithSwitcher(m, func(string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
 		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, hostName, true }, nil)
 	m = press(t, m, "G")
-	if view := m.View(); !strings.Contains(view, "p → ts") {
-		t.Fatalf("View() before the edit:\n%s", view)
+	// The picker opens on the block's active row: lan.
+	if view := press(t, m, "p").View(); !strings.Contains(view, "› ○ lan 192.0.2.10:22 down ← active") {
+		t.Fatalf("View() picker before the edit should open on lan:\n%s", view)
 	}
 	hostName = "198.51.100.5" // a hand-edit switched it
-	if view := m.View(); !strings.Contains(view, "p → ts") {
-		t.Errorf("View() should still show the cached plan until a reload:\n%s", view)
+	if view := press(t, m, "p").View(); !strings.Contains(view, "› ○ lan 192.0.2.10:22 down ← active") {
+		t.Errorf("View() picker should still open on the cached row until a reload:\n%s", view)
 	}
 	// The switch itself reads the block fresh: its notice names what was
 	// really there, not the cached HostName.
 	hostName = "203.0.113.99" // hand-edited to match no path
-	m = ui.WithSwitcher(m, func(string) (pathswitch.Result, error) {
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) {
 		return pathswitch.Result{Alias: "dual", To: pathLAN, Changed: true}, nil
 	}, func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, hostName, true }, nil)
-	next, sw := m.Update(keyMsg("p"))
-	next, _ = next.(ui.Model).Update(sw())
+	picked, sw := pick(t, m)
+	next, _ := picked.Update(sw())
 	if view := next.(ui.Model).View(); !strings.Contains(view, "HostName: 203.0.113.99 (no path) → lan") {
 		t.Errorf("the notice should name the fresh pre-switch HostName:\n%s", view)
 	}
 	m = ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf")
 	m = reloadAndProbe(t, m, hosts)
-	if view := m.View(); !strings.Contains(view, "p → lan") {
-		t.Errorf("View() after the reload should re-read the block:\n%s", view)
+	// Re-read: the hand-edited HostName matches no row, so the picker
+	// says so and opens on the first row.
+	if view := press(t, m, "p").View(); !strings.Contains(view, "matches no named path") {
+		t.Errorf("View() picker after the reload should re-read the block:\n%s", view)
 	}
 }
 
@@ -395,8 +415,119 @@ func TestModel_Update_CyclePathNeedsBothHooks(t *testing.T) {
 	// SwitchPath without PathBlock is half-wired: p is disabled rather
 	// than a nil dereference on the key.
 	m := polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New())
-	m = ui.WithSwitcher(m, func(string) (pathswitch.Result, error) { return pathswitch.Result{}, nil }, nil, nil)
-	if _, cmd := m.Update(keyMsg("p")); cmd != nil {
-		t.Errorf("Update(p) with only SwitchPath wired cmd = %v, want nil", cmd)
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil }, nil, nil)
+	if next, cmd := m.Update(keyMsg("p")); cmd != nil || ui.PickerOpen(next.(ui.Model)) {
+		t.Errorf("Update(p) with only SetPath wired: cmd %v, picker %v; want neither", cmd != nil, ui.PickerOpen(next.(ui.Model)))
+	}
+}
+
+// pickerModel is dual with its host model and block in agreement (lan
+// up at 5ms, ts down), so the picker rows carry live probes.
+func pickerModel(t *testing.T, r *fakerun.Fake) (ui.Model, *[]string) {
+	t.Helper()
+	hosts := append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS, {Host: "203.0.113.7"}}})
+	r.StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "check", "dual")
+	d := fakedial.New().Up("192.0.2.10:22", 5*time.Millisecond).Down("198.51.100.5:2222").Down("203.0.113.7:22")
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d)})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+	var switched []string
+	m = ui.WithSwitcher(m,
+		func(alias, name string) (pathswitch.Result, error) {
+			switched = append(switched, alias+" "+name)
+			return pathswitch.Result{Alias: alias, From: pathLAN, To: pathTS, Changed: true}, nil
+		},
+		func(alias string) ([]probe.Path, string, bool) {
+			if alias == "dual" {
+				return []probe.Path{pathLAN, pathTS, {Host: "203.0.113.7"}}, "192.0.2.10", true
+			}
+			return nil, "", false
+		}, nil)
+	return press(t, m, "G"), &switched
+}
+
+func TestModel_View_PathPicker(t *testing.T) {
+	t.Parallel()
+	m, _ := pickerModel(t, fakerun.New())
+	m = press(t, m, "p")
+	view := m.View()
+	// Named rows only, in config order, live probe beside each, the
+	// active one marked and under the cursor; the plan says so.
+	for _, want := range []string{"path for dual", "› ● lan 192.0.2.10:22 5ms ← active", "  ○ ts  198.51.100.5:2222 down", "p → lan 192.0.2.10  (already active — variants regenerate)", "enter make active", "esc keep current"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View() picker missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "203.0.113.7") || strings.Contains(view, "$ ") {
+		t.Errorf("View() picker lists an unnamed path or the ssh line:\n%s", view)
+	}
+	// Moving changes the plan; the port is not guessed.
+	m = press(t, m, "j")
+	if view := m.View(); !strings.Contains(view, "› ○ ts") || !strings.Contains(view, "p → ts 198.51.100.5") || strings.Contains(view, "p → ts 198.51.100.5:") || strings.Contains(view, "already active") {
+		t.Errorf("View() after j:\n%s", view)
+	}
+	// j clamps at the last row; g/G/k bound the cursor.
+	if view := press(t, m, "j", "j").View(); !strings.Contains(view, "› ○ ts") {
+		t.Errorf("View() after j past the end should stay on ts:\n%s", view)
+	}
+	if view := press(t, m, "j", "j", "k", "G", "g").View(); !strings.Contains(view, "› ● lan") {
+		t.Errorf("View() after g:\n%s", view)
+	}
+	// Probe-pending rows: a block path the session has not probed —
+	// including one that shares a NAME with a probed path but not its
+	// dial target — and the picker opens on the active row even when it
+	// is not the first.
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(string) ([]probe.Path, string, bool) {
+			return []probe.Path{{Name: "lan", Host: "192.0.2.99"}, pathWAN}, "203.0.113.5", true
+		}, nil)
+	m = press(t, m, "esc")
+	m = reloadAndProbe(t, m, append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS}}))
+	view = press(t, m, "G", "p").View()
+	for _, want := range []string{"  ◌ lan 192.0.2.99:22 …", "› ◌ wan 203.0.113.5:22 … ← active"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View() picker missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestModel_Update_PathPickerKeys(t *testing.T) {
+	t.Parallel()
+	m, switched := pickerModel(t, fakerun.New())
+	// esc cancels: nothing written, the panes are back.
+	m = press(t, m, "p", "j", "esc")
+	if ui.PickerOpen(m) || len(*switched) != 0 || !strings.Contains(m.View(), "$ ssh dual") {
+		t.Errorf("esc: open %v, switched %v:\n%s", ui.PickerOpen(m), *switched, m.View())
+	}
+	// Action keys are inert while open: no handoff, no settings, no
+	// filter, no quit; the picker stays.
+	m = press(t, m, "p")
+	for _, k := range []string{"S", "H", "o", "/", "q", "a", "+", "x", "l", "t", "v", "?"} {
+		next, cmd := m.Update(keyMsg(k))
+		if cmd != nil || !ui.PickerOpen(next.(ui.Model)) {
+			t.Errorf("key %q while picking: cmd %v, open %v", k, cmd != nil, ui.PickerOpen(next.(ui.Model)))
+		}
+	}
+	// enter on a row goes through the same pipeline as before: the
+	// in-flight marker, then the notice, the stamp, the reload.
+	m, cmd := pick(t, m, "j")
+	if cmd == nil || ui.PickerOpen(m) {
+		t.Fatalf("enter: cmd %v, open %v", cmd != nil, ui.PickerOpen(m))
+	}
+	next, _ := m.Update(keyMsg("p"))
+	if !strings.Contains(next.(ui.Model).View(), "already running") {
+		t.Errorf("p during the switch should say so:\n%s", next.(ui.Model).View())
+	}
+	next, _ = m.Update(cmd())
+	m = next.(ui.Model)
+	if !reflect.DeepEqual(*switched, []string{"dual ts"}) || !strings.Contains(m.View(), "HostName: lan 192.0.2.10:22 → ts 198.51.100.5:2222") {
+		t.Errorf("switched %v, view:\n%s", *switched, m.View())
+	}
+	// Live probes keep landing while the picker is open.
+	m = press(t, m, "p")
+	next, tick := m.Update(ui.RefreshTick())
+	m = feedAll(t, next.(ui.Model), tick)
+	if !ui.PickerOpen(m) || !strings.Contains(m.View(), "● lan 192.0.2.10:22 5ms") {
+		t.Errorf("picker after a refresh: open %v:\n%s", ui.PickerOpen(m), m.View())
 	}
 }
