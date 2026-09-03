@@ -158,8 +158,14 @@ func (m Model) promptExpansion() string {
 		}
 	case promptConnect, promptNewConn:
 		// Token by token: any -L value that is a shorthand means the
-		// command ssh gets differs from what was typed.
-		if t, err := parseAdhoc(v); err == nil && anyForwardShorthand(v) {
+		// command ssh gets differs from what was typed — as does a target
+		// the selection supplied (the a prompt only; a new connection is
+		// a new host, never the selected one).
+		selected := ""
+		if m.mode == promptConnect {
+			selected = m.selectedAlias()
+		}
+		if t, err := parseAdhocFor(v, selected); err == nil && (anyForwardShorthand(v) || t.FromSelection) {
 			argv := adhocArgv(t)
 			if t.TunnelOnly {
 				if m.mode == promptNewConn {
@@ -167,7 +173,11 @@ func (m Model) promptExpansion() string {
 				}
 				argv = adhocTunnelArgv(t)
 			}
-			return strings.Join(argv, " ")
+			line := strings.Join(argv, " ")
+			if t.FromSelection {
+				line += "   target: " + t.Host + " (selected)"
+			}
+			return line
 		}
 	}
 	return ""

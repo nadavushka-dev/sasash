@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -28,6 +29,34 @@ type adhocTarget struct {
 	User, Host, Port string
 	Forwards         []string
 	TunnelOnly       bool
+	// FromSelection marks a target the input did not name: the selected
+	// host's alias stood in (SASASH.4.12). It is already saved, so no
+	// save offer follows.
+	FromSelection bool
+}
+
+// errNoTarget is the parse outcome the selection may complete.
+var errNoTarget = errors.New("no target: want [user@]host[:port]")
+
+// parseAdhocFor parses the connect prompt with the selected host's alias
+// as the default target: an input that carries flags or specs but no
+// [user@]host token connects to the selection — the alias, so the config
+// and the ControlMaster apply. Every other outcome is parseAdhoc's:
+// an explicit target is untouched, an empty input or an incomplete flag
+// keeps its own error, and no selection keeps the no-target error. The
+// alias is appended only after the original input parsed clean of
+// everything but a target, so a flag can never swallow it.
+func parseAdhocFor(input, selected string) (adhocTarget, error) {
+	t, err := parseAdhoc(input)
+	if !errors.Is(err, errNoTarget) || selected == "" {
+		return t, err
+	}
+	t, err = parseAdhoc(input + " " + selected)
+	if err != nil {
+		return adhocTarget{}, err
+	}
+	t.FromSelection = true
+	return t, nil
 }
 
 // parseAdhoc parses the connect prompt. Malformed input returns an error
@@ -77,7 +106,7 @@ func parseAdhoc(input string) (adhocTarget, error) {
 		}
 	}
 	if dest == "" {
-		return adhocTarget{}, fmt.Errorf("no target: want [user@]host[:port]")
+		return adhocTarget{}, errNoTarget
 	}
 	target := dest
 	if user, rest, ok := strings.Cut(dest, "@"); ok {
@@ -268,7 +297,7 @@ func (m Model) submitNewConn() (Model, tea.Cmd) {
 func (m Model) promptSubmit() (Model, tea.Cmd) {
 	switch m.mode {
 	case promptConnect:
-		target, err := parseAdhoc(m.prompt.Value())
+		target, err := parseAdhocFor(m.prompt.Value(), m.selectedAlias())
 		if err != nil {
 			m.notice = err.Error() // stay in the prompt for correction
 			return m, nil
@@ -315,10 +344,20 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 	return m, nil
 }
 
+// selectedAlias is the connect prompt's default target: the selected
+// host's alias, "" with nothing selected.
+func (m Model) selectedAlias() string {
+	if host, ok := m.Selected(); ok {
+		return host.Alias
+	}
+	return ""
+}
+
 // offerSave follows an ad-hoc connect or tunnel: the alias prompt takes
-// the line when saving is wired; either way the paths re-probe.
+// the line when saving is wired and the target was typed; a target that
+// came from the selection is already saved. Either way the paths re-probe.
 func (m Model) offerSave() (tea.Model, tea.Cmd) {
-	if m.saveHost == nil {
+	if m.saveHost == nil || m.pending.FromSelection {
 		return m, probeCmd(m.prober, m.hosts)
 	}
 	m.mode = promptAlias

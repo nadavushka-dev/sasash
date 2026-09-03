@@ -133,6 +133,20 @@ func ParseAdhocArgv(input string) ([]string, error) {
 	return adhocArgv(t), nil
 }
 
+// ParseAdhocFor exposes the selection-defaulted parse: the argv (the
+// tunnel form when -N), whether the selection supplied the target, or
+// the error.
+func ParseAdhocFor(input, selected string) (argv []string, fromSelection bool, err error) {
+	t, err := parseAdhocFor(input, selected)
+	if err != nil {
+		return nil, false, err
+	}
+	if t.TunnelOnly {
+		return adhocTunnelArgv(t), t.FromSelection, nil
+	}
+	return adhocArgv(t), t.FromSelection, nil
+}
+
 // ParseAdhocTunnelArgv exposes the tunnel-only (-N) pipeline: the exact
 // `ssh -fN` argv and whether the input asked for it.
 func ParseAdhocTunnelArgv(input string) (argv []string, tunnelOnly bool, err error) {
