@@ -123,9 +123,37 @@ func TestModel_View_PopupScrolls(t *testing.T) {
 	if h := strings.Count(view, "\n") + 1; h != 30 {
 		t.Errorf("View() is %d lines with the popup open, want the frame's 30", h)
 	}
+	// Exactly room rows of content are shown: the frame is 30 tall, the
+	// help one line, so the body has 26 rows and the popup 23 of content.
+	rows := 0
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "   warning line") {
+			rows++
+		}
+	}
+	if rows != 23 || !strings.Contains(view, "lines 1–23 of 40 · j/k scroll") {
+		t.Errorf("View() should show 23 content rows with the exact hint (got %d):\n%s", rows, view)
+	}
 	m = press(t, m, "G")
-	if view := m.View(); !strings.Contains(view, "   warning line 40") || strings.Contains(view, "   warning line 01") {
-		t.Errorf("View() after G should show the end:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "   warning line 40") || !strings.Contains(view, "   warning line 18") || strings.Contains(view, "   warning line 17") || !strings.Contains(view, "lines 18–40 of 40") {
+		t.Errorf("View() after G should show exactly the last 23 rows:\n%s", view)
+	}
+	// One k after G moves one row: the offset is clamped when written,
+	// never parked past the end.
+	if view := press(t, m, "G", "k").View(); !strings.Contains(view, "   warning line 17") || strings.Contains(view, "   warning line 40") {
+		t.Errorf("View() after G k should move up one row:\n%s", view)
+	}
+	if view := press(t, m, "G", "j", "j", "j", "k").View(); !strings.Contains(view, "   warning line 17") {
+		t.Errorf("View() after over-scrolling down, k should still move:\n%s", view)
+	}
+	// A frame that grows after G: the stored offset is re-clamped at
+	// render so the window shows a full screen, not a sliver.
+	small := press(t, update(t, m, tea.WindowSizeMsg{Width: 100, Height: 14}), "G")
+	if view := small.View(); !strings.Contains(view, "lines 34–40 of 40") {
+		t.Fatalf("View() at height 14 after G:\n%s", view)
+	}
+	if view := update(t, small, tea.WindowSizeMsg{Width: 100, Height: 30}).View(); !strings.Contains(view, "lines 18–40 of 40") {
+		t.Errorf("View() after growing the frame should re-clamp to a full screen:\n%s", view)
 	}
 	m = press(t, m, "g", "j", "j")
 	if view := m.View(); !strings.Contains(view, "   warning line 03") || strings.Contains(view, "   warning line 01") {
@@ -250,10 +278,84 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 	})
 	t.Run("routine one-liners stay on the line", func(t *testing.T) {
 		t.Parallel()
-		m := polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New())
-		m = press(t, m, "t")
-		if ui.PopupOpen(m) || !strings.Contains(m.View(), "theme: ") {
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
+			StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
+			StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
+		m := polled(t, r, fakedial.New())
+		if m = press(t, m, "t"); ui.PopupOpen(m) || !strings.Contains(m.View(), "theme: ") {
 			t.Errorf("a theme change is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
+		}
+		if m = press(t, m, "y"); ui.PopupOpen(m) || !strings.Contains(m.View(), "nothing copied") {
+			t.Errorf("a yank with nothing alive is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
+		}
+		if m = press(t, m, "p"); ui.PopupOpen(m) {
+			t.Errorf("a single-path no-op is a one-liner:\n%s", m.View())
+		}
+		m = press(t, m, "l")
+		next, cmd := m.Update(keyMsg(" "))
+		m = update(t, next.(ui.Model), cmd())
+		if ui.PopupOpen(m) || !strings.Contains(m.View(), "web up") {
+			t.Errorf("a successful tunnel action is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
+		}
+	})
+	t.Run("the cache popup sets the one-line form and hides the command line", func(t *testing.T) {
+		t.Parallel()
+		m := polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New())
+		m = update(t, m, ui.TunnelStatus("ubuntu", tunnel.HostStatus{Host: "ubuntu", CorruptState: true}, nil))
+		view := m.View()
+		if !ui.PopupOpen(m) || strings.Contains(view, "$ ssh") || !strings.Contains(view, "cache unreadable for ubuntu — see the tunnels pane") {
+			t.Errorf("View() under the cache popup:\n%s", view)
+		}
+		if closed := press(t, m, "esc"); !strings.Contains(closed.View(), "cache unreadable for ubuntu — see the tunnels pane") {
+			t.Errorf("closing should leave the one-line form:\n%s", closed.View())
+		}
+	})
+	t.Run("control characters in stderr never reach the frame", func(t *testing.T) {
+		t.Parallel()
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
+			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("mid\rcarriage	and \x1b[2J\x1b[H wipe"), Code: 255}}, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
+			StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
+		m := polled(t, r, fakedial.New())
+		m = press(t, m, "l")
+		next, cmd := m.Update(keyMsg(" "))
+		m = update(t, next.(ui.Model), cmd())
+		view := m.View()
+		if strings.ContainsAny(view, "\r\t") || strings.Contains(view, "\x1b[2J") || !strings.Contains(view, "midcarriage and [2J[H wipe") {
+			t.Errorf("View() should carry the reason with control characters dropped:\n%s", view)
+		}
+	})
+	t.Run("a narrow frame wraps rather than cuts", func(t *testing.T) {
+		t.Parallel()
+		m := ui.WithEditor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New()), []string{"vi"}, "", "/tmp/x/sasash.conf")
+		m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) {
+			return tunnelHosts(), []error{errors.New(strings.Repeat("A", 20) + " tail"), errors.New("second")}, nil
+		})
+		m = update(t, m, tea.WindowSizeMsg{Width: 16, Height: 24})
+		next, reload := m.Update(ui.EditorExit(nil))
+		next, _ = next.(ui.Model).Update(reload())
+		view := next.(ui.Model).View()
+		// Count in the popup's rows only (three-space indent): the
+		// bottom-line notice repeats the head of the first warning.
+		as := 0
+		for _, l := range strings.Split(view, "\n") {
+			if strings.HasPrefix(l, "   ") {
+				as += strings.Count(l, "A")
+			}
+		}
+		if as < 20 {
+			t.Errorf("View() at 16 cols should keep every A by wrapping (got %d):\n%s", as, view)
+		}
+	})
+	t.Run("? stays readable under the popup", func(t *testing.T) {
+		t.Parallel()
+		m, _ := failedForward(t)
+		if view := press(t, m, "?").View(); !strings.Contains(view, "close") || !strings.Contains(view, "scroll") {
+			t.Errorf("View() help under the popup:\n%s", view)
+		}
+		m = press(t, m, "esc", "?")
+		m = update(t, m, ui.TunnelStatus("spare", tunnel.HostStatus{Host: "spare", CorruptStats: true}, nil))
+		if view := m.View(); !strings.Contains(view, "close") {
+			t.Errorf("View() full help under a popup opened after ?:\n%s", view)
 		}
 	})
 	t.Run("a conflict offer yields to the popup", func(t *testing.T) {

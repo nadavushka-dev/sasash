@@ -107,7 +107,10 @@ func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal b
 func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 	root := sshConfigPath(home)
 	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
-	store := stats.Store{Dir: stateDir(home)}
+	// One state dir for the engine, the stats store and the popup that
+	// names a cache file in it: they must never drift apart.
+	sd := stateDir(home)
+	store := stats.Store{Dir: sd}
 	editor, editorHint := resolveEditor(editorEnv)
 	// An edit ssh cannot see (the Include is not in ~/.ssh/config) must
 	// come back with an explanation, not a silently unchanged list. A
@@ -130,8 +133,8 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		},
 		// The same state dir as `up`/`down`, or the cache silently splits;
 		// the stats store lives beside it and stamps handoffs.
-		Tunnels:       tunnel.Engine{StateDir: stateDir(home), Stats: &store},
-		StateDir:      stateDir(home),
+		Tunnels:       tunnel.Engine{StateDir: sd, Stats: &store},
+		StateDir:      sd,
 		Home:          home,
 		RecordHandoff: store.RecordHandoff,
 		// p: the switcher on sasash.conf, the block read behind the rows

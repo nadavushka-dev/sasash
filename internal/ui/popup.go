@@ -42,10 +42,12 @@ func (m Model) show(title string, lines ...string) Model {
 // popupKey routes a key while the popup owns the keyboard: esc and enter
 // close, j/k and the half pages scroll, everything else is inert.
 func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.ClearFilter) || msg.Type == tea.KeyEnter {
+		m.popup = popup{}
+		return m, nil
+	}
 	p := &m.popup
 	switch {
-	case key.Matches(msg, m.keys.ClearFilter), msg.Type == tea.KeyEnter:
-		m.popup = popup{}
 	case key.Matches(msg, m.keys.Down):
 		p.offset++
 	case key.Matches(msg, m.keys.Up):
@@ -57,15 +59,23 @@ func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Top):
 		p.offset = 0
 	case key.Matches(msg, m.keys.Bottom):
-		p.offset = len(m.popupBody()) // clamped at render
+		p.offset = len(m.popupBody())
 	}
+	// Clamped where it is written, not only where it is read: an offset
+	// past the last legal value would eat the next k presses silently.
+	p.offset = min(max(p.offset, 0), max(len(m.popupBody())-m.popupRoom(), 0))
 	return m, nil
 }
 
+// popupRoom is how many content rows the frame shows: the title, a blank
+// and the hint take three.
+func (m Model) popupRoom() int { return max(m.contentHeight()-3, 1) }
+
 // popupBody is the content as lines wrapped to the box width: nothing
-// is cut, a long reason wraps.
+// is cut, a long reason wraps — down to a width of one on an absurdly
+// narrow frame, ugly but whole.
 func (m Model) popupBody() []string {
-	w := max(m.width-6, 20)
+	w := max(m.width-6, 1)
 	wrap := lipgloss.NewStyle().Width(w)
 	var out []string
 	if m.popup.prior != "" {
@@ -81,7 +91,7 @@ func (m Model) popupBody() []string {
 // from the scroll offset, and a scroll hint when there is more.
 func (m Model) popupView() string {
 	body := m.popupBody()
-	room := max(m.contentHeight()-3, 1) // title, blank, hint
+	room := m.popupRoom()
 	p := m.popup
 	offset := min(max(p.offset, 0), max(len(body)-room, 0))
 	var b strings.Builder
@@ -115,14 +125,33 @@ func (k popupKeys) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHe
 
 // reasonLines splits an error's text into lines for the popup, the
 // argv-prefixed form the engine uses ("<argv>: <stderr>") kept whole.
+// stderr is remote-influenced text (a banner, a ProxyCommand): control
+// characters are dropped so a stray CR or escape cannot redraw the
+// frame; tabs become spaces.
 func reasonLines(err error) []string {
 	var out []string
 	for _, l := range strings.Split(err.Error(), "\n") {
-		if l = strings.TrimRight(l, " \t\r"); l != "" {
+		if l = cleanLine(l); l != "" {
 			out = append(out, l)
 		}
 	}
 	return out
+}
+
+// cleanLine drops control characters from one line of remote-influenced
+// text (tabs become spaces) and trims its end: both tiers show stderr
+// through this, so neither can redraw the frame.
+func cleanLine(l string) string {
+	l = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return ' '
+		case r < 0x20 || r == 0x7f:
+			return -1
+		}
+		return r
+	}, l)
+	return strings.TrimRight(l, " ")
 }
 
 // corruptCaches opens the popup the first time a host's status reports
@@ -137,6 +166,9 @@ func (m Model) corruptCaches(msg tunnelStatusMsg) Model {
 		return m
 	}
 	m.corruptSeen[msg.host] = true
+	// The one-line form, so the bottom line and the popup agree and the
+	// outcome stays on the line after the popup closes.
+	m.notice = "cache unreadable for " + msg.host + " — see the tunnels pane"
 	where := "the state directory"
 	if m.stateDir != "" {
 		where = m.stateDir

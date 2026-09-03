@@ -315,9 +315,10 @@ func oneLine(err error, host string) string {
 	for i, line := range lines {
 		if strings.HasPrefix(line, "ssh ") {
 			if j := strings.Index(line, " "+host+": "); j >= 0 {
-				lines[i] = line[j+len(host)+3:]
+				line = line[j+len(host)+3:]
 			}
 		}
+		lines[i] = cleanLine(line)
 	}
 	return strings.Join(lines, "; ")
 }
