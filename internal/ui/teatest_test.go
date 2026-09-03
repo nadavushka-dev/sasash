@@ -116,7 +116,7 @@ func TestModel_Program_FilterGatesQuit(t *testing.T) {
 	tm.Type("q")
 	waitFor(t, tm, "q") // the term reached the input, not the quit path
 	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
-	waitFor(t, tm, "o settings") // full app help back: filtering cancelled
+	waitFor(t, tm, "? keys") // the whisper footer back: filtering cancelled
 	fm := finalModel(t, tm)
 	if got := ui.FilterState(fm); got != list.Unfiltered {
 		t.Errorf("FilterState() = %v, want Unfiltered after esc", got)

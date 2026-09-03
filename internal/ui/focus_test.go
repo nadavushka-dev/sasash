@@ -23,12 +23,12 @@ func TestModel_Update_FocusEscOrder(t *testing.T) {
 		t.Fatalf("FilterState() = %v, want filter applied", got)
 	}
 	m = press(t, m, "l", "?")
-	if !ui.TunnelsFocused(m) || !strings.Contains(m.View(), "host list") {
-		t.Fatalf("l then ?: focused %v, full help shown %v", ui.TunnelsFocused(m), strings.Contains(m.View(), "host list"))
+	if !ui.TunnelsFocused(m) || !ui.HelpOpen(m) {
+		t.Fatalf("l then ?: focused %v, keys panel open %v", ui.TunnelsFocused(m), ui.HelpOpen(m))
 	}
 	m = press(t, m, "esc")
-	if !ui.TunnelsFocused(m) || strings.Contains(m.View(), "host list") {
-		t.Errorf("first esc should fold the help and keep focus: focused %v:\n%s", ui.TunnelsFocused(m), m.View())
+	if !ui.TunnelsFocused(m) || ui.HelpOpen(m) {
+		t.Errorf("first esc should close the panel and keep focus: focused %v, open %v:\n%s", ui.TunnelsFocused(m), ui.HelpOpen(m), m.View())
 	}
 	m = press(t, m, "esc")
 	if ui.TunnelsFocused(m) || ui.FilterState(m).String() != "filter applied" {

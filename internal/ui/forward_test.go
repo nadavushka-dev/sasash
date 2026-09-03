@@ -535,12 +535,12 @@ func TestModel_Update_ForwardKeysInertWhileFiltering(t *testing.T) {
 
 func TestModel_View_HelpListsForwardKeys(t *testing.T) {
 	t.Parallel()
-	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 30})
+	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = press(t, m, "?")
 	view := m.View()
 	for _, want := range []string{"add forward", "cancel forward"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("View() full help missing %q:\n%s", want, view)
+			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}
 	}
 }

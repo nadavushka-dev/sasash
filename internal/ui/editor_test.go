@@ -318,45 +318,22 @@ func TestModel_Update_EditorReloadShowsWarnings(t *testing.T) {
 	}
 }
 
-func TestModel_View_HelpOmitsEditAndTheme(t *testing.T) {
+func TestModel_View_HelpListsEditAndTheme(t *testing.T) {
 	t.Parallel()
-	// Deliberate inversion of the 4.2 presence pin (SASASH.4.5): e and t
-	// keep working and stay in the short help line, but are NOT listed
-	// in the ? panel — settings (o) is their discoverable home. Absence
-	// is checked at a width where they used to fit, so a truncation
-	// cannot pass the test by accident.
-	tests := []struct {
-		name    string
-		width   int
-		full    bool
-		entries []string
-		want    bool // listed?
-	}{
-		// t sits past the short line's reach at any width; e is pinned
-		// at the width the 4.2 review chose.
-		{name: "short help at 120 keeps e", width: 120, entries: []string{"edit config"}, want: true},
-		{name: "full help at 100 omits both", width: 100, full: true, entries: []string{"edit config", "theme"}},
+	// Everything lives in the ? panel (SASASH.4.13, reversing 4.5's
+	// omission): e and t are listed there and nowhere on the whisper
+	// footer — and both keys still work.
+	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 120, Height: 60})
+	if view := m.View(); strings.Contains(view, "edit config") || strings.Contains(view, "theme") {
+		t.Errorf("View() whisper footer should name no action key:\n%s", view)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: tt.width, Height: 30})
-			if tt.full {
-				m = press(t, m, "?")
-			}
-			view := m.View()
-			for _, entry := range tt.entries {
-				if got := strings.Contains(view, entry); got != tt.want {
-					t.Errorf("View() at width %d (full help %v) lists %q = %v, want %v:\n%s", tt.width, tt.full, entry, got, tt.want, view)
-				}
-			}
-			// The keys themselves still work.
-			if _, cmd := ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf").Update(keyMsg("e")); cmd == nil {
-				t.Errorf("Update(e) cmd = nil, want the editor handoff")
-			}
-			if got := ui.ThemeName(press(t, m, "t")); got == "gruvbox" {
-				t.Errorf("t did not cycle the theme")
-			}
-		})
+	if view := press(t, m, "?").View(); !strings.Contains(view, "edit config") || !strings.Contains(view, "theme") {
+		t.Errorf("View() keys panel should list e and t:\n%s", view)
+	}
+	if _, cmd := ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf").Update(keyMsg("e")); cmd == nil {
+		t.Errorf("Update(e) cmd = nil, want the editor handoff")
+	}
+	if got := ui.ThemeName(press(t, m, "t")); got == "gruvbox" {
+		t.Errorf("t did not cycle the theme")
 	}
 }

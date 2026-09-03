@@ -632,7 +632,7 @@ func (m Model) tunnelsFocusKey(msg tea.KeyMsg) (Model, bool) {
 	case key.Matches(msg, m.keys.Bottom):
 		m.fwdIdx = len(rows) - 1
 		return m, true
-	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter) && !m.help.ShowAll:
+	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter):
 		return m.setFocus(focusList), true
 	}
 	return m, false
@@ -1235,15 +1235,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// refills the match set: it must reach the runtime.
 				rowsCmd = m.setRows(m.listRows())
 			case key.Matches(msg, m.keys.Help):
-				m.help.ShowAll = !m.help.ShowAll
-				m.list.SetSize(m.listWidth(), m.contentHeight())
-				return m, nil
+				return m.openHelp(), nil
 			case key.Matches(msg, m.keys.ClearFilter):
-				if m.help.ShowAll {
-					m.help.ShowAll = false
-					m.list.SetSize(m.listWidth(), m.contentHeight())
-					return m, nil
-				}
 				// Not consumed: esc falls through to the list, which
 				// clears an applied filter (and is a no-op otherwise).
 			case key.Matches(msg, m.keys.HalfDown):
@@ -1355,13 +1348,16 @@ func (m Model) helpView() string {
 		k = filterKeys{}
 	case m.focus == focusPaths:
 		k = pathsKeys{}
+	case m.focus == focusTunnels:
+		k = tunnelsKeys{}
+	}
+	// The main view's footer is a whisper (SASASH.4.13): every key lives
+	// in the ? panel. A keyboard owner or a pane focus keeps its one-line
+	// context help, because that line says what the keys do there.
+	if _, whisper := k.(KeyMap); whisper {
+		return m.styles.Clamp.MaxWidth(m.width).Render(" " + m.whisper())
 	}
 	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
-	if m.help.ShowAll && m.mode == promptNone && m.list.FilterState() != list.Filtering {
-		if line := actionsLine(m.actions); line != "" {
-			v += "\n" + m.styles.Clamp.MaxWidth(m.width).Render(m.styles.HelpDesc.Render(line))
-		}
-	}
 	return clampHeight(v, m.height-4)
 }
 

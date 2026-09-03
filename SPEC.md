@@ -214,7 +214,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, spawn target picker (`pane` / `tab` / `workspace`, persisted), add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |
 | `a` | ad-hoc connect: `[user@]host[:port] [-L spec]… [-p port]` in any order — a pasted `ssh …` command works, the leading `ssh` is dropped; offer to save on return. An input with flags or specs but no host token targets the SELECTED host — its alias, so its config and ControlMaster apply, ambient-tier hosts included — and says so at the head of the expansion line before enter (`→ target: ubuntu (selected) · ssh -L … ubuntu` — leading, so a narrow frame's ellipsis never eats it), never silently; the alias goes in verbatim (a hand-written `web:8080` is the alias, not a port); a typed `-p` still goes to ssh and beats the block's `Port`, as the line shows; an explicit target is untouched, an empty list keeps the no-target error, and no save is offered for a selection-defaulted target (it is already saved). This deliberately overlaps `+`: `-N -L 1234:localhost:8080` on the selected host is `+` with the spec, by another road — both stay. With `-N` it is tunnel-only: `ssh -fN -o BatchMode=yes …` runs in the background through the run seam with no handoff and the result is a notice — BatchMode makes ssh refuse to prompt (`-f` would otherwise open `/dev/tty` over the TUI), so auth must be keys/agent or the notice says so with the hint to connect once without `-N`; the save offer is unchanged |
 | `v` | list the generated pinned variants (`<alias>.<path>` blocks), or fold them again |
-| `/` `?` `q` | filter, help, quit |
+| `/` `?` `q` | filter, the keys panel, quit. `?` opens a panel over the body (the 4.11 popup, so it scrolls with `j`/`k` and owns the keyboard) listing every named binding grouped by surface — global, hosts, paths (`p`), tunnels (`l`), prompts, settings (`o`), popups, plus the `actions.toml` names — generated from the bindings themselves, never hand-maintained, with the group of the surface holding the keys first; `?` or `esc` closes it. It replaces the inline expanding help entirely |
 
 Generated pinned variants fold into their parent by default: a host is a variant only when
 its alias is `<parent>.<name>` for a listed parent and one of that parent's path names, it
@@ -227,7 +227,7 @@ the header tally counts listed hosts only, and a filter term naming the `.name` 
 (`office`, `.office`, `web.office`) surfaces that variant while the term stands — a bare
 `web` does not.
 
-`e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.
+The footer is minimal (SASASH.4.13): the command-preview line above it stays exactly as it is — it is the honesty surface, not help — and the key-hint strip on the main view is a whisper, `? keys · q quit`, nothing more. A keyboard owner (a prompt, the filter, settings, a popup) or a pane focus keeps its one-line context hint (`enter add · esc cancel`, `enter make active · esc/h keep current`), because that line says what enter does there. Nothing is advertised nowhere: `e` and `t` are listed in the panel (hosts and global groups) as well as in settings.
 
 The header carries a tally — `N hosts · M reachable · K tunnels up (P polled)` — that is
 honest about partial knowledge: `probing…` before the first round, tunnels counted only over
@@ -316,7 +316,7 @@ back in the list.
 
 Vim-style navigation is required alongside the action keys above: `j`/`k` (and arrows)
 move, `g`/`G` jump to first/last host, `ctrl+d`/`ctrl+u` half-page, `esc` goes back /
-clears the filter. Every binding is a named bubbles `key.Binding` so the help view is
+clears the filter. Every binding is a named bubbles `key.Binding` so the `?` panel is
 generated from the bindings, never hand-maintained. Single-letter action keys must not
 fire while the filter input or a prompt is focused.
 

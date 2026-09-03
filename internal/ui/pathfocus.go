@@ -110,7 +110,7 @@ func (m Model) pathsFocusKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 	case key.Matches(msg, m.keys.Bottom):
 		m.pathIdx = len(rows) - 1
 		return m, nil, true
-	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter) && !m.help.ShowAll:
+	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter):
 		return m.setFocus(focusList), nil, true
 	case msg.Type == tea.KeyEnter:
 		name := rows[m.pathIdx].Name

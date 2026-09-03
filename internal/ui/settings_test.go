@@ -443,20 +443,21 @@ func TestModel_Update_SettingsCreateConfigCheckFails(t *testing.T) {
 
 func TestModel_Update_SettingsHelpToggle(t *testing.T) {
 	t.Parallel()
-	// ? opened before o is folded away; ? inside the panel toggles the
-	// panel's own help.
-	m := press(t, probedModel(t, fakerun.New()), "?", "o")
-	if view := m.View(); strings.Contains(view, "clear filter / back") {
-		t.Errorf("View() keeps the expanded main help under the panel:\n%s", view)
+	// ? inside the settings panel opens the keys panel with the settings
+	// group first; esc closes it and settings is still there with its
+	// own footer.
+	m := press(t, probedModel(t, fakerun.New()), "o", "?")
+	if view := m.View(); !ui.HelpOpen(m) || !strings.HasPrefix(strings.TrimSpace(strings.Split(view, "\n")[4]), "settings (o)") {
+		t.Errorf("View() after ? in settings should open the keys panel on the settings group:\n%s", view)
 	}
-	m = press(t, m, "?")
-	if view := m.View(); !ui.SettingsOpen(m) || !strings.Contains(view, "back / close") {
-		t.Errorf("View() after ? in the panel: open %v:\n%s", ui.SettingsOpen(m), view)
+	m = press(t, m, "esc")
+	if view := m.View(); ui.HelpOpen(m) || !ui.SettingsOpen(m) || !strings.Contains(view, "back / close") {
+		t.Errorf("View() after esc: help %v, settings %v:\n%s", ui.HelpOpen(m), ui.SettingsOpen(m), view)
 	}
-	// The fold is what keeps the confirmation whole on a short terminal:
-	// at 80x10 with ? expanded before o, the footer must still render.
+	// On a short terminal the confirmation footer must still render
+	// after the keys panel has been opened and closed over settings.
 	short := ui.WithHome(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 10}), t.TempDir())
-	short = press(t, short, "?", "o")
+	short = press(t, short, "o", "?", "esc")
 	next, check := short.Update(keyMsg("enter"))
 	short = update(t, next.(ui.Model), check())
 	if view := short.View(); !strings.Contains(view, "enter writes") {
@@ -577,13 +578,12 @@ func TestModel_Update_SettingsAddTunnelOutcomes(t *testing.T) {
 
 func TestModel_View_HelpListsSettings(t *testing.T) {
 	t.Parallel()
-	// A panel that exists for discoverability sits beside ? in the short
-	// help (visible at 100 cols) and in the full help's first column.
+	// The footer is a whisper (SASASH.4.13); the ? panel advertises o.
 	m := update(t, sized(t, nil), tea.WindowSizeMsg{Width: 100, Height: 30})
-	if view := m.View(); !strings.Contains(view, "o settings") {
-		t.Errorf("View() short help at 100 cols missing the o entry:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "? keys") || strings.Contains(view, "o settings") {
+		t.Errorf("View() footer should be the whisper:\n%s", view)
 	}
-	if view := press(t, m, "?").View(); !strings.Contains(view, "settings") {
-		t.Errorf("View() full help missing the o entry:\n%s", view)
+	if view := press(t, m, "?").View(); !strings.Contains(view, "settings") || !strings.Contains(view, "keys — ? or esc closes") {
+		t.Errorf("View() keys panel missing the o entry:\n%s", view)
 	}
 }

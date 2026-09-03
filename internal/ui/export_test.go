@@ -67,6 +67,7 @@ func EditTarget(m Model) string                { return m.editTarget() }
 // PopupOpen and PopupTitle expose the attention tier (SASASH.4.11);
 // TunnelStatus replays a status poll result.
 func PopupOpen(m Model) bool    { return m.popup.open() }
+func HelpOpen(m Model) bool     { return m.popup.open() && m.popup.title == helpTitle }
 func PopupTitle(m Model) string { return m.popup.title }
 func TunnelStatus(host string, st tunnel.HostStatus, err error) tea.Msg {
 	return tunnelStatusMsg{host: host, status: st, err: err}

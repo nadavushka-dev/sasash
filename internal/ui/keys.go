@@ -85,20 +85,10 @@ func (k KeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Connect, k.Filter, k.Adhoc, k.Help, k.Settings, k.CopyAddr, k.CopyCmd, k.Edit, k.Herdr, k.Handoff, k.PickPath, k.FocusRight, k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit, k.Theme, k.Variants, k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Quit}
 }
 
-// FullHelp implements help.KeyMap, grouped general / navigation / actions /
-// tunnels; `?` expands the help bar into these columns. bubbles drops whole
-// columns right-to-left when the terminal is narrow, so the group holding
-// filter, esc, help, and quit — the keys the view exists to document —
-// comes first. e and t keep working but are not listed here: settings
-// (o) is their discoverable home (SASASH.4.5).
-func (k KeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Filter, k.ClearFilter, k.Help, k.Settings, k.Variants, k.Quit},
-		{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.FocusRight, k.FocusLeft},
-		{k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd},
-		{k.Toggle, k.AddFwd, k.CancelFwd, k.EditFwd, k.Restart, k.Exit},
-	}
-}
+// FullHelp implements help.KeyMap. The expanding help bar is retired
+// (SASASH.4.13: `?` opens the keys panel, generated from the same
+// bindings by helpGroups); the interface still wants it.
+func (k KeyMap) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
 
 // actionsLine is the full-help line naming the actions.toml entries
 // (SPEC §6): listed so the file is discoverable, and honest about not
@@ -140,6 +130,23 @@ func (p promptKeys) ShortHelp() []key.Binding {
 func (p promptKeys) FullHelp() [][]key.Binding {
 	return [][]key.Binding{p.ShortHelp()}
 }
+
+// tunnelsKeys is the context help shown while the tunnels pane holds
+// focus: what the pane's keys do there (action keys keep their meanings
+// and live in the ? panel).
+type tunnelsKeys struct{}
+
+func (tunnelsKeys) ShortHelp() []key.Binding {
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "move")),
+		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
+		key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel")),
+		key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit")),
+		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "host list")),
+	}
+}
+
+func (k tunnelsKeys) FullHelp() [][]key.Binding { return [][]key.Binding{k.ShortHelp()} }
 
 // filterKeys is the help shown while the filter input is focused: only
 // the keys that do anything there.

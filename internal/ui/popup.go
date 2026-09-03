@@ -25,6 +25,7 @@ type popup struct {
 	lines  []string
 	prior  string // the title this one replaced, "" when none
 	offset int    // first visible line when the content outgrows the frame
+	glyph  string // "!" for attention (the default), "?" for the keys panel
 }
 
 func (p popup) open() bool { return p.title != "" }
@@ -42,7 +43,7 @@ func (m Model) show(title string, lines ...string) Model {
 // popupKey routes a key while the popup owns the keyboard: esc and enter
 // close, j/k and the half pages scroll, everything else is inert.
 func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, m.keys.ClearFilter) || msg.Type == tea.KeyEnter {
+	if key.Matches(msg, m.keys.ClearFilter) || msg.Type == tea.KeyEnter || (key.Matches(msg, m.keys.Help) && m.popup.title == helpTitle) {
 		m.popup = popup{}
 		return m, nil
 	}
@@ -95,7 +96,11 @@ func (m Model) popupView() string {
 	p := m.popup
 	offset := min(max(p.offset, 0), max(len(body)-room, 0))
 	var b strings.Builder
-	b.WriteString(" " + m.styles.Notice.Render("! "+p.title))
+	glyph := p.glyph
+	if glyph == "" {
+		glyph = "!"
+	}
+	b.WriteString(" " + m.styles.Notice.Render(glyph+" "+p.title))
 	b.WriteString("\n")
 	end := min(offset+room, len(body))
 	for _, l := range body[offset:end] {

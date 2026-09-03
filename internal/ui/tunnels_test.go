@@ -734,13 +734,13 @@ func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
 
 func TestModel_View_HelpListsTunnelKeys(t *testing.T) {
 	t.Parallel()
-	// Presence only at a width where the tunnels column fits.
-	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 30})
+	// Presence in the keys panel at a size where it fits whole.
+	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = press(t, m, "?")
 	view := m.View()
 	for _, want := range []string{"toggle set", "restart master", "exit master", "tunnels pane", "host list"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("View() full help missing %q:\n%s", want, view)
+			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}
 	}
 }

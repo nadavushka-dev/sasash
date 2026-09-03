@@ -315,16 +315,20 @@ func TestModel_Update_AdhocFromEmptyList(t *testing.T) {
 
 func TestModel_View_PromptFullHelp(t *testing.T) {
 	t.Parallel()
-	// ? expands the help, then a opens the prompt: the expanded block
-	// must switch to the prompt keymap's columns.
-	m := probedModel(t, fakerun.New())
-	m = press(t, m, "?", "a")
+	// A focused prompt owns ? as typed text — the panel never opens over
+	// it — and keeps its own one-line footer, advertising no inert
+	// action key. The panel opened before a still lists the prompt keys.
+	m := ui.StaticCursor(probedModel(t, fakerun.New()))
+	m = press(t, m, "a", "?")
 	view := m.View()
-	if !strings.Contains(view, "cancel") {
-		t.Errorf("View() with prompt + full help missing the prompt keymap:\n%s", view)
+	if ui.HelpOpen(m) || !ui.Prompting(m) || !strings.Contains(view, "connect: ?") || !strings.Contains(view, "cancel") {
+		t.Errorf("View() ? in a prompt should be typed text with the prompt's footer:\n%s", view)
 	}
 	if strings.Contains(view, "yank host") {
 		t.Errorf("View() with prompt focused advertises inert action keys:\n%s", view)
+	}
+	if view := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 60}), "?").View(); !strings.Contains(view, "prompts") {
+		t.Errorf("View() keys panel should carry the prompts group:\n%s", view)
 	}
 }
 

@@ -85,10 +85,6 @@ func setupEnsureCmd(home string) tea.Cmd {
 func (m Model) openSettings() Model {
 	m.settings = settingsState{pane: settingsMenu}
 	m.saveThenConnect = false
-	if m.help.ShowAll {
-		m.help.ShowAll = false
-		m.list.SetSize(m.listWidth(), m.contentHeight())
-	}
 	return m
 }
 
@@ -119,9 +115,7 @@ func (m Model) settingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s.cursor = m.settingsRows() - 1
 		return m, nil
 	case key.Matches(msg, m.keys.Help):
-		m.help.ShowAll = !m.help.ShowAll
-		m.list.SetSize(m.listWidth(), m.contentHeight())
-		return m, nil
+		return m.openHelp(), nil
 	case msg.Type == tea.KeyEnter:
 		return m.settingsEnter()
 	}

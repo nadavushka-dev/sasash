@@ -161,34 +161,33 @@ func TestModel_View_HerdrPreviewAfterRowsShrink(t *testing.T) {
 
 func TestModel_View_HelpListsHerdr(t *testing.T) {
 	t.Parallel()
-	// The help is generated from the bindings so H cannot drift out of
-	// it: present in the short help at a width where it fits and in the
-	// full help (whose key column pads "H" out from "herdr"). No hosts,
-	// so no preview line can supply the word.
-	m := update(t, sized(t, nil), tea.WindowSizeMsg{Width: 140, Height: 30})
-	if view := m.View(); !strings.Contains(view, "H herdr") {
-		t.Errorf("View() short help missing the H entry:\n%s", view)
+	// The keys panel is generated from the bindings so H cannot drift out
+	// of it. No hosts, so no preview line can supply the word; the main
+	// footer is a whisper that never names it.
+	m := update(t, sized(t, nil), tea.WindowSizeMsg{Width: 140, Height: 60})
+	if view := m.View(); strings.Contains(view, "herdr") || !strings.Contains(view, "? keys") {
+		t.Errorf("View() footer should be the whisper:\n%s", view)
 	}
-	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 	if view := press(t, m, "?").View(); !strings.Contains(view, "herdr") {
-		t.Errorf("View() full help missing the H entry:\n%s", view)
+		t.Errorf("View() keys panel missing the H entry:\n%s", view)
 	}
 }
 
 func TestModel_View_HelpListsActions(t *testing.T) {
 	t.Parallel()
 	m := ui.New(testHosts(1), probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{Actions: []string{"rdp", "vnc"}})
-	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 60})
 	if view := m.View(); strings.Contains(view, "actions.toml") {
-		t.Fatalf("View() lists actions in the short help:\n%s", view)
+		t.Fatalf("View() lists actions in the footer:\n%s", view)
 	}
-	m = press(t, m, "?")
+	m = press(t, m, "?", "G") // the actions group closes the panel
 	view := m.View()
 	if !strings.Contains(view, "actions.toml: rdp, vnc") || !strings.Contains(view, "not runnable") {
-		t.Errorf("View() full help missing the actions line:\n%s", view)
+		t.Errorf("View() keys panel missing the actions line:\n%s", view)
 	}
-	// The line yields with the rest of the help when the filter or a
-	// prompt owns the keyboard.
+	// Closed, the line is gone with the rest of the panel; the filter
+	// then owns the footer.
+	m = press(t, m, "esc")
 	if view := press(t, m, "/").View(); strings.Contains(view, "actions.toml") {
 		t.Errorf("View() keeps the actions line while filtering:\n%s", view)
 	}

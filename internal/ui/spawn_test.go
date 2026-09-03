@@ -394,10 +394,10 @@ func TestModel_Update_HandoffKey(t *testing.T) {
 	if got := ui.FilterText(press(t, m, "/", "S")); got != "S" {
 		t.Errorf("FilterText() = %q, want S", got)
 	}
-	// Both handoffs are in the full help.
-	m = press(t, m, "?")
-	if view := m.View(); !strings.Contains(view, "ssh here") || !strings.Contains(view, "spawn ssh") {
-		t.Errorf("View() full help missing S / enter rows:\n%s", view)
+	// Both handoffs are in the keys panel.
+	m = press(t, update(t, m, tea.WindowSizeMsg{Width: 140, Height: 60}), "?")
+	if view := m.View(); !ui.HelpOpen(m) || !strings.Contains(view, "ssh here") || !strings.Contains(view, "spawn ssh") {
+		t.Errorf("View() keys panel missing S / enter rows:\n%s", view)
 	}
 }
 
