@@ -199,13 +199,16 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `v` | list the generated pinned variants (`<alias>.<path>` blocks), or fold them again |
 | `/` `?` `q` | filter, help, quit |
 
-Generated pinned variants fold into their parent by default: a host whose alias is
-`<parent>.<name>` is a variant only when BOTH witnesses hold — `<parent>` is a listed host and
-`<name>` is one of its path names — so a user host that merely looks dotted stays listed. A
-folded variant is still a real host (ssh, herdr, everything) once surfaced: the parent's
-detail pane names them (`pinned .office .nat`), `v` lists them, the header tally counts
-listed hosts only, and a filter term naming the `.name` suffix (`office`, `.office`,
-`web.office`) surfaces that variant while the term stands — a bare `web` does not.
+Generated pinned variants fold into their parent by default: a host is a variant only when
+its alias is `<parent>.<name>` for a listed parent and one of that parent's path names, it
+has exactly one path, that path's host is the parent's path host, and it carries no
+`@sasash` meta of its own — everything a generated block is and a hand-written one usually
+is not — so a user host that merely looks dotted stays listed. A folded variant is still a
+real host (ssh, herdr, everything) once surfaced: the parent's detail pane names them in
+config order (`pinned .office .nat`, or a count when they would not fit), `v` lists them,
+the header tally counts listed hosts only, and a filter term naming the `.name` suffix
+(`office`, `.office`, `web.office`) surfaces that variant while the term stands — a bare
+`web` does not.
 
 `e` and `t` keep working (and stay in the short help line) but are not listed in the `?` panel — settings (`o`) is their discoverable home.
 

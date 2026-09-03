@@ -1,65 +1,64 @@
 package ui
 
 import (
-	"sort"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 )
 
-// variantOf classifies alias as a generated pinned variant of another
-// listed host: "<parent>.<name>", split at the LAST dot, where parent is
-// a listed host AND name is one of that parent's path names. Both
-// witnesses are required (the two-witness caution the generator itself
-// applies): a user host that merely looks dotted — web.staging with no
-// such parent, or web.office whose parent has no "office" path — is not
-// a variant and stays listed. Display-only: nothing is ever written.
-func variantOf(alias string, hosts []hostmodel.Host) (parent, name string, ok bool) {
-	dot := strings.LastIndex(alias, ".")
-	if dot <= 0 || dot == len(alias)-1 {
-		return "", "", false
-	}
-	parent, name = alias[:dot], alias[dot+1:]
-	for _, h := range hosts {
-		if h.Alias != parent {
-			continue
-		}
-		for _, p := range h.Paths {
-			if p.Name == name {
-				return parent, name, true
-			}
-		}
-		return "", "", false
-	}
-	return "", "", false
+// foldState is shared by pointer between the model and the list's filter
+// function: which aliases are generated variants (alias → path name) and
+// whether they are listed. It is rebuilt in place on every reload.
+type foldState struct {
+	variants map[string]string
+	show     bool
 }
 
-// variantsOf lists the pinned variant names of parent, in list order.
-func variantsOf(parent string, hosts []hostmodel.Host) []string {
-	var out []string
+// computeVariants classifies generated pinned variants with four
+// witnesses, display-only: alias == "<parent>.<name>" for a listed parent
+// and one of ITS path names (matched by prefix, so a dotted path name
+// works and a multi-dot parent too); the block has exactly one path,
+// carries no @sasash meta of its own (a generator never writes any), and
+// that path's host is the parent's path host. A user host that merely
+// looks dotted, or that says anything a generator would not, stays listed.
+func computeVariants(hosts []hostmodel.Host) map[string]string {
+	byAlias := make(map[string]hostmodel.Host, len(hosts))
 	for _, h := range hosts {
-		if p, name, ok := variantOf(h.Alias, hosts); ok && p == parent {
-			out = append(out, name)
+		if _, dup := byAlias[h.Alias]; !dup {
+			byAlias[h.Alias] = h
+		}
+	}
+	out := make(map[string]string)
+	for _, h := range hosts {
+		if len(h.Paths) != 1 || len(h.Tags) > 0 || len(h.Forwards) > 0 {
+			continue
+		}
+		for _, parent := range hosts {
+			if parent.Alias == h.Alias || !strings.HasPrefix(h.Alias, parent.Alias+".") {
+				continue
+			}
+			name := h.Alias[len(parent.Alias)+1:]
+			for _, p := range parent.Paths {
+				if p.Name == name && strings.EqualFold(p.Host, h.Paths[0].Host) {
+					out[h.Alias] = name
+				}
+			}
 		}
 	}
 	return out
 }
 
-// visibleHosts are the rows the list shows: every host when variants are
-// shown, otherwise the non-variants plus any variant the filter term
-// names explicitly — the term matches the variant's ".<name>" suffix
-// (office, .office, web.office), so a bare parent term does not bring
-// the clutter back.
-func (m Model) visibleHosts() []hostmodel.Host {
-	term := strings.ToLower(strings.TrimSpace(m.list.FilterValue()))
-	var out []hostmodel.Host
-	for _, h := range m.hosts {
-		_, name, ok := variantOf(h.Alias, m.hosts)
-		if !ok || m.showVariants || (term != "" && termNamesVariant(term, h.Alias, name)) {
-			out = append(out, h)
+// variantsOf lists parent's variant names in config order.
+func variantsOf(parent string, hosts []hostmodel.Host, variants map[string]string) []string {
+	var out []string
+	for _, h := range hosts {
+		if name, ok := variants[h.Alias]; ok && h.Alias == parent+"."+name {
+			out = append(out, name)
 		}
 	}
 	return out
@@ -67,9 +66,10 @@ func (m Model) visibleHosts() []hostmodel.Host {
 
 // termNamesVariant reports whether a filter term explicitly asks for the
 // variant: it contains the whole alias, or it is a substring of the
-// ".<name>" suffix at least as specific as the name itself.
+// ".<name>" suffix at least as specific as the name itself — so a bare
+// parent term does not bring the clutter back.
 func termNamesVariant(term, alias, name string) bool {
-	alias, name = strings.ToLower(alias), strings.ToLower(name)
+	term, alias, name = strings.ToLower(term), strings.ToLower(alias), strings.ToLower(name)
 	if strings.Contains(term, alias) {
 		return true
 	}
@@ -77,79 +77,112 @@ func termNamesVariant(term, alias, name string) bool {
 	return strings.Contains(suffix, term) && strings.Contains(term, name)
 }
 
-// rebuildItems hands the list the visible rows when they changed,
-// keeping the selection on the same alias when it is still visible.
-// Returns the list's own cmd (a filter re-run while one is active).
-func (m *Model) rebuildItems() (changed bool, cmd tea.Cmd) {
-	visible := m.visibleHosts()
-	current := make([]string, 0, len(m.list.Items()))
-	for _, it := range m.list.Items() {
-		current = append(current, it.(hostItem).host.Alias)
+// foldFilter wraps the default fuzzy filter: while a filter is active the
+// list holds every host, and folded variants are kept out of the matches
+// unless the term names them — so the rows never change under a filter,
+// the cursor stays where it is, and each keystroke yields one match set.
+func foldFilter(fold *foldState) list.FilterFunc {
+	return func(term string, targets []string) []list.Rank {
+		ranks := list.DefaultFilter(term, targets)
+		if fold.show {
+			return ranks
+		}
+		out := ranks[:0]
+		for _, r := range ranks {
+			alias := strings.Fields(targets[r.Index])[0] // FilterValue starts with the alias
+			if name, variant := fold.variants[alias]; !variant || termNamesVariant(term, alias, name) {
+				out = append(out, r)
+			}
+		}
+		return out
 	}
-	want := make([]string, 0, len(visible))
-	for _, h := range visible {
-		want = append(want, h.Alias)
+}
+
+// listedHosts are the rows outside a filter: every host when variants
+// are shown, else the non-variants. (The header tally counts these.)
+func (m Model) listedHosts() []hostmodel.Host {
+	if m.fold.show {
+		return m.hosts
 	}
-	if strings.Join(current, "\x00") == strings.Join(want, "\x00") {
-		return false, nil
+	var out []hostmodel.Host
+	for _, h := range m.hosts {
+		if _, variant := m.fold.variants[h.Alias]; !variant {
+			out = append(out, h)
+		}
 	}
+	return out
+}
+
+// listRows are the items the list holds for the given filter state: all
+// hosts while filtering (the filter function hides folded ones), else
+// the listed ones.
+func (m Model) listRows(filtering bool) []hostmodel.Host {
+	if filtering {
+		return m.hosts
+	}
+	return m.listedHosts()
+}
+
+// setRows hands the list its rows, keeping the selection on its alias.
+// Outside a filter the index is item space and Select is exact; under a
+// filter the alias is stashed and re-selected when the match set lands
+// (Select indexes filter space, which SetItems just emptied).
+func (m *Model) setRows(rows []hostmodel.Host) tea.Cmd {
 	selected := ""
 	if it, ok := m.list.SelectedItem().(hostItem); ok {
 		selected = it.host.Alias
 	}
-	items := make([]list.Item, len(visible))
+	items := make([]list.Item, len(rows))
 	keep := -1
-	for i, h := range visible {
+	for i, h := range rows {
 		items[i] = hostItem{host: h}
 		if h.Alias == selected {
 			keep = i
 		}
 	}
-	c := m.list.SetItems(items)
-	if keep >= 0 {
-		m.list.Select(keep)
+	cmd := m.list.SetItems(items)
+	if m.list.FilterState() == list.Unfiltered {
+		if keep >= 0 {
+			m.list.Select(keep)
+		}
+		clampCursor(&m.list)
+	} else {
+		m.reselect = selected
 	}
-	clampCursor(&m.list)
-	return true, c
+	return cmd
 }
 
-// pinnedLine renders a parent's folded variants in its detail pane.
+// rowsDiffer reports whether the list's items are not rows.
+func (m Model) rowsDiffer(rows []hostmodel.Host) bool {
+	items := m.list.Items()
+	if len(items) != len(rows) {
+		return true
+	}
+	for i, it := range items {
+		if it.(hostItem).host.Alias != rows[i].Alias {
+			return true
+		}
+	}
+	return false
+}
+
+// pinnedLine renders a parent's folded variants in its detail pane, in
+// config order, whole or as a count when they would not fit the pane.
 func (m Model) pinnedLine(host hostmodel.Host) string {
-	names := variantsOf(host.Alias, m.hosts)
+	names := variantsOf(host.Alias, m.hosts, m.fold.variants)
 	if len(names) == 0 {
 		return ""
 	}
-	sort.Strings(names)
+	hint := "(v shows them)"
+	if m.fold.show {
+		hint = "(listed)"
+	}
 	for i, n := range names {
 		names[i] = "." + n
 	}
-	hint := "v shows them"
-	if m.showVariants {
-		hint = "listed"
+	line := m.styles.SectionLabel.Render("pinned") + " " + m.styles.PathName.Render(strings.Join(names, " ")) + " " + m.styles.PathExtra.Render(hint)
+	if lipgloss.Width(line) > m.width-m.listWidth()-3 {
+		line = m.styles.SectionLabel.Render("pinned") + " " + m.styles.PathName.Render(fmt.Sprintf("%d variants", len(names))) + " " + m.styles.PathExtra.Render(hint)
 	}
-	return "\n " + m.styles.SectionLabel.Render("pinned") + " " + m.styles.PathName.Render(strings.Join(names, " ")) + " " + m.styles.PathExtra.Render("("+hint+")")
-}
-
-// forceRebuild rebuilds the rows even when the aliases are unchanged (a
-// reload replaces the host values behind the same aliases).
-func (m *Model) forceRebuild() (bool, tea.Cmd) {
-	visible := m.visibleHosts()
-	selected := ""
-	if it, ok := m.list.SelectedItem().(hostItem); ok {
-		selected = it.host.Alias
-	}
-	items := make([]list.Item, len(visible))
-	keep := -1
-	for i, h := range visible {
-		items[i] = hostItem{host: h}
-		if h.Alias == selected {
-			keep = i
-		}
-	}
-	c := m.list.SetItems(items)
-	if keep >= 0 {
-		m.list.Select(keep)
-	}
-	clampCursor(&m.list)
-	return true, c
+	return "\n " + line
 }

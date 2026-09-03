@@ -264,7 +264,7 @@ func (m Model) stampedPollCmd(host string) (Model, tea.Cmd) {
 func (m Model) summaryLine() string {
 	// Folded variants are not hosts the user counts; the tally follows
 	// the list.
-	hosts := m.visibleHosts()
+	hosts := m.listedHosts()
 	n := len(hosts)
 	if n == 0 {
 		return ""
