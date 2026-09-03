@@ -175,7 +175,10 @@ func (m Model) promptExpansion() string {
 			}
 			line := strings.Join(argv, " ")
 			if t.FromSelection {
-				line += "   target: " + t.Host + " (selected)"
+				// The disclosure leads: the line's tail is what a narrow
+				// frame cuts (4.9's ellipsis), and the tail is the part
+				// the user typed and can reconstruct.
+				line = "target: " + t.Host + " (selected) · " + line
 			}
 			return line
 		}

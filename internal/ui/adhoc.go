@@ -40,22 +40,18 @@ var errNoTarget = errors.New("no target: want [user@]host[:port]")
 
 // parseAdhocFor parses the connect prompt with the selected host's alias
 // as the default target: an input that carries flags or specs but no
-// [user@]host token connects to the selection — the alias, so the config
-// and the ControlMaster apply. Every other outcome is parseAdhoc's:
-// an explicit target is untouched, an empty input or an incomplete flag
-// keeps its own error, and no selection keeps the no-target error. The
-// alias is appended only after the original input parsed clean of
-// everything but a target, so a flag can never swallow it.
+// [user@]host token connects to the selection — the alias, verbatim, so
+// the config and the ControlMaster apply and a hand-written alias with
+// ':' or '@' in it is never re-read as host:port or user@host. Every
+// other outcome is parseAdhoc's: an explicit target is untouched, an
+// empty input or an incomplete flag keeps its own error, and no
+// selection keeps the no-target error.
 func parseAdhocFor(input, selected string) (adhocTarget, error) {
 	t, err := parseAdhoc(input)
 	if !errors.Is(err, errNoTarget) || selected == "" {
 		return t, err
 	}
-	t, err = parseAdhoc(input + " " + selected)
-	if err != nil {
-		return adhocTarget{}, err
-	}
-	t.FromSelection = true
+	t.Host, t.FromSelection = selected, true
 	return t, nil
 }
 
@@ -106,7 +102,13 @@ func parseAdhoc(input string) (adhocTarget, error) {
 		}
 	}
 	if dest == "" {
-		return adhocTarget{}, errNoTarget
+		// Everything but the target parsed: hand it back with the sentinel
+		// so a caller with a default target need not parse twice.
+		if flagPort != "" && !numeric(flagPort) {
+			return adhocTarget{}, fmt.Errorf("bad port %q", flagPort)
+		}
+		t.Port = flagPort
+		return t, errNoTarget
 	}
 	target := dest
 	if user, rest, ok := strings.Cut(dest, "@"); ok {

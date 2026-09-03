@@ -33,6 +33,10 @@ func TestParseAdhocFor_Table(t *testing.T) {
 		{name: "empty input keeps its usage error", input: "", selected: "ubuntu", wantErr: "type [user@]host[:port]"},
 		{name: "incomplete flag keeps its error", input: "-L", selected: "ubuntu", wantErr: "-L needs a value"},
 		{name: "malformed spec keeps its error", input: "-L 3000:web", selected: "ubuntu", wantErr: `forward "3000:web": want local:host:port`},
+		{name: "bad port keeps its error", input: "-p abc", selected: "ubuntu", wantErr: `bad port "abc"`},
+		// A hand-written alias is a word to ssh, whatever it contains.
+		{name: "alias with a colon stays the alias", input: "-L 8080", selected: "web:8080", want: []string{"ssh", "-L", "8080:localhost:8080", "web:8080"}, fromSel: true},
+		{name: "alias with an at-sign stays the alias", input: "-N", selected: "a@b", want: []string{"ssh", "-fN", "-o", "BatchMode=yes", "a@b"}, fromSel: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -61,7 +65,7 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		m = ui.StaticCursor(m)
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 1234:localhost:8080")})
-		if view := m.View(); !strings.Contains(view, "→ ssh -fN -o BatchMode=yes -L 1234:localhost:8080 ubuntu   target: ubuntu (selected)") {
+		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -fN -o BatchMode=yes -L 1234:localhost:8080 ubuntu") {
 			t.Errorf("View() should name the defaulted target before enter:\n%s", view)
 		}
 		before := len(r.CallKeys())
@@ -86,7 +90,7 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		m = ui.StaticCursor(m)
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-p 2222")})
-		if view := m.View(); !strings.Contains(view, "→ ssh -p 2222 ubuntu   target: ubuntu (selected)") {
+		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -p 2222 ubuntu") {
 			t.Errorf("View() should name the defaulted target:\n%s", view)
 		}
 		next, cmd := m.Update(keyMsg("enter"))
@@ -114,8 +118,21 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		m := ui.StaticCursor(press(t, tierModel(t, tierHosts()), "G")) // office: ambient tier
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-L 3000")})
-		if view := m.View(); !strings.Contains(view, "→ ssh -L 3000:localhost:3000 office   target: office (selected)") {
+		if view := m.View(); !strings.Contains(view, "→ target: office (selected) · ssh -L 3000:localhost:3000 office") {
 			t.Errorf("View() should default to the ambient host:\n%s", view)
+		}
+	})
+	t.Run("the disclosure survives a narrow frame", func(t *testing.T) {
+		t.Parallel()
+		// At 80 columns the line's tail is cut with an ellipsis (4.9): the
+		// target note leads, so it is never the part that goes.
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		m := ui.StaticCursor(update(t, polled(t, r, fakedial.New()), tea.WindowSizeMsg{Width: 80, Height: 24}))
+		m = press(t, m, "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-L 8080 -L 9090 -L 7070 -L 6060")})
+		view := m.View()
+		if !strings.Contains(view, "→ target: ubuntu (selected) · ssh -L 8080:localhost:8080") || !strings.Contains(view, "…") {
+			t.Errorf("View() at 80 cols should lead with the target and cut the tail:\n%s", view)
 		}
 	})
 	t.Run("empty list keeps the no-target error", func(t *testing.T) {
