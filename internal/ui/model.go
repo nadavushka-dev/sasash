@@ -1303,8 +1303,8 @@ func (m Model) View() string {
 // expansionLine renders promptExpansion for the frame, "" when none.
 func (m Model) expansionLine() string {
 	full := m.promptExpansion()
-	if full == "" {
-		return ""
+	if full == "" || m.height-3-lipgloss.Height(m.helpView()) < 2 {
+		return "" // no row to give up on a tiny terminal
 	}
 	line := " " + m.styles.PathExtra.Render("→ "+full)
 	if lipgloss.Width(line) > m.width {

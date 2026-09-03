@@ -147,6 +147,9 @@ func (m Model) promptExpansion() string {
 		changed := false
 		for _, s := range strings.Fields(v) {
 			full, expanded := expandSpec(s)
+			if port, _ := localPort(full); port == "" {
+				return "" // enter will refuse this token; promise nothing
+			}
 			changed = changed || expanded
 			out = append(out, full)
 		}

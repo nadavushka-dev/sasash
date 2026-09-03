@@ -206,6 +206,33 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 			t.Errorf("hook calls = %v, want %v", calls, want)
 		}
 	})
+	t.Run("settings specs preview promises nothing enter refuses", func(t *testing.T) {
+		t.Parallel()
+		m := ui.WithSaveForwardSet(settingsModel(t, fakerun.New()), func(string, string, []string) error { return nil })
+		m = press(t, m, "G", "enter", "enter")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("db")})
+		m = press(t, m, "enter")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5432 nonsense")})
+		if view := m.View(); !strings.Contains(view, "specs:") || strings.Contains(view, "→ ") {
+			t.Errorf("View() should be the specs prompt with no preview of a list enter will refuse:\n%s", view)
+		}
+	})
+	t.Run("tiny terminal keeps the frame instead of the line", func(t *testing.T) {
+		t.Parallel()
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		m := polled(t, r, fakedial.New())
+		m = press(t, m, "+")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8080")})
+		for _, h := range []int{6, 5, 4} {
+			v := update(t, m, tea.WindowSizeMsg{Width: 80, Height: h}).View()
+			if got := strings.Count(v, "\n") + 1; got > max(h, 5) {
+				t.Errorf("View() at height %d is %d lines, want at most %d", h, got, max(h, 5))
+			}
+			if h == 6 && !strings.Contains(v, "→ 8080:localhost:8080") {
+				t.Errorf("View() at height 6 should still fit the expansion:\n%s", v)
+			}
+		}
+	})
 	t.Run("settings duplicate revealed by expansion is refused", func(t *testing.T) {
 		t.Parallel()
 		var calls [][]string
