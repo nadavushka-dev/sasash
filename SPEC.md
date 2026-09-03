@@ -166,7 +166,8 @@ Two panes. Left: filterable host list. Right: detail for the selected host.
 The list is attention-ordered, not capability-ordered: *managed* hosts — declared in
 `sasash.conf`, or carrying any `@sasash` meta of their own — list first, in config order;
 every other ssh_config entry follows below a divider row (`other ssh_config entries`, or a
-shorter wording when the pane cannot fit it whole), dimmed via the palette. Both tiers do everything. The split is decided from facts the host
+shorter wording when the pane cannot fit it whole), dimmed via the palette — only while both
+tiers are listed; a lone tier is neither divided nor dimmed. Both tiers do everything. The split is decided from facts the host
 model carries (the declaring file, meta presence), never from a name. The cursor never
 rests on the divider; `/` searches both tiers and drops the divider; the header tally says
 `N hosts (M managed)` while both tiers are listed. A host with `# @sasash hide` is not

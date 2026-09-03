@@ -922,6 +922,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fold.variants = computeVariants(m.hosts)
 		m.fold.hidden = hiddenSet(m.hosts)
 		cmd := m.setRows(m.listRows())
+		// The clamp can land on the divider when the selected host went
+		// away: off it before the status poll reads the selection.
+		skipDivider(&m.list, beforeIdx)
 		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
 	case list.FilterMatchesMsg:

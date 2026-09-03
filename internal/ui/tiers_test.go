@@ -287,3 +287,31 @@ func TestModel_Update_HideTakesEffectOnReload(t *testing.T) {
 		t.Errorf("View() after a reload that hid plain still lists it:\n%s", view)
 	}
 }
+
+func TestModel_Update_ReloadClampOntoDividerPolls(t *testing.T) {
+	t.Parallel()
+	// The selected host vanishes on a reload and the clamp lands on the
+	// divider: the cursor moves off it before the status poll reads the
+	// selection, so the landed host is polled, not nothing.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "bare").StubExit(0, "ssh", "-O", "check", "plain")
+	d := fakedial.New()
+	hosts := []hostmodel.Host{
+		{Alias: "web", Paths: []probe.Path{{Host: "192.0.2.1"}}, File: confPath},
+		{Alias: "bare", Paths: []probe.Path{{Host: "192.0.2.5"}}, File: confPath},
+		{Alias: "plain", Paths: []probe.Path{{Host: "192.0.2.4"}}, File: "/home/u/.ssh/config"},
+	}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: time.Millisecond}, r, ui.Config{ConfPath: confPath, Tunnels: tunnelEngine(t, r, d), Editor: []string{"vi"}})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = feed(t, m, m.Init())
+	m = press(t, m, "j") // bare: the last managed host, right above the divider
+	m = ui.WithEditor(m, []string{"vi"}, "", confPath)
+	before := len(r.CallKeys())
+	m = reloadAndProbe(t, m, []hostmodel.Host{hosts[0], hosts[2]}) // bare is gone
+	h, ok := m.Selected()
+	if !ok {
+		t.Fatalf("after the reload nothing is selected:\n%s", m.View())
+	}
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check " + h.Alias}) {
+		t.Errorf("calls after the reload = %v, want the landed host's poll (%s)", got, h.Alias)
+	}
+}
