@@ -585,7 +585,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before, _ := m.Selected()
-	termBefore := strings.TrimSpace(m.list.FilterValue())
 	var rowsCmd tea.Cmd // a SetItems round that must reach the runtime
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1097,14 +1096,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	// The rows follow the filter: every host while a term stands (the
-	// filter function folds the rest), the listed hosts otherwise. The
-	// switch happens on the empty↔non-empty term transition — and on
-	// that keystroke the list's own match round was computed over the
-	// old rows, so SetItems' round replaces it: still one round per key.
-	// Back out of a filter (esc) and the rows are item space again, so
-	// the selection is kept exactly.
+	// filter function folds the rest), the listed hosts otherwise. Under
+	// a filter the list's own match round was computed over the old
+	// rows, so SetItems' round — the fresher one — REPLACES it whenever
+	// the rows change there: one round per key, structurally. (The
+	// replaced cmd also carried the input's blink; the cursor sits solid
+	// until the next key. The right trade against a racing round.) Back
+	// out of a filter (esc) and the rows are item space again, so the
+	// selection is kept exactly.
 	if m.rowsDiffer(m.listRows()) {
-		if termNow := strings.TrimSpace(m.list.FilterValue()); m.list.FilterState() != list.Unfiltered && (termBefore == "") != (termNow == "") {
+		if m.list.FilterState() != list.Unfiltered {
 			cmd = m.setRows(m.listRows())
 		} else {
 			cmd = tea.Batch(cmd, m.setRows(m.listRows()))
