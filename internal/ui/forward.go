@@ -171,7 +171,7 @@ func (m Model) forwardConflict(msg forwardConflictMsg) (Model, tea.Cmd) {
 		offer = withLocalPort(msg.spec, field, msg.next)
 		notice = fmt.Sprintf("port %s is in use — %s is free: enter uses it, esc cancels", msg.port, msg.next)
 	}
-	if m.mode != promptNone || m.settings.pane != settingsOff || m.list.FilterState() == list.Filtering {
+	if m.mode != promptNone || m.settings.pane != settingsOff || m.picker.open() || m.list.FilterState() == list.Filtering {
 		m.notice = fmt.Sprintf("port %s is in use on %s", msg.port, msg.host)
 		if msg.next != "" {
 			m.notice += " — " + msg.next + " is free: + to add " + offer

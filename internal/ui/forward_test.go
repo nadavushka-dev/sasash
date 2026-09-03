@@ -13,6 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/pathswitch"
+	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
@@ -398,6 +400,21 @@ func TestModel_Update_ConflictYieldsToKeyboardOwner(t *testing.T) {
 			check: func(t *testing.T, m ui.Model) {
 				if !ui.SettingsOpen(m) || ui.Prompting(m) {
 					t.Errorf("settings lost: open %v, prompting %v", ui.SettingsOpen(m), ui.Prompting(m))
+				}
+			},
+		},
+		{
+			name: "path picker keeps the keyboard",
+			setup: func(t *testing.T, m ui.Model) ui.Model {
+				m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+					func(string) ([]probe.Path, string, bool) {
+						return []probe.Path{{Name: "lan", Host: "192.0.2.10"}, {Name: "ts", Host: "198.51.100.5"}}, "192.0.2.10", true
+					}, nil)
+				return press(t, m, "p")
+			},
+			check: func(t *testing.T, m ui.Model) {
+				if !ui.PickerOpen(m) || ui.Prompting(m) {
+					t.Errorf("picker lost: open %v, prompting %v", ui.PickerOpen(m), ui.Prompting(m))
 				}
 			},
 		},

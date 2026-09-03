@@ -864,7 +864,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		before := pathList(m.hosts)
 		m.hosts = msg.hosts
 		m = m.pruneHist()
-		clear(m.blocks) // sasash.conf may have changed under the preview
+		clear(m.blocks)         // sasash.conf may have changed under the preview
+		m.picker = pathPicker{} // its rows came from the old block
 		// The last probe round is index-aligned with the OLD paths: when
 		// they changed in any way — order included — a host would read
 		// another path's state until the batched re-probe lands, so
@@ -986,7 +987,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m.handoff(host.Alias)
-			case key.Matches(msg, m.keys.CyclePath):
+			case key.Matches(msg, m.keys.PickPath):
 				host, ok := m.Selected()
 				if !ok || m.setPath == nil || m.pathBlock == nil {
 					return m, nil // both hooks or neither: nil disables p
@@ -1277,7 +1278,7 @@ func (m Model) View() string {
 	}
 	// The tally is decoration next to the filter term, which explains
 	// why the list is a subset: it is appended only when both fit whole.
-	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff {
+	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff && !m.picker.open() {
 		if with := header + "   " + m.styles.PathExtra.Render(sum); lipgloss.Width(with) <= m.width {
 			header = with
 		}

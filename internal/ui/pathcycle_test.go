@@ -387,8 +387,10 @@ func TestModel_Update_BlockCacheRefreshesOnReload(t *testing.T) {
 		t.Fatalf("View() picker before the edit should open on lan:\n%s", view)
 	}
 	hostName = "198.51.100.5" // a hand-edit switched it
-	if view := press(t, m, "p").View(); !strings.Contains(view, "› ○ lan 192.0.2.10:22 down ← active") {
-		t.Errorf("View() picker should still open on the cached row until a reload:\n%s", view)
+	// p reads the block against disk, not the render cache: the picker
+	// opens on what is really active now, and the row line follows.
+	if view := press(t, m, "p").View(); !strings.Contains(view, "› ○ ts  198.51.100.5:2222 down ← active") {
+		t.Errorf("View() picker after a hand-edit should open on the fresh active row:\n%s", view)
 	}
 	// The switch itself reads the block fresh: its notice names what was
 	// really there, not the cached HostName.
@@ -458,13 +460,18 @@ func TestModel_View_PathPicker(t *testing.T) {
 			t.Errorf("View() picker missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "203.0.113.7") || strings.Contains(view, "$ ") {
-		t.Errorf("View() picker lists an unnamed path or the ssh line:\n%s", view)
+	if strings.Contains(view, "203.0.113.7") || strings.Contains(view, "$ ") || strings.Contains(view, "reachable") {
+		t.Errorf("View() picker lists an unnamed path, the ssh line, or the tally:\n%s", view)
 	}
 	// Moving changes the plan; the port is not guessed.
 	m = press(t, m, "j")
 	if view := m.View(); !strings.Contains(view, "› ○ ts") || !strings.Contains(view, "p → ts 198.51.100.5") || strings.Contains(view, "p → ts 198.51.100.5:") || strings.Contains(view, "already active") {
 		t.Errorf("View() after j:\n%s", view)
+	}
+	// The mark follows the block's HostName, not the cursor: moving off
+	// the active row leaves it marked and marks nothing else.
+	if view := m.View(); !strings.Contains(view, "● lan 192.0.2.10:22 5ms ← active") || strings.Count(view, "← active") != 1 {
+		t.Errorf("View() after j should keep ← active on lan only:\n%s", view)
 	}
 	// j clamps at the last row; g/G/k bound the cursor.
 	if view := press(t, m, "j", "j").View(); !strings.Contains(view, "› ○ ts") {
@@ -526,8 +533,37 @@ func TestModel_Update_PathPickerKeys(t *testing.T) {
 	// Live probes keep landing while the picker is open.
 	m = press(t, m, "p")
 	next, tick := m.Update(ui.RefreshTick())
-	m = feedAll(t, next.(ui.Model), tick)
+	m = feed(t, next.(ui.Model), tick)
 	if !ui.PickerOpen(m) || !strings.Contains(m.View(), "● lan 192.0.2.10:22 5ms") {
 		t.Errorf("picker after a refresh: open %v:\n%s", ui.PickerOpen(m), m.View())
+	}
+	// The full help renders the picker's own keys.
+	if view := press(t, m, "esc", "?", "p").View(); !strings.Contains(view, "make active") || !strings.Contains(view, "keep current") {
+		t.Errorf("View() full help while picking:\n%s", view)
+	}
+	// A reload landing while the picker is open closes it: its rows came
+	// from the block that just changed.
+	m = press(t, m, "esc", "?", "p")
+	m = reloadAndProbe(t, m, append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathTS}}))
+	if ui.PickerOpen(m) {
+		t.Errorf("picker should close on a reload:\n%s", m.View())
+	}
+}
+
+func TestModel_Update_PathPickerRowGoneBeforeEnter(t *testing.T) {
+	t.Parallel()
+	// The path picked was removed from the file between p and enter: Set
+	// re-reads and refuses, and its refusal is the notice, verbatim.
+	r := fakerun.New()
+	m, switched := pickerModel(t, r)
+	m = ui.WithSwitcher(m, func(alias, name string) (pathswitch.Result, error) {
+		*switched = append(*switched, alias+" "+name)
+		return pathswitch.Result{}, errors.New(`host "dual" has no path "ts" (have lan, wan)`)
+	}, func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true }, nil)
+	m, cmd := pick(t, m, "j")
+	next, _ := m.Update(cmd())
+	m = next.(ui.Model)
+	if !reflect.DeepEqual(*switched, []string{"dual ts"}) || !strings.Contains(m.View(), `path: host "dual" has no path "ts" (have lan, wan)`) {
+		t.Errorf("switched %v, view:\n%s", *switched, m.View())
 	}
 }

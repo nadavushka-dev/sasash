@@ -40,8 +40,12 @@ func activeIndex(rows []probe.Path, hostName string) int {
 }
 
 // openPicker is p on the selected host: the picker when there is a
-// choice, otherwise the cycle's own no-op wording as a notice.
+// choice, otherwise the cycle's own no-op wording as a notice. The
+// block is read against disk here, not the render cache: whether a
+// write is possible at all, and the rows offered, must not lag an
+// out-of-band edit (the cycle re-read the file on every keypress too).
 func (m Model) openPicker(host hostmodel.Host) Model {
+	delete(m.blocks, host.Alias)
 	b := m.block(host.Alias)
 	if !b.managed {
 		m.notice = "p: not managed by sasash"
