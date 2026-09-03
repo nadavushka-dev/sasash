@@ -252,7 +252,7 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 	// off and gets the handoff instead.
 	tmpl, present := readStateFound(spawnWindowPath(home, getenv))
 	if !present {
-		tmpl = defaultWindowTemplate(runtime.GOOS)
+		tmpl = defaultWindowTemplate(runtime.GOOS, getenv)
 	}
 	return ui.SpawnConfig{
 		Mux:            mux,
@@ -263,15 +263,24 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 	}
 }
 
-// defaultWindowTemplate is the OS-window spawn outside any multiplexer:
-// on macOS, Terminal runs the ssh; elsewhere there is no default, so
-// enter hands off until ~/.config/sasash/spawn-window says otherwise.
-// {host} lands inside an AppleScript string literal unescaped — an alias
-// is a plain ssh_config word, never quoted (aliasProblem enforces that
-// for the ones sasash writes), the same trust actions.toml extends.
-func defaultWindowTemplate(goos string) string {
-	if goos == "darwin" {
+// defaultWindowTemplate is the OS-window spawn outside any multiplexer,
+// per platform (SASASH.6): under WSL (WSL_DISTRO_NAME set) Windows
+// Terminal opens a tab running ssh in this distro; on Linux the
+// x-terminal-emulator alternative runs it; on macOS Terminal does.
+// Anything else has no default, so enter hands off until
+// ~/.config/sasash/spawn-window says otherwise. {host} lands in the
+// command unescaped — an alias is a plain ssh_config word, never quoted
+// (aliasProblem enforces that for the ones sasash writes), the same
+// trust actions.toml extends.
+func defaultWindowTemplate(goos string, getenv func(string) string) string {
+	if distro := getenv("WSL_DISTRO_NAME"); distro != "" {
+		return "wt.exe new-tab wsl.exe -d " + distro + " -- ssh {host}"
+	}
+	switch goos {
+	case "darwin":
 		return `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`
+	case "linux":
+		return "x-terminal-emulator -e ssh {host}"
 	}
 	return ""
 }

@@ -97,9 +97,6 @@ type refreshTickMsg struct{}
 // err reports only a failure to start; ssh's own exit code is not news.
 type sshExitMsg struct{ err error }
 
-// copyDoneMsg reports the outcome of a clipboard write.
-type copyDoneMsg struct{ err error }
-
 // themeSavedMsg reports the outcome of persisting a theme choice.
 type themeSavedMsg struct{ err error }
 
@@ -179,31 +176,6 @@ type editorExitMsg struct{ err error }
 // execCommand adapts a built argv to the *exec.Cmd tea.ExecProcess needs.
 func execCommand(argv []string) *exec.Cmd {
 	return exec.Command(argv[0], argv[1:]...)
-}
-
-// clipTimeout bounds a clipboard write: a wedged pasteboard server must
-// surface as a "copy failed" notice, not as silence.
-const clipTimeout = 2 * time.Second
-
-// clipArgv builds the pbcopy invocation (decision R2). run.Runner has no
-// stdin, so the text travels as a positional shell argument — never spliced
-// into the script, so no quoting is needed and no injection is possible.
-func clipArgv(text string) []string {
-	return []string{"sh", "-c", `printf %s "$1" | pbcopy`, "sh", text}
-}
-
-// clipCmd writes text to the clipboard through the run seam, off the UI
-// thread.
-func clipCmd(r run.Runner, text string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), clipTimeout)
-		defer cancel()
-		res, err := r.Run(ctx, clipArgv(text)...)
-		if err == nil && !res.OK() {
-			err = fmt.Errorf("pbcopy exited %d: %s", res.Code, strings.TrimSpace(string(res.Stderr)))
-		}
-		return copyDoneMsg{err: err}
-	}
 }
 
 // probeCmd dials every path of every host, in parallel ProbeAll rounds of
@@ -821,10 +793,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handoffReturned(started)
 
 	case copyDoneMsg:
-		if msg.err != nil {
-			m.notice = "copy failed: " + msg.err.Error()
-		}
-		return m, nil
+		return m.copied(msg), nil
 
 	case themeSavedMsg:
 		if msg.err != nil {

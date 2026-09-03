@@ -199,7 +199,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `enter` | spawn `ssh <host>` beside the TUI through the surrounding multiplexer (see *Spawn* below); with nothing to spawn into it is the `S` handoff plus a notice |
 | `S` | ssh to host in this terminal — the classic handoff: the TUI suspends until the session ends |
 | `H` | `herdr --remote <host>` |
-| `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`) |
+| `y` | yank active host to clipboard (bare address, `sasash addr` parity; the pane shows `host:port`). The clipboard is OSC 52 first — the terminal's own escape, written to `/dev/tty` through the run seam, which works in modern terminals on macOS, Linux and WSL and over ssh — then a detected tool behind it (`pbcopy`, `wl-copy`, `xclip -selection clipboard`, `clip.exe`, the first on PATH), both as exact argv with the text as a positional argument; the notice names what took it (`copied via terminal (OSC 52) + wl-copy`). Floor: when neither can — no terminal to write to and no tool — never a silent no-op: the notice says `clipboard not available — <value>` and the popup shows the value whole with what was tried, so it can still be copied off the screen. `c` copies the same way |
 | `p` | pick the selected host's active path in the paths pane itself: the focus moves onto the path rows already rendered — glyph and latency in place; `← active` then names the block's `HostName` row, the thing enter changes (outside the focus it names the first alive path) — with the `›` mark on that row (last match, case-insensitive; the first row when it matches none, and the plan says `HostName … matches no named path`); a `›` column appears on the path rows only while the focus is held, so the rows keep their width otherwise; `j`/`k` (`g`/`G`, `ctrl+d`/`ctrl+u`) move the mark over the named rows, `enter` rewrites `HostName` to the marked path (`pathswitch.Set`; re-picking the active one still regenerates the pinned variants) and returns to the list, `esc`/`h` return without writing; the bottom line names the plan (`p → ts 198.51.100.5` — the port follows the switcher's ownership rule at write time, so it is not guessed; `(already active — variants regenerate)` on the active row). The focus follows the 4.5 rules: the list dims, action keys keep their meanings, any host change drops it. `p` reads the block from disk when it takes focus: the block decides whether a switch is possible, and the rows offered are the rendered named paths that block also declares (`pathswitch.Set` works by name; the plan and the active row are judged by the block's address for that name, which is what enter writes, even when the pane shows another) — a pane rendering another block's paths (a `Host` above the sasash `Include` shadows it, or an edit not yet reloaded) is said so: `p: the paths on screen are not sasash.conf's — e reloads on return`, and the host row's line says `p: pane rows are not sasash.conf's`. Without a choice there is no focus, only a notice: `p: not managed by sasash`, `no named paths — nothing to switch`, or `only one named path — nothing to switch`; the host row's line previews the choice (`p: pick lan / ts`) or the lack of one (`p: only one path`, `p: no named paths`, `p: not managed by sasash`). The outcome is a notice — `HostName: lan … → ts …`, plus `N pinned variants left as-is (names)` when the generator does not own a variant block — then the config is re-read and re-probed and the switch is remembered for `last switch` |
 | `l` / `tab` | focus the tunnels pane (a host without tunnels says so instead): `j`/`k`, `ctrl+d`/`ctrl+u`, `g`/`G`, `tab`/`shift+tab` then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list, as does any host change. The focused pane's selection is lit and carries the `›` mark, the other's is dim and unmarked |
 | `space` | toggle highlighted forward set |
@@ -293,9 +293,11 @@ The created pane's id comes from the herdr reply (`result.root_pane.pane_id` for
 workspace, `result.pane.pane_id` for a split); the bottom line shows both steps with the id
 as `<pane>` until it is known. `--no-focus` / `-d` keep the TUI where it is — switch when
 you want to. Outside any multiplexer the template in `~/.config/sasash/spawn-window` (one
-line, actions.toml placeholders, `{host}` is the alias; `$XDG_CONFIG_HOME` honoured; macOS
-default `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`; a present but
-empty file means no template, which is how the Terminal default is turned off) runs instead.
+line, actions.toml placeholders, `{host}` is the alias; `$XDG_CONFIG_HOME` honoured; the default
+per platform: under WSL (`WSL_DISTRO_NAME` set) `wt.exe new-tab wsl.exe -d <distro> -- ssh {host}`,
+on Linux `x-terminal-emulator -e ssh {host}`, on macOS `osascript -e 'tell application "Terminal"
+to do script "ssh {host}"'`; a present but empty file means no template, which is how a default
+is turned off) runs instead.
 The outcome is a notice (`spawned ssh web → herdr tab`, or the failing command and its
 reason — herdr's error message, else the tool's stderr or stdout); each step is given ten
 seconds before it is reported as a failure. A spawn counts as `last connected`. `c` on the
@@ -400,6 +402,10 @@ refused, its message on stderr · `2` usage · `3` config problem
 (unknown host, unknown forward set, unreadable config).
 
 ---
+
+**Platforms (SASASH.6):** macOS and Linux natively, Windows through WSL only — the Windows
+OpenSSH port lacks ControlMaster multiplexing, the engine everything here rides on. `make check`
+cross-builds and vets for `GOOS=linux`, so a darwin-only regression cannot land.
 
 ## 8. Layout
 

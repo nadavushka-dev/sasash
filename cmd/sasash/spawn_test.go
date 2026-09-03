@@ -20,7 +20,7 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 		if cfg.Mux != ui.MuxHerdr || cfg.HerdrPane != "w24:p16" || cfg.Target != ui.DefaultSpawnTarget {
 			t.Errorf("spawnConfig() = mux %v, pane %q, target %q", cfg.Mux, cfg.HerdrPane, cfg.Target)
 		}
-		if cfg.WindowTemplate != defaultWindowTemplate(runtime.GOOS) {
+		if cfg.WindowTemplate != defaultWindowTemplate(runtime.GOOS, getenv) {
 			t.Errorf("WindowTemplate without a file = %q, want this OS's default", cfg.WindowTemplate)
 		}
 		if cfg.SaveTarget == nil {
@@ -89,15 +89,19 @@ func TestDefaultWindowTemplate_Table(t *testing.T) {
 	tests := []struct {
 		name string
 		goos string
+		env  map[string]string
 		want string
 	}{
 		{name: "darwin opens Terminal", goos: "darwin", want: `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`},
-		{name: "linux has no default", goos: "linux"},
+		{name: "linux opens the terminal alternative", goos: "linux", want: "x-terminal-emulator -e ssh {host}"},
+		{name: "WSL opens a Windows Terminal tab in this distro", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu-24.04"}, want: "wt.exe new-tab wsl.exe -d Ubuntu-24.04 -- ssh {host}"},
+		{name: "anything else has no default", goos: "freebsd"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := defaultWindowTemplate(tt.goos); got != tt.want {
+			getenv := func(k string) string { return tt.env[k] }
+			if got := defaultWindowTemplate(tt.goos, getenv); got != tt.want {
 				t.Errorf("defaultWindowTemplate(%s) = %q, want %q", tt.goos, got, tt.want)
 			}
 		})

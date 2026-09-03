@@ -107,9 +107,11 @@ func WithRecordHandoff(m Model, f func(string) error) Model {
 	return m
 }
 
-// SSHCommand and ClipArgv expose the argv builders for exact-string tests.
-func SSHCommand(alias string) []string { return sshCommand(alias) }
-func ClipArgv(text string) []string    { return clipArgv(text) }
+// SSHCommand, Osc52Argv and ClipToolArgv expose the argv builders for
+// exact-string tests.
+func SSHCommand(alias string) []string  { return sshCommand(alias) }
+func Osc52Argv(text string) []string    { return osc52Argv(text) }
+func ClipToolArgv(text string) []string { return clipToolArgv(text) }
 
 // SSHExec exposes the handoff process builder so tests can assert the
 // built argv actually reaches the *exec.Cmd.

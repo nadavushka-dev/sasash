@@ -261,15 +261,15 @@ func TestModel_Update_CopyCmdCopiesPreview(t *testing.T) {
 	// highlighted that is the space command, not enter's ssh.
 	m, r := aliveWeb0(t)
 	want := "ssh -O forward -L " + specAPI + " ubuntu"
-	r.StubExit(0, ui.ClipArgv(want)...)
+	calls := yankStubs(r, want, "pbcopy")
 	m = press(t, m, "l", "G")
 	_, cmd := m.Update(keyMsg("c"))
 	if cmd == nil {
 		t.Fatalf("Update(c) cmd = nil, want clipboard cmd")
 	}
 	cmd()
-	if got, want := r.CallKeys()[len(r.CallKeys())-1], fakerun.Key(ui.ClipArgv(want)...); got != want {
-		t.Errorf("last call = %q, want %q", got, want)
+	if got, want := r.CallKeys()[len(r.CallKeys())-2:], calls; !reflect.DeepEqual(got, want) {
+		t.Errorf("last calls = %q, want %q", got, want)
 	}
 }
 

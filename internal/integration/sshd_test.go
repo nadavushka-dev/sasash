@@ -37,9 +37,11 @@ const sshBin = "/usr/bin/ssh" // SPEC §1: shell out to /usr/bin/ssh, always
 func findSshd(t *testing.T) string {
 	t.Helper()
 	for _, p := range []string{
-		"/opt/homebrew/opt/openssh/sbin/sshd",
-		"/usr/local/opt/openssh/sbin/sshd",
-		"/usr/sbin/sshd",
+		"/opt/homebrew/opt/openssh/sbin/sshd", // homebrew (Apple silicon)
+		"/usr/local/opt/openssh/sbin/sshd",    // homebrew (Intel)
+		"/usr/sbin/sshd",                      // Debian, Ubuntu, Fedora, Arch, macOS
+		"/usr/local/sbin/sshd",                // a source build
+		"/usr/bin/sshd",                       // merged-usr distributions
 	} {
 		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
 			return p

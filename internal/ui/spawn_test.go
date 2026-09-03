@@ -339,8 +339,8 @@ func TestModel_Update_EnterFallsBackToHandoff(t *testing.T) {
 func TestModel_Update_CopyCmdWithSpawn(t *testing.T) {
 	t.Parallel()
 	// The spawn line is not a shell command; c copies the connection.
-	want := ui.ClipArgv("ssh web")
-	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").StubExit(0, want...)
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db")
+	want := yankStubs(r, "ssh web", "pbcopy")
 	m := spawnModel(t, r, herdrCfg("tab"), nil)
 	before := len(r.CallKeys())
 	if _, cmd := m.Update(keyMsg("c")); cmd == nil {
@@ -348,16 +348,16 @@ func TestModel_Update_CopyCmdWithSpawn(t *testing.T) {
 	} else {
 		cmd()
 	}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{fakerun.Key(want...)}) {
-		t.Errorf("c copied %v, want %v", got, []string{fakerun.Key(want...)})
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
+		t.Errorf("c copied %v, want %v", got, want)
 	}
 	// Same for a template error: never an error message in the clipboard.
 	m = spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "kitty {nope}"}, nil)
 	before = len(r.CallKeys())
 	_, cmd := m.Update(keyMsg("c"))
 	cmd()
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{fakerun.Key(want...)}) {
-		t.Errorf("c with a bad template copied %v, want %v", got, []string{fakerun.Key(want...)})
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
+		t.Errorf("c with a bad template copied %v, want %v", got, want)
 	}
 }
 

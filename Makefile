@@ -1,4 +1,4 @@
-.PHONY: test race cover fuzz vet fmt check build demo integration
+.PHONY: test race cover fuzz vet fmt check build demo integration linux
 
 test:
 	go test ./...
@@ -22,7 +22,13 @@ vet:
 fmt:
 	gofmt -l -w .
 
-check: vet race cover
+# Linux is a first-class target (SASASH.6): a darwin-only regression must
+# not land, so the gate cross-builds and vets for it on every check.
+linux:
+	GOOS=linux go build ./...
+	GOOS=linux go vet ./...
+
+check: vet linux race cover
 
 build:
 	go build -o sasash ./cmd/sasash
