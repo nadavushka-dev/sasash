@@ -361,13 +361,20 @@ func (m Model) submitTunnel() (tea.Model, tea.Cmd) {
 			m.notice = "at least one spec"
 			return m, nil
 		}
-		// The writer refuses these too; refusing here keeps the host
-		// and name the user already typed.
-		for _, spec := range specs {
-			if port, _ := localPort(spec); port == "" {
+		// Shorthands expand here, before the writer sees them; the writer
+		// refuses the rest too, but refusing here keeps the host and name
+		// the user already typed.
+		for i, spec := range specs {
+			full, err := expandSpec(spec)
+			if err != nil {
+				m.notice = err.Error()
+				return m, nil
+			}
+			if port, _ := localPort(full); port == "" {
 				m.notice = "spec " + strconv.Quote(spec) + ": no local port — want local:host:port"
 				return m, nil
 			}
+			specs[i] = full
 		}
 		m.mode = promptNone
 		m.prompt.Blur()

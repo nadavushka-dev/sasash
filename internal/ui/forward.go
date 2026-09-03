@@ -26,6 +26,31 @@ const forwardCheckTimeout = 5 * time.Second
 // the first free port above it, "" when none within portSearch.
 type forwardConflictMsg struct{ host, spec, port, next string }
 
+// expandSpec turns the port shorthands into canonical three-part specs
+// BEFORE anything downstream sees them (SASASH.4.9): "3000" is
+// 3000:localhost:3000, "2000:3000" (two all-digit fields) is
+// 2000:localhost:3000. Three-part specs pass through unchanged. A
+// two-field input whose second field is not all digits is the same
+// malformed spec it always was — a hostname is never guessed into it.
+func expandSpec(input string) (string, error) {
+	spec := strings.TrimSpace(input)
+	fields := strings.Split(spec, ":")
+	allDigits := func(s string) bool { return s != "" && strings.Trim(s, "0123456789") == "" }
+	switch len(fields) {
+	case 1:
+		if allDigits(fields[0]) {
+			return fields[0] + ":localhost:" + fields[0], nil
+		}
+	case 2:
+		if allDigits(fields[0]) && allDigits(fields[1]) {
+			return fields[0] + ":localhost:" + fields[1], nil
+		}
+	default:
+		return spec, nil
+	}
+	return "", fmt.Errorf("spec %q: want local:host:port, port, or local:port", spec)
+}
+
 // localPort mirrors the engine's rule for the port a spec binds locally
 // (CONTRACT-tunnel §5: the first all-digit ':'-field among the first two)
 // and returns which field it was, so a rewrite touches only that field.
@@ -68,11 +93,15 @@ func (m Model) openForward(host hostmodel.Host, value string) (Model, tea.Cmd) {
 // local port the check can dial; then the check-and-add runs off the
 // UI thread against the bound host.
 func (m Model) submitForward() (Model, tea.Cmd) {
-	spec := strings.TrimSpace(m.prompt.Value())
+	spec, err := expandSpec(m.prompt.Value())
+	if err != nil {
+		m.notice = err.Error()
+		return m, nil // stay in the prompt for correction
+	}
 	port, _ := localPort(spec)
 	if port == "" {
 		m.notice = "no local port in " + strconv.Quote(spec) + " — want local:host:port"
-		return m, nil // stay in the prompt for correction
+		return m, nil
 	}
 	host, ok := m.hostByAlias(m.fwdHost)
 	m.mode = promptNone

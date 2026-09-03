@@ -103,12 +103,17 @@ func parseAdhoc(input string) (adhocTarget, error) {
 	return t, nil
 }
 
-// addForward accepts one -L spec.
+// addForward accepts one -L spec, shorthand expanded to its canonical
+// three-part form so everything downstream sees only that.
 func addForward(t *adhocTarget, spec string) error {
-	if strings.Count(spec, ":") < 2 {
+	full, err := expandSpec(spec)
+	if err != nil {
+		return err
+	}
+	if strings.Count(full, ":") < 2 {
 		return fmt.Errorf("forward %q: want local:host:port", spec)
 	}
-	t.Forwards = append(t.Forwards, spec)
+	t.Forwards = append(t.Forwards, full)
 	return nil
 }
 

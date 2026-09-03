@@ -1276,6 +1276,11 @@ func (m Model) View() string {
 			field = ""
 		}
 		preview = " " + m.styles.CmdPrompt.Render(label) + " " + field
+		// A shorthand shows its full expansion beside the field: what
+		// enter will really use is never hidden.
+		if full := m.promptExpansion(); full != "" {
+			preview += "  " + m.styles.PathExtra.Render("→ "+full)
+		}
 	}
 	// A notice takes the line on its own: appended after a long preview
 	// it would be clamped away, and the notice carries ssh's own reason.

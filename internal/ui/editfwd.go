@@ -72,7 +72,11 @@ func (m Model) editFwdPlan(newSpec string) []string {
 
 // submitEditFwd is enter in the edit prompt.
 func (m Model) submitEditFwd() (tea.Model, tea.Cmd) {
-	newSpec := strings.TrimSpace(m.prompt.Value())
+	newSpec, err := expandSpec(m.prompt.Value())
+	if err != nil {
+		m.notice = err.Error()
+		return m, nil
+	}
 	if port, _ := localPort(newSpec); port == "" {
 		m.notice = "spec " + strconv.Quote(newSpec) + ": no local port — want local:host:port"
 		return m, nil
@@ -120,4 +124,56 @@ func (m Model) submitEditFwd() (tea.Model, tea.Cmd) {
 // oneLineText folds a multi-line ssh message onto the notice line.
 func oneLineText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// expandedOrTyped is the canonical form of a typed spec for display, or
+// the text as typed when it does not expand.
+func expandedOrTyped(input string) string {
+	if full, err := expandSpec(input); err == nil {
+		return full
+	}
+	return strings.TrimSpace(input)
+}
+
+// promptExpansion is the full expansion the prompt line shows beside a
+// shorthand: what enter will really use. Empty when the input is not a
+// shorthand (already canonical, or not parseable).
+func (m Model) promptExpansion() string {
+	v := strings.TrimSpace(m.prompt.Value())
+	if v == "" {
+		return ""
+	}
+	switch m.mode {
+	case promptForward, promptEditFwd:
+		if full, err := expandSpec(v); err == nil && full != v {
+			return full
+		}
+	case promptTunnelSpecs:
+		var out []string
+		changed := false
+		for _, s := range strings.Fields(v) {
+			full, err := expandSpec(s)
+			if err != nil {
+				return ""
+			}
+			changed = changed || full != s
+			out = append(out, full)
+		}
+		if changed {
+			return strings.Join(out, " ")
+		}
+	case promptConnect:
+		if t, err := parseAdhoc(v); err == nil && len(t.Forwards) > 0 {
+			argv := adhocArgv(t)
+			if t.TunnelOnly {
+				argv = adhocTunnelArgv(t)
+			}
+			for _, f := range t.Forwards {
+				if !strings.Contains(v, f) { // a forward was expanded
+					return strings.Join(argv, " ")
+				}
+			}
+		}
+	}
+	return ""
 }

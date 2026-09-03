@@ -183,6 +183,9 @@ var (
 // HerdrExit replays the terminal returning from herdr.
 func HerdrExit(err error) tea.Msg { return herdrExitMsg{err: err} }
 
+// ExpandSpec exposes the shorthand expansion for its table test.
+var ExpandSpec = expandSpec
+
 // LocalPort and WithLocalPort expose the forward-spec port rule so it can
 // be pinned to the engine's and to exact rewrites.
 var (

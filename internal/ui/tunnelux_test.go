@@ -348,7 +348,7 @@ func TestModel_Update_EditForwardGuards(t *testing.T) {
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("nonsense")})
 	next, cmd = m.Update(keyMsg("enter"))
 	m = next.(ui.Model)
-	if cmd != nil || !ui.Prompting(m) || !strings.Contains(m.View(), "no local port") {
+	if cmd != nil || !ui.Prompting(m) || !strings.Contains(m.View(), "want local:host:port, port, or local:port") {
 		t.Errorf("enter on a bad spec: cmd %v, prompting %v:\n%s", cmd != nil, ui.Prompting(m), m.View())
 	}
 	m = press(t, m, "esc")

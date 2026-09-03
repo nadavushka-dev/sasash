@@ -186,7 +186,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `p` | cycle the selected host's active path: rewrites `HostName` in `sasash.conf` to the next named path of that block (after the last one matching the current `HostName`, wrapping; the first when none matches) and regenerates the pinned variants; the host row's line previews the target by name and host — `p → ts 198.51.100.5` (the port follows the switcher's ownership rule at write time, so it is not guessed) — or says `p: only one path`, `p: no named paths`, or `p: not managed by sasash`; the outcome is a notice — `HostName: lan … → ts …`, plus `N pinned variants left as-is (names)` when the generator does not own a variant block — then the config is re-read and re-probed and the switch is remembered for `last switch` |
 | `l` / `tab` | focus the tunnels pane (a host without tunnels says so instead): `j`/`k`, `ctrl+d`/`ctrl+u`, `g`/`G`, `tab`/`shift+tab` then move the forward highlight and the bottom line previews `space` for it; `h` / `esc` return to the host list, as does any host change. The focused pane's selection is lit and carries the `›` mark, the other's is dim and unmarked |
 | `space` | toggle highlighted forward set |
-| `+` | add ad-hoc forward (`-O forward`) |
+| `+` | add ad-hoc forward (`-O forward`); a port shorthand expands first (see below) |
 | `x` | cancel highlighted forward (`-O cancel`) |
 | `E` | edit the highlighted forward in place: the prompt opens prefilled with its spec; enter rewrites that one spec on the set's meta line and, if the forward is live (master alive, row up), runs `-O cancel` of the old spec then `-O forward` of the new — the row shows both commands while you type; every other forward on the master is untouched; master down = config only |
 | `r` | restart master |
@@ -221,6 +221,14 @@ alive or dead, not since the master started — and nothing when unknown; `last 
 `last switch` waits for its caller). Paths carry session memory only: a sparkline of the
 newest probe latencies that fit (`·` for a miss), their min–max, and `answered/rounds` this
 session — forgotten when the TUI exits.
+
+Forward specs accept two shorthands wherever one is typed — `+`, `E`, settings' add-tunnel,
+and `-L` in `a`: `3000` is `3000:localhost:3000` and `2000:3000` (two all-digit fields) is
+`2000:localhost:3000`. Expansion happens as the input is parsed, so the writer, the engine,
+the meta lines, and the status matching only ever see canonical three-part specs; the prompt
+line shows the expansion beside the field as you type (`→ 3000:localhost:3000`). Three-part
+specs pass through unchanged, and a two-field input whose second field is not all digits is
+the malformed spec it always was — a hostname is never guessed into a shorthand.
 
 The tunnels section renders the engine's three states verbatim, with one presentation
 cap: when two forwards claim the same local port, only the first claimant (declared sets

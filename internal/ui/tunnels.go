@@ -408,7 +408,7 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 		// plan belongs to the row the edit is BOUND to — a poll can move
 		// rows under the highlight, and the action would not follow.
 		if m.mode == promptEditFwd && host.Alias == m.editFwd.host && f.Set == m.editFwd.set && f.Spec == m.editFwd.old {
-			for _, line := range m.editFwdPlan(strings.TrimSpace(m.prompt.Value())) {
+			for _, line := range m.editFwdPlan(expandedOrTyped(m.prompt.Value())) {
 				b.WriteString("\n       " + m.styles.CmdPreview.Render(line))
 			}
 		}
