@@ -38,11 +38,25 @@ func TestSSHCommand_Argv(t *testing.T) {
 	}
 }
 
+// clipScript is the fallback script as the product: pinned whole, like
+// every other argv, so a changed line is a deliberate change.
+const clipScript = `failed=
+for t in pbcopy wl-copy xclip clip.exe; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  if case "$t" in xclip) printf %s "$1" | xclip -selection clipboard ;; *) printf %s "$1" | "$t" ;; esac >/dev/null 2>&1; then
+    printf %s "$t"; exit 0
+  else
+    failed="$failed${failed:+; }$t exited $?"
+  fi
+done
+if [ -n "$failed" ]; then printf %s "$failed"; exit 98; fi
+exit 97`
+
 func TestYankArgv_ExactStrings(t *testing.T) {
 	t.Parallel()
 	// Both legs are exact argv through the run seam: the OSC 52 leg carries
-	// the base64 payload built in Go, the tool leg the text as $1 — never
-	// spliced into the script.
+	// the base64 payload built in Go (standard alphabet, padding kept), the
+	// tool leg the whole script with the text as $1 — never spliced in.
 	tests := []struct {
 		name string
 		text string
@@ -50,6 +64,7 @@ func TestYankArgv_ExactStrings(t *testing.T) {
 	}{
 		{name: "address", text: "192.0.2.10", osc: "MTkyLjAuMi4xMA=="},
 		{name: "command with spaces travels as one argument", text: "ssh ubuntu", osc: "c3NoIHVidW50dQ=="},
+		{name: "standard alphabet, not URL-safe", text: "a?>", osc: "YT8+"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,14 +72,8 @@ func TestYankArgv_ExactStrings(t *testing.T) {
 			if got, want := ui.Osc52Argv(tt.text), []string{"sh", "-c", `printf '\033]52;c;%s\a' "$1" > /dev/tty`, "sh", tt.osc}; !reflect.DeepEqual(got, want) {
 				t.Errorf("Osc52Argv(%q) = %v, want %v", tt.text, got, want)
 			}
-			got := ui.ClipToolArgv(tt.text)
-			if len(got) != 5 || got[0] != "sh" || got[1] != "-c" || got[3] != "sh" || got[4] != tt.text {
-				t.Errorf("ClipToolArgv(%q) = %v, want sh -c <script> sh %q", tt.text, got, tt.text)
-			}
-			for _, tool := range []string{"pbcopy", "wl-copy", "xclip -selection clipboard", "clip.exe", "command -v", "exit 3"} {
-				if !strings.Contains(got[2], tool) {
-					t.Errorf("ClipToolArgv script missing %q:\n%s", tool, got[2])
-				}
+			if got, want := ui.ClipToolArgv(tt.text), []string{"sh", "-c", clipScript, "sh", tt.text}; !reflect.DeepEqual(got, want) {
+				t.Errorf("ClipToolArgv(%q) = %q, want %q", tt.text, got, want)
 			}
 		})
 	}
@@ -171,20 +180,36 @@ func TestModel_Update_CopyOutcomes(t *testing.T) {
 		stub       func(r *fakerun.Fake)
 		wantNotice string
 		wantPopup  bool
+		wantTried  string // in the floor popup
+		wantNot    string // never on screen, either tier
 	}{
-		{name: "terminal only (no tool on PATH)", stub: func(r *fakerun.Fake) {
-			r.StubExit(0, ui.Osc52Argv("ssh web")...).StubExit(3, ui.ClipToolArgv("ssh web")...)
-		}, wantNotice: "copied via terminal (OSC 52)"},
+		{name: "terminal only (no tool on PATH) says it cannot be confirmed", stub: func(r *fakerun.Fake) {
+			r.StubExit(0, ui.Osc52Argv("ssh web")...).StubExit(97, ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "copied via terminal (OSC 52) only — unconfirmed; no clipboard tool here"},
+		{name: "both legs name both, no doubt", stub: func(r *fakerun.Fake) {
+			r.StubExit(0, ui.Osc52Argv("ssh web")...).StubOut("wl-copy", ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "copied via terminal (OSC 52) + wl-copy", wantNot: "unconfirmed"},
+		{name: "floor: the terminal leg's stderr is sanitized", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("no\rtty \x1b[2Jgone\n"), Code: 1}}, ui.Osc52Argv("ssh web")...).StubExit(97, ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "clipboard not available — ssh web", wantPopup: true, wantTried: "terminal: no tty [2Jgone", wantNot: "\x1b"},
 		{name: "tool only (no tty)", stub: func(r *fakerun.Fake) {
 			r.Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("sh: /dev/tty: Device not configured\n"), Code: 1}}, ui.Osc52Argv("ssh web")...).StubOut("xclip", ui.ClipToolArgv("ssh web")...)
-		}, wantNotice: "copied via xclip"},
+		}, wantNotice: "copied via xclip", wantNot: "unconfirmed"},
 		{name: "floor: no tty and no tool", stub: func(r *fakerun.Fake) {
-			r.Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("sh: /dev/tty: No such device or address\n"), Code: 1}}, ui.Osc52Argv("ssh web")...).StubExit(3, ui.ClipToolArgv("ssh web")...)
-		}, wantNotice: "clipboard not available — ssh web", wantPopup: true},
-		{name: "floor: the tool itself fails", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("sh: /dev/tty: No such device or address\n"), Code: 1}}, ui.Osc52Argv("ssh web")...).StubExit(97, ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "clipboard not available — ssh web", wantPopup: true, wantTried: "no clipboard"},
+		{name: "floor: every tool found failed, named with its status", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("no tty\n"), Code: 1}}, ui.Osc52Argv("ssh web")...).
+				Stub(fakerun.Reply{Result: run.Result{Stdout: []byte("wl-copy exited 1; xclip exited 1"), Code: 98}}, ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "clipboard not available — ssh web", wantPopup: true, wantTried: "tried: terminal: no tty; wl-copy exited 1; xclip exited 1"},
+		{name: "floor: sh itself cannot run", stub: func(r *fakerun.Fake) {
 			r.Stub(fakerun.Reply{Err: errors.New("exec: \"sh\": executable file not found in $PATH")}, ui.Osc52Argv("ssh web")...).
-				Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("xclip: Error: Can't open display\n"), Code: 1}}, ui.ClipToolArgv("ssh web")...)
-		}, wantNotice: "clipboard not available — ssh web", wantPopup: true},
+				Stub(fakerun.Reply{Err: errors.New("exec: \"sh\": executable file not found in $PATH")}, ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "clipboard not available — ssh web", wantPopup: true, wantTried: "executable file not found"},
+		{name: "floor: a tool's own exit 3 is not 'no tool'", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run.Result{Code: 1}}, ui.Osc52Argv("ssh web")...).
+				Stub(fakerun.Reply{Result: run.Result{Stdout: []byte("xclip exited 3"), Code: 98}}, ui.ClipToolArgv("ssh web")...)
+		}, wantNotice: "clipboard not available — ssh web", wantPopup: true, wantTried: "xclip exited 3"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,10 +226,13 @@ func TestModel_Update_CopyOutcomes(t *testing.T) {
 				t.Errorf("popup open = %v, want %v:\n%s", ui.PopupOpen(m), tt.wantPopup, m.View())
 			}
 			view := m.View()
+			if tt.wantNot != "" && (strings.Contains(view, tt.wantNot) || strings.Contains(press(t, m, "esc").View(), tt.wantNot)) {
+				t.Errorf("View() carries %q on a tier:\n%s", tt.wantNot, view)
+			}
 			if tt.wantPopup {
 				// The popup shows the value whole and what was tried;
 				// closed, the line still carries the value.
-				if !strings.Contains(view, "clipboard not available here") || !strings.Contains(view, "  ssh web") || !strings.Contains(view, "tried: ") || (strings.Contains(tt.name, "no tool") && !strings.Contains(view, "no clipboard")) {
+				if !strings.Contains(view, "clipboard not available here") || !strings.Contains(view, "  ssh web") || !strings.Contains(view, "tried: ") || !strings.Contains(view, tt.wantTried) {
 					t.Errorf("View() floor popup:\n%s", view)
 				}
 				view = press(t, m, "esc").View()

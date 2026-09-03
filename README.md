@@ -6,8 +6,9 @@ for the design of record.
 
 Runs natively on macOS and Linux; on Windows, use it inside WSL (the Windows OpenSSH
 port has no ControlMaster multiplexing, which is the engine everything here rides on).
-The `y` yank goes through the terminal's own OSC 52 clipboard escape first, so it works
-over ssh and in any modern terminal, with pbcopy / wl-copy / xclip / clip.exe behind it.
+The `y` yank goes through the terminal's own OSC 52 clipboard escape first — it works over
+ssh in terminals that support it (most modern ones; not GNOME Terminal or macOS Terminal) —
+with pbcopy / wl-copy / xclip / clip.exe behind it, and it says which one took the text.
 
 ![sasash demo](demo/demo.gif)
 

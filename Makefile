@@ -27,6 +27,7 @@ fmt:
 linux:
 	GOOS=linux go build ./...
 	GOOS=linux go vet ./...
+	GOOS=linux go vet -tags integration ./internal/integration
 
 check: vet linux race cover
 

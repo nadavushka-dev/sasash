@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/nadavushka-dev/sasash/internal/ui"
@@ -93,16 +94,45 @@ func TestDefaultWindowTemplate_Table(t *testing.T) {
 		want string
 	}{
 		{name: "darwin opens Terminal", goos: "darwin", want: `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`},
-		{name: "linux opens the terminal alternative", goos: "linux", want: "x-terminal-emulator -e ssh {host}"},
-		{name: "WSL opens a Windows Terminal tab in this distro", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu-24.04"}, want: "wt.exe new-tab wsl.exe -d Ubuntu-24.04 -- ssh {host}"},
+		{name: "linux opens the terminal alternative when it is on PATH", goos: "linux", env: map[string]string{"PATH": "alt"}, want: "x-terminal-emulator -e ssh {host}"},
+		{name: "linux falls back to gnome-terminal", goos: "linux", env: map[string]string{"PATH": "gnome"}, want: "gnome-terminal -- ssh {host}"},
+		{name: "the alternative wins over gnome-terminal", goos: "linux", env: map[string]string{"PATH": "gnome:alt"}, want: "x-terminal-emulator -e ssh {host}"},
+		{name: "linux without either has no default", goos: "linux", env: map[string]string{"PATH": "empty"}},
+		{name: "a non-executable file does not count", goos: "linux", env: map[string]string{"PATH": "noexec"}},
+		{name: "WSL opens a Windows Terminal tab in this distro through cmd.exe", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu 24.04"}, want: "cmd.exe /c wt.exe new-tab wsl.exe -d 'Ubuntu 24.04' -- ssh {host}"},
 		{name: "anything else has no default", goos: "freebsd"},
+	}
+	// PATH entries are names of temp dirs built here: "alt" holds an
+	// executable x-terminal-emulator, "gnome" a gnome-terminal, "noexec"
+	// a non-executable x-terminal-emulator, "empty" nothing.
+	dirs := map[string]string{}
+	for _, name := range []string{"alt", "gnome", "empty", "noexec"} {
+		dirs[name] = t.TempDir()
+	}
+	for dir, file := range map[string]string{"alt": "x-terminal-emulator", "gnome": "gnome-terminal"} {
+		if err := os.WriteFile(filepath.Join(dirs[dir], file), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dirs["noexec"], "x-terminal-emulator"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			getenv := func(k string) string { return tt.env[k] }
+			getenv := func(k string) string {
+				v := tt.env[k]
+				if k == "PATH" && v != "" {
+					var parts []string
+					for _, name := range strings.Split(v, ":") {
+						parts = append(parts, dirs[name])
+					}
+					return strings.Join(parts, string(os.PathListSeparator))
+				}
+				return v
+			}
 			if got := defaultWindowTemplate(tt.goos, getenv); got != tt.want {
-				t.Errorf("defaultWindowTemplate(%s) = %q, want %q", tt.goos, got, tt.want)
+				t.Errorf("defaultWindowTemplate(%s, PATH=%s) = %q, want %q", tt.goos, tt.env["PATH"], got, tt.want)
 			}
 		})
 	}

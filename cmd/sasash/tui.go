@@ -274,15 +274,40 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 // trust actions.toml extends.
 func defaultWindowTemplate(goos string, getenv func(string) string) string {
 	if distro := getenv("WSL_DISTRO_NAME"); distro != "" {
-		return "wt.exe new-tab wsl.exe -d " + distro + " -- ssh {host}"
+		// Through cmd.exe: wt.exe is an app execution alias, which the
+		// WSL interop cannot exec directly on every build (microsoft/WSL
+		// #4969); the distro is quoted, as its name may hold spaces.
+		return "cmd.exe /c wt.exe new-tab wsl.exe -d '" + distro + "' -- ssh {host}"
 	}
 	switch goos {
 	case "darwin":
 		return `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`
 	case "linux":
-		return "x-terminal-emulator -e ssh {host}"
+		// The Debian alternative first, then gnome-terminal by name;
+		// probed on PATH once here, so the default is a terminal that
+		// exists (other desktops set ~/.config/sasash/spawn-window).
+		switch {
+		case onPath(getenv("PATH"), "x-terminal-emulator"):
+			return "x-terminal-emulator -e ssh {host}"
+		case onPath(getenv("PATH"), "gnome-terminal"):
+			return "gnome-terminal -- ssh {host}"
+		}
 	}
 	return ""
+}
+
+// onPath reports whether an executable of that name sits in one of the
+// PATH directories — a stat walk, so cmd/sasash never imports os/exec.
+func onPath(path, name string) bool {
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // spawnStatePath persists the spawn target beside the theme.
