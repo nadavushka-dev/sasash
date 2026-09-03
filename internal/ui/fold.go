@@ -12,8 +12,11 @@ import (
 )
 
 // foldState is shared by pointer between the model and the list's filter
-// function: which aliases are generated variants (alias → path name) and
-// whether they are listed. It is rebuilt in place on every reload.
+// function (a closure made once in New): which aliases are generated
+// variants (alias → path name) and whether they are listed. It is
+// mutated in place — on reload and on v — deliberately, so the closure
+// sees fresh data; like the model's other maps, the mutation is shared
+// across Model copies.
 type foldState struct {
 	variants map[string]string
 	show     bool
@@ -27,12 +30,6 @@ type foldState struct {
 // that path's host is the parent's path host. A user host that merely
 // looks dotted, or that says anything a generator would not, stays listed.
 func computeVariants(hosts []hostmodel.Host) map[string]string {
-	byAlias := make(map[string]hostmodel.Host, len(hosts))
-	for _, h := range hosts {
-		if _, dup := byAlias[h.Alias]; !dup {
-			byAlias[h.Alias] = h
-		}
-	}
 	out := make(map[string]string)
 	for _, h := range hosts {
 		if len(h.Paths) != 1 || len(h.Tags) > 0 || len(h.Forwards) > 0 {
@@ -113,11 +110,13 @@ func (m Model) listedHosts() []hostmodel.Host {
 	return out
 }
 
-// listRows are the items the list holds for the given filter state: all
-// hosts while filtering (the filter function hides folded ones), else
-// the listed ones.
-func (m Model) listRows(filtering bool) []hostmodel.Host {
-	if filtering {
+// listRows are the items the list holds right now: every host while a
+// filter TERM stands (the filter function hides folded variants the term
+// does not name), else the listed ones. An empty term is special: bubbles
+// never calls the filter function for it and would show every item, so
+// the rows stay folded until a character is typed.
+func (m Model) listRows() []hostmodel.Host {
+	if m.list.FilterState() != list.Unfiltered && strings.TrimSpace(m.list.FilterValue()) != "" {
 		return m.hosts
 	}
 	return m.listedHosts()

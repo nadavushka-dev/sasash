@@ -322,3 +322,59 @@ func TestModel_Update_ReloadUnderFilterKeepsTheSelectedAlias(t *testing.T) {
 		t.Errorf("Selected() after the reload = %q, want b2 re-selected by alias", host.Alias)
 	}
 }
+
+func TestModel_Update_VariantsToggleUnderAppliedFilter(t *testing.T) {
+	t.Parallel()
+	// v under an applied filter must keep the rows (SetItems' round has
+	// to reach the runtime) and surface the variants the term reaches;
+	// the stashed re-select must not hijack a later filter either.
+	m := ui.StaticCursor(foldModel(t))
+	m = press(t, m, "/", "w", "e", "b", "enter")
+	if view := m.View(); !strings.Contains(view, "› web") || strings.Contains(view, "web.office") {
+		t.Fatalf("View() before v:\n%s", view)
+	}
+	next, cmd := m.Update(keyMsg("v"))
+	m = next.(ui.Model)
+	rounds := filterMatches(cmd)
+	if len(rounds) != 1 {
+		t.Fatalf("v under a filter produced %d match rounds, want 1", len(rounds))
+	}
+	m = update(t, m, rounds[0])
+	view := m.View()
+	if strings.Contains(view, "no hosts match") || !strings.Contains(view, "web.office") || !strings.Contains(view, "web.nat") {
+		t.Errorf("View() after v under /web:\n%s", view)
+	}
+	if host, _ := m.Selected(); host.Alias != "web" {
+		t.Errorf("Selected() after v = %q, want web kept", host.Alias)
+	}
+	// A later, unrelated filter lands where it should.
+	m = press(t, m, "v", "esc", "/", "d", "b", ".", "l", "enter")
+	if host, _ := m.Selected(); host.Alias != "db.lan" {
+		t.Errorf("Selected() after /db.l = %q, want db.lan (no stale re-select)", host.Alias)
+	}
+}
+
+func TestModel_Update_EmptyFilterTermKeepsTheFold(t *testing.T) {
+	t.Parallel()
+	// bubbles never calls the filter function for an empty term, so the
+	// rows must stay folded at / and again after backspacing to empty.
+	m := ui.StaticCursor(foldModel(t))
+	m = press(t, m, "/")
+	if view := m.View(); strings.Contains(view, "web.office") || !strings.Contains(view, "5 hosts") {
+		t.Errorf("View() right after / lists variants:\n%s", view)
+	}
+	m = press(t, m, "w")
+	if view := m.View(); strings.Contains(view, "web.office") {
+		t.Errorf("View() after /w lists variants:\n%s", view)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = next.(ui.Model)
+	rounds := filterMatches(cmd)
+	if len(rounds) != 1 {
+		t.Fatalf("backspace to empty produced %d match rounds, want 1", len(rounds))
+	}
+	m = update(t, m, rounds[0])
+	if view := m.View(); strings.Contains(view, "web.office") || strings.Contains(view, "no hosts match") {
+		t.Errorf("View() after backspacing to an empty term:\n%s", view)
+	}
+}

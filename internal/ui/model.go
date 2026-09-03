@@ -585,6 +585,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before, _ := m.Selected()
+	termBefore := strings.TrimSpace(m.list.FilterValue())
+	var rowsCmd tea.Cmd // a SetItems round that must reach the runtime
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -837,7 +839,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a filter the match set is empty until the FilterMatchesMsg
 		// lands — that arm re-selects and clamps.
 		m.fold.variants = computeVariants(m.hosts)
-		cmd := m.setRows(m.listRows(m.list.FilterState() != list.Unfiltered))
+		cmd := m.setRows(m.listRows())
 		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
 	case list.FilterMatchesMsg:
@@ -903,12 +905,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.prompt, cmd = m.prompt.Update(msg)
 			return m, cmd
-		}
-		// A filter starts over EVERY host: the filter function folds the
-		// variants the term does not name. The rows change here, before
-		// the list sees the key, so no match round is ever in flight.
-		if key.Matches(msg, m.keys.Filter) && m.list.FilterState() == list.Unfiltered && m.rowsDiffer(m.hosts) {
-			m.setRows(m.hosts)
 		}
 		// Action keys must never fire while the filter input is focused
 		// (SPEC §5 addendum): everything below is typed text then, and
@@ -1069,7 +1065,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Rows change now; the key then falls through to the
 				// list (unbound there) and the selection tail below, so
 				// a host the clamp moved onto gets its status refreshed.
-				m.setRows(m.listRows(m.list.FilterState() != list.Unfiltered))
+				// Under a filter SetItems' cmd is the only thing that
+				// refills the match set: it must reach the runtime.
+				rowsCmd = m.setRows(m.listRows())
 			case key.Matches(msg, m.keys.Help):
 				m.help.ShowAll = !m.help.ShowAll
 				m.list.SetSize(m.listWidth(), m.contentHeight())
@@ -1098,11 +1096,21 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
-	// Back out of a filter (esc): the rows return to the listed hosts —
-	// item space again, so the selection is kept exactly.
-	if m.list.FilterState() == list.Unfiltered && m.rowsDiffer(m.listedHosts()) {
-		m.setRows(m.listedHosts())
+	// The rows follow the filter: every host while a term stands (the
+	// filter function folds the rest), the listed hosts otherwise. The
+	// switch happens on the empty↔non-empty term transition — and on
+	// that keystroke the list's own match round was computed over the
+	// old rows, so SetItems' round replaces it: still one round per key.
+	// Back out of a filter (esc) and the rows are item space again, so
+	// the selection is kept exactly.
+	if m.rowsDiffer(m.listRows()) {
+		if termNow := strings.TrimSpace(m.list.FilterValue()); m.list.FilterState() != list.Unfiltered && (termBefore == "") != (termNow == "") {
+			cmd = m.setRows(m.listRows())
+		} else {
+			cmd = tea.Batch(cmd, m.setRows(m.listRows()))
+		}
 	}
+	cmd = tea.Batch(cmd, rowsCmd)
 	// A new host under the cursor: whatever status it had is stale — the
 	// tick refreshes only the selected host — so its rows go back to
 	// pending while a fresh poll runs. Never show a stale state as live.
