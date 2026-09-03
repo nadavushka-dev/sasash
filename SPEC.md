@@ -252,17 +252,28 @@ multiplexer:
 | target | herdr (two steps: create, then `herdr pane run <pane> ssh <host>`) | tmux |
 |---|---|---|
 | `pane` | `herdr pane split --pane $HERDR_PANE_ID --direction right --no-focus` (`--current` without the id) | `tmux split-window -h -d ssh <host>` |
-| `tab` | `herdr tab create --label <host> --no-focus` | `tmux new-window -d -n <host> ssh <host>` |
-| `workspace` | `herdr workspace create --label <host> --no-focus` | `tmux new-session -d -s <host> ssh <host>` |
+| `tab` | `herdr tab create --label <host> --no-focus` | `tmux new-window -d -n <name> ssh <host>` |
+| `workspace` | `herdr workspace create --label <host> --no-focus` | `tmux new-session -d -n <name> ssh <host>` |
+
+`<name>` is the alias with `.` and `:` turned into `_` — tmux refuses them in window names —
+and only the name: the ssh argv keeps the real alias. A tmux session is named by its window,
+not `-s`, so a second shell to the same host does not collide with the first.
 
 The created pane's id comes from the herdr reply (`result.root_pane.pane_id` for a tab or
 workspace, `result.pane.pane_id` for a split); the bottom line shows both steps with the id
 as `<pane>` until it is known. `--no-focus` / `-d` keep the TUI where it is — switch when
 you want to. Outside any multiplexer the template in `~/.config/sasash/spawn-window` (one
-line, actions.toml placeholders, `{host}` is the alias; macOS default `osascript -e 'tell
-application "Terminal" to do script "ssh {host}"'`) runs instead. The outcome is a notice
-(`spawned ssh web → herdr tab`, or the failing command and its stderr); a spawn counts as
-`last connected`. Every spawned session rides the alias's ControlMaster, so `X` (`ssh -O
+line, actions.toml placeholders, `{host}` is the alias; `$XDG_CONFIG_HOME` honoured; macOS
+default `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`; a present but
+empty file means no template, which is how the Terminal default is turned off) runs instead.
+The outcome is a notice (`spawned ssh web → herdr tab`, or the failing command and its
+reason — herdr's error message, else the tool's stderr or stdout); each step is given ten
+seconds before it is reported as a failure. A spawn counts as `last connected`. `c` on the
+host row copies `ssh <host>`, the connection the line makes — the spawn line itself is two
+steps and a placeholder, not a shell command. Detection reads the environment as found: a
+tmux server started from a herdr pane carries that pane's `HERDR_*` into every pane it ever
+creates, so inside such a tmux enter still spawns herdr (its ratified place first in the
+order) — even after that herdr pane is gone, when the spawn fails or lands out of sight. Every spawned session rides the alias's ControlMaster, so `X` (`ssh -O
 exit`) tears down the master and every session on it, tabs included — sasash cannot
 enumerate those sessions (OpenSSH exposes master liveness only), and closing a tab closes
 just that session. No embedded terminal, no daemon: the master socket is the state.
@@ -368,7 +379,7 @@ internal/run/        the only package that starts a process
 internal/sshconf/    parse + round-trip-faithful write of ssh_config
 internal/probe/      parallel TCP dial, latency, caching
 internal/tunnel/     control-master ops, live state verification
-internal/action/     command templates + tea.ExecProcess handoff
+internal/action/     command templates: actions.toml + the spawn-window template
 internal/ui/         bubbletea models
 ```
 

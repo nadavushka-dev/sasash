@@ -238,12 +238,16 @@ func saveHostTo(confPath string) func(ui.AdhocEntry) error {
 // opens Terminal), and the persisted target beside the theme state.
 func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 	mux, pane := ui.DetectMux(getenv)
-	target := readState(spawnStatePath(home))
+	statePath := spawnStatePath(home)
+	target := readState(statePath)
 	if _, ok := ui.SpawnTargetIndex(target); !ok {
 		target = ui.DefaultSpawnTarget // a stale file never keeps enter from working
 	}
-	tmpl := readState(spawnWindowPath(home, getenv))
-	if tmpl == "" {
+	// No file: this OS's default. A file, even empty: exactly what it
+	// says — an empty one is how a macOS user turns the Terminal default
+	// off and gets the handoff instead.
+	tmpl, present := readStateFound(spawnWindowPath(home, getenv))
+	if !present {
 		tmpl = defaultWindowTemplate(runtime.GOOS)
 	}
 	return ui.SpawnConfig{
@@ -251,13 +255,16 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 		HerdrPane:      pane,
 		WindowTemplate: tmpl,
 		Target:         target,
-		SaveTarget:     saveStateTo(spawnStatePath(home)),
+		SaveTarget:     saveStateTo(statePath),
 	}
 }
 
 // defaultWindowTemplate is the OS-window spawn outside any multiplexer:
 // on macOS, Terminal runs the ssh; elsewhere there is no default, so
 // enter hands off until ~/.config/sasash/spawn-window says otherwise.
+// {host} lands inside an AppleScript string literal unescaped — an alias
+// is a plain ssh_config word, never quoted (aliasProblem enforces that
+// for the ones sasash writes), the same trust actions.toml extends.
 func defaultWindowTemplate(goos string) string {
 	if goos == "darwin" {
 		return `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`
@@ -290,11 +297,18 @@ func themeStatePath(home string) string {
 // readState returns a one-line state file's content, or "" when there is
 // none (the theme name, the spawn target, the window template).
 func readState(path string) string {
+	v, _ := readStateFound(path)
+	return v
+}
+
+// readStateFound also says whether the file exists, for the one reader
+// that treats an empty file differently from a missing one.
+func readStateFound(path string) (string, bool) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(string(b))
+	return strings.TrimSpace(string(b)), true
 }
 
 // saveThemeTo gives the model its write-through persistence hook.

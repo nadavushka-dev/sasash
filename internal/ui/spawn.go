@@ -98,13 +98,17 @@ type spawnPlan struct {
 
 const panePlaceholder = "<pane>"
 
-// muxWord names the multiplexer-side thing a target becomes.
-func muxWord(mux Mux, target string) string {
-	switch mux {
+// where names the multiplexer-side thing a target becomes — or the
+// handoff, when there is nothing to spawn into.
+func (s spawnState) where(target string) string {
+	switch s.mux {
 	case MuxHerdr:
 		return "herdr " + target
 	case MuxTmux:
 		return "tmux " + tmuxWord(target)
+	}
+	if s.window == "" {
+		return "handoff"
 	}
 	return "window"
 }
@@ -147,17 +151,26 @@ func herdrRunArgv(paneID, alias string) []string {
 // tmuxArgv is the one-step tmux spawn per target. -d keeps the current
 // pane/window/client where it is, as --no-focus does for herdr; tmux 3
 // takes the command as argv, so no shell sits between sasash and ssh.
+// The window carries the alias as its name — tmux refuses '.' and ':'
+// there, so those become '_' in the NAME only; the ssh argv keeps the
+// real alias. A session is named by its window rather than -s: session
+// names must be unique, and a second shell to the same host is normal.
 func tmuxArgv(target, alias string) []string {
 	var head []string
 	switch target {
 	case "pane":
 		head = []string{"tmux", "split-window", "-h", "-d"}
 	case "workspace":
-		head = []string{"tmux", "new-session", "-d", "-s", alias}
+		head = []string{"tmux", "new-session", "-d", "-n", tmuxName(alias)}
 	default:
-		head = []string{"tmux", "new-window", "-d", "-n", alias}
+		head = []string{"tmux", "new-window", "-d", "-n", tmuxName(alias)}
 	}
 	return append(head, sshCommand(alias)...)
+}
+
+// tmuxName is an alias as a tmux window name.
+func tmuxName(alias string) string {
+	return strings.NewReplacer(".", "_", ":", "_").Replace(alias)
 }
 
 // windowArgv expands the OS-window template with the alias as {host}
@@ -179,12 +192,12 @@ func (s spawnState) planFor(alias string) *spawnPlan {
 	}
 	switch s.mux {
 	case MuxHerdr:
-		return &spawnPlan{where: muxWord(s.mux, target), steps: [][]string{
+		return &spawnPlan{where: s.where(target), steps: [][]string{
 			herdrCreateArgv(target, alias, s.herdrPane),
 			herdrRunArgv(panePlaceholder, alias),
 		}}
 	case MuxTmux:
-		return &spawnPlan{where: muxWord(s.mux, target), steps: [][]string{tmuxArgv(target, alias)}}
+		return &spawnPlan{where: s.where(target), steps: [][]string{tmuxArgv(target, alias)}}
 	}
 	if s.window == "" {
 		return nil
@@ -227,6 +240,14 @@ type spawnDoneMsg struct {
 // spawnCmd runs the plan's steps in order through the run seam, feeding
 // the herdr create reply's pane id into `pane run`.
 func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
+	// Only a plan whose later step names the placeholder needs a reply
+	// parsed: a user template that happens to start with herdr does not.
+	needsPane := false
+	for _, step := range p.steps {
+		for _, a := range step {
+			needsPane = needsPane || a == panePlaceholder
+		}
+	}
 	return func() tea.Msg {
 		paneID := ""
 		for _, step := range p.steps {
@@ -243,9 +264,9 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 				return spawnDoneMsg{alias: alias, where: p.where, err: fmt.Errorf("%s: %w", argv[0], err)}
 			}
 			if !res.OK() {
-				return spawnDoneMsg{alias: alias, where: p.where, err: fmt.Errorf("%s failed: %s", strings.Join(argv[:min(3, len(argv))], " "), oneLineText(string(res.Stderr)))}
+				return spawnDoneMsg{alias: alias, where: p.where, err: fmt.Errorf("%s failed: %s", strings.Join(argv[:min(3, len(argv))], " "), failureText(res))}
 			}
-			if argv[0] == "herdr" && paneID == "" {
+			if needsPane && paneID == "" {
 				id, err := herdrPaneID(res.Stdout)
 				if err != nil {
 					return spawnDoneMsg{alias: alias, where: p.where, err: err}
@@ -255,6 +276,30 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 		}
 		return spawnDoneMsg{alias: alias, where: p.where}
 	}
+}
+
+// failureText is a failed step's reason for the notice: herdr's reply
+// envelope gives up its message, anything else its stderr, or stdout
+// when that is where the tool spoke.
+func failureText(res run.Result) string {
+	var r struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	for _, out := range [][]byte{res.Stderr, res.Stdout} {
+		if json.Unmarshal(out, &r) == nil && r.Error.Message != "" {
+			return r.Error.Message
+		}
+	}
+	text := oneLineText(string(res.Stderr))
+	if strings.TrimSpace(text) == "" {
+		text = oneLineText(string(res.Stdout))
+	}
+	if strings.TrimSpace(text) == "" {
+		return "exit " + fmt.Sprint(res.Code)
+	}
+	return text
 }
 
 // herdrPaneID reads the created pane's id from a herdr CLI reply: tab and

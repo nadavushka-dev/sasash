@@ -255,7 +255,7 @@ func (m Model) settingsView() string {
 		detail := [entryCount]string{
 			entryEdit:  m.confPath,
 			entryTheme: Themes[m.themeIdx].Name,
-			entrySpawn: m.spawnTarget() + " (" + muxWord(m.spawn.mux, m.spawnTarget()) + ")",
+			entrySpawn: m.spawnTarget() + " (" + m.spawn.where(m.spawnTarget()) + ")",
 		}
 		for i, label := range entryLabels {
 			b.WriteString("\n " + mark(i, s.cursor) + m.styles.PathName.Render(label))

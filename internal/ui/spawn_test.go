@@ -61,7 +61,11 @@ func TestSpawnArgv_ExactStrings(t *testing.T) {
 		{name: "herdr run into the created pane", got: ui.HerdrRunArgv("w24:p9", "web"), want: []string{"herdr", "pane", "run", "w24:p9", "ssh", "web"}},
 		{name: "tmux pane", got: ui.TmuxArgv("pane", "web"), want: []string{"tmux", "split-window", "-h", "-d", "ssh", "web"}},
 		{name: "tmux tab", got: ui.TmuxArgv("tab", "web"), want: []string{"tmux", "new-window", "-d", "-n", "web", "ssh", "web"}},
-		{name: "tmux workspace", got: ui.TmuxArgv("workspace", "web"), want: []string{"tmux", "new-session", "-d", "-s", "web", "ssh", "web"}},
+		{name: "tmux workspace names the window, not the session", got: ui.TmuxArgv("workspace", "web"), want: []string{"tmux", "new-session", "-d", "-n", "web", "ssh", "web"}},
+		// tmux refuses '.' and ':' in names; only the name changes.
+		{name: "tmux tab with a dotted alias", got: ui.TmuxArgv("tab", "web.office"), want: []string{"tmux", "new-window", "-d", "-n", "web_office", "ssh", "web.office"}},
+		{name: "tmux workspace with a port-like alias", got: ui.TmuxArgv("workspace", "web:1"), want: []string{"tmux", "new-session", "-d", "-n", "web_1", "ssh", "web:1"}},
+		{name: "tmux pane keeps the alias untouched", got: ui.TmuxArgv("pane", "web.office"), want: []string{"tmux", "split-window", "-h", "-d", "ssh", "web.office"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,8 +200,8 @@ func TestModel_Update_EnterSpawnTargets(t *testing.T) {
 			create:    []string{"tmux", "new-window", "-d", "-n", "web", "ssh", "web"},
 			wantCalls: []string{"tmux new-window -d -n web ssh web"}, wantWhere: "tmux window"},
 		{name: "tmux session", cfg: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "workspace"},
-			create:    []string{"tmux", "new-session", "-d", "-s", "web", "ssh", "web"},
-			wantCalls: []string{"tmux new-session -d -s web ssh web"}, wantWhere: "tmux session"},
+			create:    []string{"tmux", "new-session", "-d", "-n", "web", "ssh", "web"},
+			wantCalls: []string{"tmux new-session -d -n web ssh web"}, wantWhere: "tmux session"},
 		{name: "no multiplexer runs the window template", cfg: ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: darwinWindow},
 			create:    []string{"osascript", "-e", `tell application "Terminal" to do script "ssh web"`},
 			wantCalls: []string{`osascript -e tell application "Terminal" to do script "ssh web"`}, wantWhere: "window"},
@@ -247,6 +251,15 @@ func TestModel_Update_EnterSpawnFailures(t *testing.T) {
 		{name: "create exits non-zero", stub: func(r *fakerun.Fake) {
 			r.Stub(fakerun.Reply{Result: run1("herdr: no server\n")}, "herdr", "tab", "create", "--label", "web", "--no-focus")
 		}, wantNotice: "herdr tab create failed: herdr: no server"},
+		{name: "herdr's error envelope gives its message", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run1(`{"error":{"code":"workspace_not_found","message":"workspace w99 not found"},"id":"cli:tab:create"}` + "\n")}, "herdr", "tab", "create", "--label", "web", "--no-focus")
+		}, wantNotice: "herdr tab create failed: workspace w99 not found"},
+		{name: "a tool that speaks on stdout", stub: func(r *fakerun.Fake) {
+			r.Stub(fakerun.Reply{Result: run.Result{Stdout: []byte("no display\n"), Code: 1}}, "herdr", "tab", "create", "--label", "web", "--no-focus")
+		}, wantNotice: "herdr tab create failed: no display"},
+		{name: "a silent failure names the exit code", stub: func(r *fakerun.Fake) {
+			r.StubExit(3, "herdr", "tab", "create", "--label", "web", "--no-focus")
+		}, wantNotice: "herdr tab create failed: exit 3"},
 		{name: "herdr cannot run", stub: func(r *fakerun.Fake) {
 			r.Stub(fakerun.Reply{Err: errors.New("exec: \"herdr\": executable file not found in $PATH")}, "herdr", "tab", "create", "--label", "web", "--no-focus")
 		}, wantNotice: `herdr: exec: "herdr": executable file not found`},
@@ -320,6 +333,45 @@ func TestModel_Update_EnterFallsBackToHandoff(t *testing.T) {
 	}
 }
 
+func TestModel_Update_CopyCmdWithSpawn(t *testing.T) {
+	t.Parallel()
+	// The spawn line is not a shell command; c copies the connection.
+	want := ui.ClipArgv("ssh web")
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").StubExit(0, want...)
+	m := spawnModel(t, r, herdrCfg("tab"), nil)
+	before := len(r.CallKeys())
+	if _, cmd := m.Update(keyMsg("c")); cmd == nil {
+		t.Fatalf("Update(c) cmd = nil")
+	} else {
+		cmd()
+	}
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{fakerun.Key(want...)}) {
+		t.Errorf("c copied %v, want %v", got, []string{fakerun.Key(want...)})
+	}
+	// Same for a template error: never an error message in the clipboard.
+	m = spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "kitty {nope}"}, nil)
+	before = len(r.CallKeys())
+	_, cmd := m.Update(keyMsg("c"))
+	cmd()
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{fakerun.Key(want...)}) {
+		t.Errorf("c with a bad template copied %v, want %v", got, []string{fakerun.Key(want...)})
+	}
+}
+
+func TestModel_Update_WindowTemplateNamedHerdr(t *testing.T) {
+	t.Parallel()
+	// A one-step template that happens to be herdr needs no reply parsed:
+	// success is success.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
+		StubOut(`{"id":"cli:tab:create","result":{"type":"ok"}}`, "herdr", "tab", "create", "--label", "web")
+	m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "herdr tab create --label {host}"}, nil)
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if !strings.Contains(m.View(), "spawned ssh web → window") {
+		t.Errorf("View() should report the spawn:\n%s", m.View())
+	}
+}
+
 func TestModel_Update_HandoffKey(t *testing.T) {
 	t.Parallel()
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db")
@@ -388,10 +440,19 @@ func TestModel_Update_SettingsSpawnTarget(t *testing.T) {
 	if ui.SpawnTargetOf(m) != "workspace" || !strings.Contains(m.View(), "spawn target not saved: disk full") {
 		t.Errorf("target %q, view:\n%s", ui.SpawnTargetOf(m), m.View())
 	}
-	// Without a multiplexer the picker says what enter does instead.
+	// Without a multiplexer the entry says handoff (or window, with a
+	// template) and the picker says what enter does instead.
 	m = spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone}, nil)
-	m = press(t, m, "o", "g", "j", "j", "j", "enter")
+	m = press(t, m, "o")
+	if view := m.View(); !strings.Contains(view, "tab (handoff)") {
+		t.Errorf("View() entry without a template should say handoff:\n%s", view)
+	}
+	m = press(t, m, "g", "j", "j", "j", "enter")
 	if view := m.View(); !strings.Contains(view, "no herdr or tmux around this terminal") {
 		t.Errorf("View() picker without a multiplexer should say so:\n%s", view)
+	}
+	m = spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: darwinWindow}, nil)
+	if view := press(t, m, "o").View(); !strings.Contains(view, "tab (window)") {
+		t.Errorf("View() entry with a template should say window:\n%s", view)
 	}
 }

@@ -1024,6 +1024,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if argv == nil {
 					return m, nil
 				}
+				// A spawn line is not a shell command (two steps, a pane
+				// id still unknown, or a template error): the connection
+				// it makes is, so that is what the clipboard gets.
+				if host, ok := m.Selected(); ok {
+					if _, hl := m.highlighted(host); !hl && m.spawn.planFor(host.Alias) != nil {
+						argv = sshCommand(host.Alias)
+					}
+				}
 				return m, clipCmd(m.runner, strings.Join(argv, " "))
 			case key.Matches(msg, m.keys.FocusRight):
 				host, ok := m.Selected()

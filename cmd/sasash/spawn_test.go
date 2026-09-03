@@ -59,6 +59,28 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 		if got := spawnConfig(home, getenv).WindowTemplate; got != "kitty ssh {host}" {
 			t.Errorf("WindowTemplate = %q, want the file's line", got)
 		}
+		// Present but empty means no template: the handoff, not the default.
+		if err := os.WriteFile(path, []byte("\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := spawnConfig(home, getenv).WindowTemplate; got != "" {
+			t.Errorf("WindowTemplate with an empty file = %q, want none", got)
+		}
+	})
+	t.Run("XDG_CONFIG_HOME relocates the template", func(t *testing.T) {
+		t.Parallel()
+		home, xdg := t.TempDir(), t.TempDir()
+		env := map[string]string{"XDG_CONFIG_HOME": xdg}
+		path := filepath.Join(xdg, "sasash", "spawn-window")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("wezterm start -- ssh {host}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := spawnConfig(home, func(k string) string { return env[k] }).WindowTemplate; got != "wezterm start -- ssh {host}" {
+			t.Errorf("WindowTemplate = %q, want the XDG file's line", got)
+		}
 	})
 }
 
