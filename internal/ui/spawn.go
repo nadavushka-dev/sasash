@@ -236,6 +236,7 @@ const spawnTimeout = 10 * time.Second
 type spawnDoneMsg struct {
 	alias string
 	where string
+	argv  []string // the step that failed, for the popup
 	err   error
 }
 
@@ -263,15 +264,15 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 			res, err := r.Run(ctx, argv...)
 			cancel()
 			if err != nil {
-				return spawnDoneMsg{alias: alias, where: p.where, err: fmt.Errorf("%s: %w", argv[0], err)}
+				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s: %w", argv[0], err)}
 			}
 			if !res.OK() {
-				return spawnDoneMsg{alias: alias, where: p.where, err: fmt.Errorf("%s failed: %s", strings.Join(argv[:min(3, len(argv))], " "), failureText(res))}
+				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s failed: %s", strings.Join(argv[:min(3, len(argv))], " "), failureText(res))}
 			}
 			if needsPane && paneID == "" {
 				id, err := herdrPaneID(res.Stdout)
 				if err != nil {
-					return spawnDoneMsg{alias: alias, where: p.where, err: err}
+					return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: err}
 				}
 				paneID = id
 			}

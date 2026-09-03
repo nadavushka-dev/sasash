@@ -413,6 +413,12 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 			}
 			m := tunnelModel(t, r, d, tt.stateDir(t))
 			m = feed(t, m, m.Init())
+			// An unreadable state dir opens the cache popup once at the
+			// first poll (SASASH.4.11): dismissed, the keys are the
+			// pane's again.
+			if ui.PopupOpen(m) {
+				m = press(t, m, "esc")
+			}
 			m = press(t, m, "l") // web
 			next, cmd := m.Update(keyMsg(" "))
 			m = next.(ui.Model)
@@ -420,6 +426,12 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 				t.Fatalf("Update(space) cmd = nil, want action cmd")
 			}
 			m = update(t, m, cmd())
+			// A failure also opens the popup; closing it leaves the
+			// one-line outcome on the bottom line, which is what these
+			// cases pin.
+			if ui.PopupOpen(m) {
+				m = press(t, m, "esc")
+			}
 			view := m.View()
 			for _, w := range tt.want {
 				if !strings.Contains(view, w) {

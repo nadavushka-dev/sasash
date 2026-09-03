@@ -306,6 +306,13 @@ type Model struct {
 	// editing is the file the running editor handoff was opened on.
 	editing string
 
+	// Popup (SASASH.4.11): the attention tier, open or zero; corruptSeen
+	// remembers which hosts' cache problems were already shown so the
+	// popup opens once per host per session, not on every poll.
+	popup       popup
+	corruptSeen map[string]bool
+	stateDir    string
+
 	// p (SASASH.2.6): the cycle hook, the block read behind its preview
 	// (cached per alias in blocks), the switch stamp, and the hosts with
 	// a switch running — a marker of its own, so finishing a switch can
@@ -409,6 +416,9 @@ type Config struct {
 	// Spawn is enter's multiplexer wiring (SASASH.4.10): what was
 	// detected, the OS-window template, and the persisted target.
 	Spawn SpawnConfig
+	// StateDir is where the tunnel engine keeps its caches, named in the
+	// popup when one is unreadable; "" leaves the path out.
+	StateDir string
 }
 
 // paneFocus says which pane the navigation keys move (SPEC §5: l/tab
@@ -514,6 +524,8 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		recordSwitch:    cfg.RecordSwitch,
 		blocks:          make(map[string]pathBlock),
 		switching:       make(map[string]bool),
+		corruptSeen:     make(map[string]bool),
+		stateDir:        cfg.StateDir,
 		spawn: spawnState{
 			mux:        cfg.Spawn.Mux,
 			herdrPane:  cfg.Spawn.HerdrPane,
@@ -688,6 +700,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tunnelStatusMsg:
 		delete(m.tinflight, msg.host)
 		m.tstatus[msg.host] = tunnelState{status: msg.status, err: msg.err}
+		m = m.corruptCaches(msg)
 		if msg.stampErr != nil {
 			m.notice = "stats not recorded: " + msg.stampErr.Error()
 		}
@@ -741,7 +754,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The ssh side succeeded; only the cache write failed.
 			m.notice = "warning: " + oneLine(msg.err, msg.host)
 		default:
+			// The whole reason, not one line of it: ssh's stderr is the
+			// diagnosis, and the argv it ran is the first line.
 			m.notice = msg.label + ": " + oneLine(msg.err, msg.host)
+			m = m.show(msg.label+" failed on "+msg.host, reasonLines(msg.err)...)
 		}
 		// Reality may have changed either way: re-derive it.
 		if host, ok := m.hostByAlias(msg.host); ok {
@@ -760,6 +776,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spawnDoneMsg:
 		if msg.err != nil {
 			m.notice = msg.err.Error()
+			lines := []string{}
+			if len(msg.argv) > 0 {
+				lines = append(lines, "ran: "+strings.Join(msg.argv, " "))
+			}
+			m = m.show("spawn failed for "+msg.alias, append(lines, reasonLines(msg.err)...)...)
 			return m, nil
 		}
 		m.notice = "spawned ssh " + msg.alias + " → " + msg.where
@@ -838,6 +859,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			reason := oneLineText(string(msg.res.Stderr))
 			reason = strings.TrimPrefix(reason, adhocDest(m.pending)+": ")
 			m.notice = "ssh -fN failed: " + reason + " — keys/agent, or connect once"
+			m = m.show("ssh -fN failed", append([]string{strings.Join(adhocTunnelArgv(m.pending), " "), "auth must be keys or an agent (BatchMode) — or connect once without -N"}, reasonLines(errors.New(strings.TrimSpace(string(msg.res.Stderr))))...)...)
 		} else {
 			m.notice = "tunnel up in the background"
 		}
@@ -870,6 +892,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.tinflight, msg.host)
 		if msg.err != nil {
 			m.notice = msg.err.Error() // built with its own context and ssh's reason
+			m = m.show("edit forward failed on "+msg.host, reasonLines(msg.err)...)
 		} else {
 			m.notice = msg.done
 		}
@@ -912,6 +935,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// be what is malformed.
 		if msg.edited && len(msg.warnings) > 0 {
 			m.notice = warningNotice(msg.warnings)
+			if len(msg.warnings) > 1 {
+				lines := make([]string, len(msg.warnings))
+				for i, w := range msg.warnings {
+					lines[i] = w.Error()
+				}
+				m = m.show("config: "+fmt.Sprint(len(msg.warnings))+" warnings", lines...)
+			}
 		}
 		before := pathList(m.hosts)
 		m.hosts = msg.hosts
@@ -956,9 +986,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(msg, m.keys.ForceQuit) {
 			return m, tea.Quit
 		}
+		// The popup owns the keyboard while open (SPEC §5: action keys
+		// inert, like the filter) — and its keys do not clear the
+		// one-line notice: closing it leaves the outcome on the line.
+		if m.popup.open() {
+			return m.popupKey(msg)
+		}
 		m.notice = ""
-		// The settings panel owns the keyboard while open (SPEC §5:
-		// action keys inert, like the filter).
+		// The settings panel owns the keyboard while open.
 		if m.settings.pane != settingsOff {
 			return m.settingsKey(msg)
 		}
@@ -1305,6 +1340,8 @@ func (m Model) helpView() string {
 	// before a pane focus does: the line must never promise a path switch
 	// while a prompt has the key.
 	switch {
+	case m.popup.open():
+		k = popupKeys{}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:
@@ -1357,7 +1394,10 @@ func (m Model) View() string {
 	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 
 	var body string
-	if m.settings.pane != settingsOff {
+	if m.popup.open() {
+		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.popupView())
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
+	} else if m.settings.pane != settingsOff {
 		header += "   " + m.styles.CmdPreview.Render("settings")
 		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
@@ -1382,7 +1422,7 @@ func (m Model) View() string {
 	body = clampHeight(body, m.contentHeight())
 
 	preview := m.previewView()
-	if m.settings.pane != settingsOff {
+	if m.settings.pane != settingsOff || m.popup.open() {
 		preview = "" // the panel's own footer says what enter does
 	}
 	if m.mode != promptNone {

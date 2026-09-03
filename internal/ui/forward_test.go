@@ -423,6 +423,17 @@ func TestModel_Update_ConflictYieldsToKeyboardOwner(t *testing.T) {
 			},
 		},
 		{
+			name: "popup keeps the keyboard",
+			setup: func(t *testing.T, m ui.Model) ui.Model {
+				return update(t, m, ui.TunnelStatus("ubuntu", tunnel.HostStatus{Host: "ubuntu", CorruptState: true}, nil))
+			},
+			check: func(t *testing.T, m ui.Model) {
+				if !ui.PopupOpen(m) || ui.Prompting(m) {
+					t.Errorf("popup lost: open %v, prompting %v", ui.PopupOpen(m), ui.Prompting(m))
+				}
+			},
+		},
+		{
 			name:  "filter stays focused",
 			setup: func(t *testing.T, m ui.Model) ui.Model { return press(t, m, "/", "u") },
 			check: func(t *testing.T, m ui.Model) {

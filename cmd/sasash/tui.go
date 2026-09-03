@@ -131,6 +131,7 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		// The same state dir as `up`/`down`, or the cache silently splits;
 		// the stats store lives beside it and stamps handoffs.
 		Tunnels:       tunnel.Engine{StateDir: stateDir(home), Stats: &store},
+		StateDir:      stateDir(home),
 		Home:          home,
 		RecordHandoff: store.RecordHandoff,
 		// p: the switcher on sasash.conf, the block read behind the rows

@@ -12,6 +12,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 // RefreshTick lets the external test package drive the live-refresh loop
@@ -62,6 +63,14 @@ func PathsFocused(m Model) bool { return m.focus == focusPaths }
 // (SASASH.2.9) for table tests.
 func IsManaged(m Model, h hostmodel.Host) bool { return m.managed(h) }
 func EditTarget(m Model) string                { return m.editTarget() }
+
+// PopupOpen and PopupTitle expose the attention tier (SASASH.4.11);
+// TunnelStatus replays a status poll result.
+func PopupOpen(m Model) bool    { return m.popup.open() }
+func PopupTitle(m Model) string { return m.popup.title }
+func TunnelStatus(host string, st tunnel.HostStatus, err error) tea.Msg {
+	return tunnelStatusMsg{host: host, status: st, err: err}
+}
 
 // Editing reports the file the running editor handoff was opened on;
 // SettingsEditExec is the process settings' "edit config file" builds;

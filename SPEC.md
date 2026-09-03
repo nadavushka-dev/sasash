@@ -256,6 +256,21 @@ first, in meta order, then remembered ad-hoc ones) can be the one answering, so 
 later claimant shows as `◐ listening` with an "unverified" note even when the engine
 reports it up — a stale remembered spec cannot ride a live one's listener.
 
+**Feedback tiers (SASASH.4.11):** routine one-liners stay on the bottom line and the next
+keypress clears them — a theme saved, a command copied, a filter cleared, a single-path
+no-op. Attention-worthy content goes to a popup instead: a dismissable, palette-styled,
+width-clamped box over the body with multi-line content (long lines wrap, nothing is cut;
+`j`/`k` scroll when it outgrows the frame). It owns the keyboard like the settings panel —
+`esc` or `enter` closes it, action keys are inert — and what goes there is: an ssh or
+action failure with its whole reason (the argv it ran and every line of stderr, where the
+bottom line shows one), a reload with more than one warning (the list, where the line
+shows a count), a spawn that failed with the argv it tried, an ad-hoc `-N` that failed with
+its reason and the auth hint, and an unreadable tunnel or stats cache (what it means, the
+file's name and directory, once per host per session; the tunnels pane keeps its marker on
+every poll). One popup at a time: a newer one replaces an open one and names what it
+replaced. Probes and status polls keep landing behind it, and the bottom-line notice still
+carries the one-line form, so closing the popup leaves the outcome on the line.
+
 **Spawn (ratified 2026-09-03):** `enter` opens the connection *beside* the TUI so the
 switchboard never leaves the screen: sasash runs the surrounding multiplexer's own CLI — a
 previewed command the user could type — through the run seam. Detection order, innermost

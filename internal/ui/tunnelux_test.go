@@ -113,6 +113,15 @@ func TestModel_Update_AdhocTunnelOnly(t *testing.T) {
 			if !tt.wantOffer {
 				return
 			}
+			// A failure opened the attention popup over the save offer:
+			// it owns the keyboard until dismissed, then the prompt is
+			// there as before (SASASH.4.11).
+			if ui.PopupOpen(m) {
+				m = press(t, m, "esc")
+				if ui.PopupOpen(m) || !ui.PromptingSave(m) {
+					t.Fatalf("after dismissing the popup: open %v, prompting save %v", ui.PopupOpen(m), ui.PromptingSave(m))
+				}
+			}
 			// The save offer is the ordinary one: the entry carries the
 			// forwards and the host exactly as typed.
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
