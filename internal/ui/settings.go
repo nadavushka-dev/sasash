@@ -173,7 +173,8 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			s.pane = settingsOff
-			return m, tea.ExecProcess(m.editorExec(), func(err error) tea.Msg {
+			m.editing = m.confPath
+			return m, tea.ExecProcess(editorExecOn(m.editor, m.confPath), func(err error) tea.Msg {
 				return editorExitMsg{err: err}
 			})
 		case entryTheme:

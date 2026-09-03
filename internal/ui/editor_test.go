@@ -184,6 +184,7 @@ func TestModel_Update_EditorWarnOverridesHint(t *testing.T) {
 		loaded = true
 		return nil, nil, nil
 	})
+	m = press(t, m, "e") // on a host without a declaring file: sasash.conf
 	next, cmd := m.Update(ui.EditorExit(nil))
 	m = next.(ui.Model)
 	if cmd == nil {

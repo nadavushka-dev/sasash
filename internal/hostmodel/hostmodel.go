@@ -29,6 +29,15 @@ type Host struct {
 	// Forwards are named forward sets from "# @sasash forwards <name>
 	// <spec>..."; nil when none.
 	Forwards []ForwardSet
+	// File is the path of the file that declares the block — the one an
+	// editor opens to reach it; "" for a block parsed without a path.
+	File string
+	// HasMeta reports any "# @sasash" line of the block's own, whatever
+	// the verb: the block is sasash-described even when it lives outside
+	// sasash.conf. Hidden is a "# @sasash hide" line: the host stays
+	// fully usable but asks to be left out of listings.
+	HasMeta bool
+	Hidden  bool
 }
 
 // ForwardSet is a named set of port-forward specs. Specs stay opaque strings
@@ -43,6 +52,19 @@ type ForwardSet struct {
 func Build(h *sshconf.Host) (Host, []error) {
 	out := Host{Alias: h.Name()}
 	var errs []error
+	if f := h.File(); f != nil {
+		out.File = f.Path
+	}
+	out.HasMeta = len(h.OwnMeta()) > 0
+	for _, m := range h.OwnMetaVerb("hide") {
+		// Bare verb only: an argument is a typo for some other line, and a
+		// typo must not silently hide a host.
+		if len(m.Args) > 0 {
+			errs = append(errs, fmt.Errorf("host %q: @sasash hide takes no arguments (line %d)", out.Alias, m.Index+1))
+			continue
+		}
+		out.Hidden = true
+	}
 
 	// ssh dials the Port directive whatever address it resolved, so a path
 	// without an explicit :port inherits it — probing 22 on a host that

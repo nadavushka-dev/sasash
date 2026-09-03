@@ -58,6 +58,14 @@ func WithSwitcher(m Model, sw func(alias, name string) (pathswitch.Result, error
 
 func PickerOpen(m Model) bool { return m.picker.open() }
 
+// IsManaged and EditTarget expose the tier classification and e's file
+// (SASASH.2.9) for table tests.
+func IsManaged(m Model, h hostmodel.Host) bool { return m.managed(h) }
+func EditTarget(m Model) string                { return m.editTarget() }
+
+// Editing reports the file the running editor handoff was opened on.
+func Editing(m Model) string { return m.editing }
+
 // WithRecordHandoff swaps the handoff stamp hook so tests can observe it.
 func WithRecordHandoff(m Model, f func(string) error) Model {
 	m.recordHandoff = f

@@ -10,6 +10,7 @@ import (
 	// so this one invocation cannot go through run.Runner. Every other
 	// process start stays behind the run seam.
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,7 +39,10 @@ const refreshEvery = 5 * time.Second
 const probeChunk = 64
 
 // hostItem adapts hostmodel.Host to the bubbles list.
-type hostItem struct{ host hostmodel.Host }
+type hostItem struct {
+	host    hostmodel.Host
+	ambient bool // below the divider: not declared in sasash.conf, no meta
+}
 
 // FilterValue is what `/` filters on: alias and @sasash tags.
 func (i hostItem) FilterValue() string {
@@ -62,6 +66,9 @@ func (hostDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	it, ok := item.(hostItem)
 	if !ok {
+		if _, divider := item.(dividerItem); divider {
+			renderDivider(w, d.styles, m.Width())
+		}
 		return
 	}
 	if index == m.Index() {
@@ -70,6 +77,10 @@ func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 			return
 		}
 		fmt.Fprint(w, d.styles.ItemSelected.MaxWidth(m.Width()).Render("› "+it.host.Alias))
+		return
+	}
+	if it.ambient {
+		fmt.Fprint(w, d.styles.ItemAmbient.MaxWidth(m.Width()).Render(it.host.Alias))
 		return
 	}
 	fmt.Fprint(w, d.styles.Item.MaxWidth(m.Width()).Render(it.host.Alias))
@@ -132,10 +143,26 @@ func editorArgv(editor []string, confPath string) []string {
 	return append(append([]string{}, editor...), confPath)
 }
 
+// editTarget is the file `e` opens: the one that DECLARES the selected
+// host — sasash.conf, ~/.ssh/config, or an Included file — falling back
+// to sasash.conf when no host is selected or the host carries no path.
+func (m Model) editTarget() string {
+	if host, ok := m.Selected(); ok && host.File != "" {
+		return host.File
+	}
+	return m.confPath
+}
+
 // editorExec is the ONE place the `e` handoff process is built, so a test
 // can pin the exact args that reach the *exec.Cmd.
 func (m Model) editorExec() *exec.Cmd {
-	return execCommand(editorArgv(m.editor, m.confPath))
+	return execCommand(editorArgv(m.editor, m.editTarget()))
+}
+
+// editorExecOn builds the same process on an explicit file (settings'
+// "edit config file" always means sasash.conf).
+func editorExecOn(editor []string, path string) *exec.Cmd {
+	return execCommand(editorArgv(editor, path))
 }
 
 // editorExitMsg arrives when the terminal returns from the editor.
@@ -275,6 +302,9 @@ type Model struct {
 	// Path picker (SASASH.2.8): p's panel while open.
 	picker pathPicker
 
+	// editing is the file the running editor handoff was opened on.
+	editing string
+
 	// p (SASASH.2.6): the cycle hook, the block read behind its preview
 	// (cached per alias in blocks), the switch stamp, and the hosts with
 	// a switch running — a marker of its own, so finishing a switch can
@@ -411,15 +441,11 @@ const (
 func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Config) Model {
 	keys := DefaultKeyMap()
 
-	// Generated pinned variants fold into their parent by default.
-	fold := &foldState{variants: computeVariants(hosts)}
-	var items []list.Item
-	for _, h := range hosts {
-		if _, variant := fold.variants[h.Alias]; !variant {
-			items = append(items, hostItem{host: h})
-		}
-	}
-	l := list.New(items, hostDelegate{}, 0, 0)
+	// Generated pinned variants fold into their parent by default;
+	// hidden hosts leave the rows. The rows themselves are built once
+	// the model can classify tiers (below).
+	fold := &foldState{variants: computeVariants(hosts), hidden: hiddenSet(hosts)}
+	l := list.New(nil, hostDelegate{}, 0, 0)
 	l.Filter = foldFilter(fold)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
@@ -512,6 +538,7 @@ func (m Model) applyTheme(idx int) Model {
 	m.help.Styles.FullKey = m.styles.HelpKey
 	m.help.Styles.FullDesc = m.styles.HelpDesc
 	m.help.Styles.FullSeparator = m.styles.HelpSep
+	m.list.SetItems(m.listRows())
 	return m
 }
 
@@ -604,8 +631,11 @@ func (m Model) Init() tea.Cmd {
 // returns a Model; the unconditional assertion keeps it that way, so a
 // return of another type can never quietly skip the settle.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before := m.list.Index()
 	next, cmd := m.update(msg)
-	return next.(Model).settleFocus(), cmd
+	n := next.(Model)
+	skipDivider(&n.list, before)
+	return n.settleFocus(), cmd
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -756,7 +786,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The setup warning outranks the fallback hint — an edit ssh
 		// cannot see must say why, not silently change nothing.
 		m.notice = m.editorHint
-		if m.editorWarn != "" {
+		// The setup warning is about sasash.conf not being wired into
+		// ssh: an edit to ~/.ssh/config or an Included file is seen fine.
+		if m.editorWarn != "" && filepath.Clean(m.editing) == filepath.Clean(m.confPath) {
 			m.notice = m.editorWarn
 		}
 		if m.loadHosts == nil {
@@ -880,6 +912,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a filter the match set is empty until the FilterMatchesMsg
 		// lands — that arm re-selects and clamps.
 		m.fold.variants = computeVariants(m.hosts)
+		m.fold.hidden = hiddenSet(m.hosts)
 		cmd := m.setRows(m.listRows())
 		return m, tea.Batch(cmd, probeCmd(m.prober, m.hosts), m.selectedStatusCmd())
 
@@ -888,7 +921,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list, cmd = m.list.Update(msg)
 		if m.reselect != "" {
 			for i, it := range m.list.VisibleItems() {
-				if it.(hostItem).host.Alias == m.reselect {
+				if rowKey(it) == m.reselect {
 					m.list.Select(i)
 				}
 			}
@@ -1106,6 +1139,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if len(m.editor) == 0 || m.confPath == "" {
 					return m, nil
 				}
+				m.editing = m.editTarget()
 				return m, tea.ExecProcess(m.editorExec(), func(err error) tea.Msg {
 					return editorExitMsg{err: err}
 				})

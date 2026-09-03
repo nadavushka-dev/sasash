@@ -11,6 +11,8 @@ type Styles struct {
 
 	// Host list (left pane).
 	Item         lipgloss.Style // unselected row
+	ItemAmbient  lipgloss.Style // unselected row below the divider: dim
+	Divider      lipgloss.Style // the tier boundary line
 	ItemSelected lipgloss.Style // "› " row: accent text over selection fill
 	// ItemSelectedDim is the same row while the tunnels pane holds focus:
 	// dim text over the subtle fill (research: lit vs dimmed selection).
@@ -47,6 +49,8 @@ func NewStyles(p Palette) Styles {
 		Title: lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
 
 		Item:         lipgloss.NewStyle().Foreground(p.Fg).PaddingLeft(2),
+		ItemAmbient:  lipgloss.NewStyle().Foreground(p.FgDim).PaddingLeft(2),
+		Divider:      lipgloss.NewStyle().Foreground(p.FgDim),
 		ItemSelected: lipgloss.NewStyle().Foreground(p.Accent).Background(p.Selection).Bold(true),
 
 		ItemSelectedDim: lipgloss.NewStyle().Foreground(p.FgDim).Background(p.BgSubtle).Bold(true),

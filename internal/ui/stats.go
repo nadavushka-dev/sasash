@@ -270,7 +270,7 @@ func (m Model) summaryLine() string {
 		return ""
 	}
 	if m.statuses == nil {
-		return fmt.Sprintf("%d %s · probing…", n, plural(n, "host"))
+		return m.tally(hosts) + " · probing…"
 	}
 	reachable := 0
 	for _, h := range hosts {
@@ -278,7 +278,7 @@ func (m Model) summaryLine() string {
 			reachable++
 		}
 	}
-	line := fmt.Sprintf("%d %s · %d reachable", n, plural(n, "host"), reachable)
+	line := fmt.Sprintf("%s · %d reachable", m.tally(hosts), reachable)
 	if m.tunnels == nil {
 		return line
 	}

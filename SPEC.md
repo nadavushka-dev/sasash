@@ -51,6 +51,10 @@ that "includes your `~/.ssh/config` first", so herdr resolves sasash aliases wit
 ### Format
 
 Metadata rides in `# @sasash` comments. `ssh` ignores them; sasash reads them. One file, no drift.
+A block anywhere — `~/.ssh/config`, an Included file — may carry them too: any `@sasash` line of
+its own makes a host *managed* in the TUI's eyes, and `# @sasash hide` (bare, no arguments) asks
+for it to be left out of listings while staying fully usable. Both are hand-written facts; sasash
+never guesses either from a name.
 
 ```sshconfig
 # ─── managed by sasash. hand-editable; unknown lines are preserved verbatim. ───
@@ -159,6 +163,16 @@ offer the next free port. Never silently remap.
 
 Two panes. Left: filterable host list. Right: detail for the selected host.
 
+The list is attention-ordered, not capability-ordered: *managed* hosts — declared in
+`sasash.conf`, or carrying any `@sasash` meta of their own — list first, in config order;
+every other ssh_config entry follows below a divider row (`other ssh_config entries`, or a
+shorter wording when the pane cannot fit it whole), dimmed via the palette. Both tiers do everything. The split is decided from facts the host
+model carries (the declaring file, meta presence), never from a name. The cursor never
+rests on the divider; `/` searches both tiers and drops the divider; the header tally says
+`N hosts (M managed)` while both tiers are listed. A host with `# @sasash hide` is not
+listed at all — still usable everywhere, and a filter term naming its whole alias reveals
+it, as with a folded variant.
+
 ```
  sasash                                    /  filter   ?  help
 
@@ -192,7 +206,7 @@ when both fit; `c` copies the `$` command (the highlighted action's), never the 
 | `E` | edit the highlighted forward in place: the prompt opens prefilled with its spec; enter rewrites that one spec on the set's meta line and, if the forward is live (master alive, row up), runs `-O cancel` of the old spec then `-O forward` of the new — the row shows both commands while you type; every other forward on the master is untouched; master down = config only |
 | `r` | restart master |
 | `X` | `ssh -O exit` |
-| `e` | open `sasash.conf` in `$EDITOR`, reload on exit |
+| `e` | open the file that DECLARES the selected host in `$EDITOR` — `sasash.conf`, `~/.ssh/config`, or the Included file its block lives in — and reload on exit; the setup hint (`sasash.conf` not wired into ssh) shows only when that file is `sasash.conf`. Settings' "edit config file" always opens `sasash.conf` |
 | `c` | copy the displayed `$` command instead of running it |
 | `t` | cycle theme (choice persists) |
 | `o` | settings: create config file (the setup flow, confirming exactly what is written), edit config file (`e`), theme picker, spawn target picker (`pane` / `tab` / `workspace`, persisted), add new connection (save first, then offer to connect), add new tunnel (a durable `# @sasash forwards` line — desire only, nothing is started). vim keys navigate; action keys are inert while it is open; `esc` backs out |

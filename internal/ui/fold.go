@@ -19,7 +19,19 @@ import (
 // across Model copies.
 type foldState struct {
 	variants map[string]string
+	hidden   map[string]bool // "# @sasash hide" hosts: out of the rows unless named
 	show     bool
+}
+
+// hiddenSet collects the hosts that asked to be left out of listings.
+func hiddenSet(hosts []hostmodel.Host) map[string]bool {
+	out := make(map[string]bool)
+	for _, h := range hosts {
+		if h.Hidden {
+			out[h.Alias] = true
+		}
+	}
+	return out
 }
 
 // computeVariants classifies generated pinned variants with four
@@ -81,13 +93,17 @@ func termNamesVariant(term, alias, name string) bool {
 func foldFilter(fold *foldState) list.FilterFunc {
 	return func(term string, targets []string) []list.Rank {
 		ranks := list.DefaultFilter(term, targets)
-		if fold.show {
-			return ranks
-		}
 		out := ranks[:0]
 		for _, r := range ranks {
-			alias := strings.Fields(targets[r.Index])[0] // FilterValue starts with the alias
-			if name, variant := fold.variants[alias]; !variant || termNamesVariant(term, alias, name) {
+			fields := strings.Fields(targets[r.Index]) // FilterValue starts with the alias
+			if len(fields) == 0 {
+				continue // the divider, which no term names
+			}
+			alias := fields[0]
+			if fold.hidden[alias] && !strings.Contains(strings.ToLower(term), strings.ToLower(alias)) {
+				continue // hidden: only a term naming the whole alias reveals it
+			}
+			if name, variant := fold.variants[alias]; fold.show || !variant || termNamesVariant(term, alias, name) {
 				out = append(out, r)
 			}
 		}
@@ -98,14 +114,15 @@ func foldFilter(fold *foldState) list.FilterFunc {
 // listedHosts are the rows outside a filter: every host when variants
 // are shown, else the non-variants. (The header tally counts these.)
 func (m Model) listedHosts() []hostmodel.Host {
-	if m.fold.show {
-		return m.hosts
-	}
 	var out []hostmodel.Host
 	for _, h := range m.hosts {
-		if _, variant := m.fold.variants[h.Alias]; !variant {
-			out = append(out, h)
+		if m.fold.hidden[h.Alias] {
+			continue
 		}
+		if _, variant := m.fold.variants[h.Alias]; variant && !m.fold.show {
+			continue
+		}
+		out = append(out, h)
 	}
 	return out
 }
@@ -115,27 +132,29 @@ func (m Model) listedHosts() []hostmodel.Host {
 // does not name), else the listed ones. An empty term is special: bubbles
 // never calls the filter function for it and would show every item, so
 // the rows stay folded until a character is typed.
-func (m Model) listRows() []hostmodel.Host {
+func (m Model) listRows() []list.Item {
 	if m.list.FilterState() != list.Unfiltered && strings.TrimSpace(m.list.FilterValue()) != "" {
-		return m.hosts
+		items := make([]list.Item, len(m.hosts))
+		for i, h := range m.hosts {
+			items[i] = hostItem{host: h, ambient: !m.managed(h)}
+		}
+		return items
 	}
-	return m.listedHosts()
+	return m.tierRows(m.listedHosts())
 }
 
 // setRows hands the list its rows, keeping the selection on its alias.
 // Outside a filter the index is item space and Select is exact; under a
 // filter the alias is stashed and re-selected when the match set lands
 // (Select indexes filter space, which SetItems just emptied).
-func (m *Model) setRows(rows []hostmodel.Host) tea.Cmd {
+func (m *Model) setRows(items []list.Item) tea.Cmd {
 	selected := ""
 	if it, ok := m.list.SelectedItem().(hostItem); ok {
 		selected = it.host.Alias
 	}
-	items := make([]list.Item, len(rows))
 	keep := -1
-	for i, h := range rows {
-		items[i] = hostItem{host: h}
-		if h.Alias == selected {
+	for i, it := range items {
+		if rowKey(it) == selected {
 			keep = i
 		}
 	}
@@ -152,13 +171,13 @@ func (m *Model) setRows(rows []hostmodel.Host) tea.Cmd {
 }
 
 // rowsDiffer reports whether the list's items are not rows.
-func (m Model) rowsDiffer(rows []hostmodel.Host) bool {
+func (m Model) rowsDiffer(rows []list.Item) bool {
 	items := m.list.Items()
 	if len(items) != len(rows) {
 		return true
 	}
 	for i, it := range items {
-		if it.(hostItem).host.Alias != rows[i].Alias {
+		if rowKey(it) != rowKey(rows[i]) {
 			return true
 		}
 	}

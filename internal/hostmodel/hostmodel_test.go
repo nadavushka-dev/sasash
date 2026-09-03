@@ -48,6 +48,7 @@ Host ubuntu
 		Forwards: []hostmodel.ForwardSet{
 			{Name: "web", Specs: []string{"3000:localhost:3000", "3001:localhost:3001"}},
 		},
+		HasMeta: true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Build() = %+v, want %+v", got, want)
@@ -76,8 +77,9 @@ Host nas
 		t.Fatalf("Build(ubuntu) errs = %v, want none", errs)
 	}
 	wantUbuntu := hostmodel.Host{
-		Alias: "ubuntu",
-		Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}},
+		Alias:   "ubuntu",
+		Paths:   []probe.Path{{Name: "lan", Host: "192.0.2.10"}},
+		HasMeta: true,
 	}
 	if !reflect.DeepEqual(ubuntu, wantUbuntu) {
 		t.Errorf("Build(ubuntu) = %+v, want %+v", ubuntu, wantUbuntu)
@@ -92,6 +94,7 @@ Host nas
 		Paths:    []probe.Path{{Name: "vpn", Host: "198.51.100.20"}},
 		Tags:     []string{"storage"},
 		Forwards: []hostmodel.ForwardSet{{Name: "web", Specs: []string{"8080:localhost:80"}}},
+		HasMeta:  true,
 	}
 	if !reflect.DeepEqual(nas, wantNas) {
 		t.Errorf("Build(nas) = %+v, want %+v", nas, wantNas)
@@ -400,5 +403,83 @@ func TestLoad_MissingRootErrors(t *testing.T) {
 	}
 	if hosts != nil || warnings != nil {
 		t.Errorf("Load() hosts = %v, warnings = %v, want nil on error", hosts, warnings)
+	}
+}
+
+func TestBuild_FileMetaHide(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		config   string
+		wantMeta bool
+		wantHide bool
+		wantErrs int
+	}{
+		{name: "plain block has no meta", config: "Host a\n  HostName 192.0.2.1\n"},
+		{name: "any verb counts as meta", config: "# @sasash tags x\nHost a\n  HostName 192.0.2.1\n", wantMeta: true},
+		{name: "unknown verb still counts as meta", config: "# @sasash whatever\nHost a\n  HostName 192.0.2.1\n", wantMeta: true},
+		{name: "hide", config: "# @sasash hide\nHost a\n  HostName 192.0.2.1\n", wantMeta: true, wantHide: true},
+		{name: "hide with an argument is malformed, not hidden", config: "# @sasash hide me\nHost a\n  HostName 192.0.2.1\n", wantMeta: true, wantErrs: 1},
+		{name: "the next host's meta is not this one's", config: "Host a\n  HostName 192.0.2.1\n# @sasash hide\nHost b\n  HostName 192.0.2.2\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, errs := hostmodel.Build(block(t, tt.config, "a"))
+			if got.HasMeta != tt.wantMeta || got.Hidden != tt.wantHide || len(errs) != tt.wantErrs {
+				t.Errorf("Build() HasMeta %v, Hidden %v, errs %v; want %v, %v, %d", got.HasMeta, got.Hidden, errs, tt.wantMeta, tt.wantHide, tt.wantErrs)
+			}
+			if got.File != "" {
+				t.Errorf("Build() File = %q for a path-less parse, want empty", got.File)
+			}
+		})
+	}
+}
+
+func TestLoad_FileIsTheDeclaringFile(t *testing.T) {
+	t.Parallel()
+	// The facts a tiered list needs: which file declares each host, and
+	// whether it carries meta — across the root, sasash.conf, and another
+	// Included file.
+	home := t.TempDir()
+	ssh := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(filepath.Join(ssh, "config.d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(ssh, "config")
+	managed := filepath.Join(ssh, "config.d", "sasash.conf")
+	extra := filepath.Join(ssh, "work.conf")
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(root, "Include ~/.ssh/config.d/sasash.conf\nInclude work.conf\n# @sasash tags home\nHost described\n  HostName 192.0.2.3\nHost plain\n  HostName 192.0.2.4\n")
+	write(managed, "# @sasash path lan 192.0.2.1\nHost web\n  HostName 192.0.2.1\nHost bare\n  HostName 192.0.2.5\n")
+	write(extra, "# @sasash hide\nHost secret\n  HostName 192.0.2.2\nHost office\n  HostName 192.0.2.6\n")
+	hosts, warnings, err := hostmodel.Load(root, home)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("Load() warnings %v, err %v", warnings, err)
+	}
+	type fact struct {
+		file   string
+		meta   bool
+		hidden bool
+	}
+	got := map[string]fact{}
+	for _, h := range hosts {
+		got[h.Alias] = fact{h.File, h.HasMeta, h.Hidden}
+	}
+	want := map[string]fact{
+		"web":       {managed, true, false},  // declared in sasash.conf, with meta
+		"bare":      {managed, false, false}, // declared in sasash.conf, no meta of its own
+		"secret":    {extra, true, true},     // an Included file, hidden
+		"office":    {extra, false, false},   // an Included file, ambient
+		"described": {root, true, false},     // ~/.ssh/config, meta makes it described
+		"plain":     {root, false, false},    // ~/.ssh/config, ambient
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Load() facts = %v, want %v", got, want)
 	}
 }
