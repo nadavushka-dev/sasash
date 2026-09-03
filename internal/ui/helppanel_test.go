@@ -27,14 +27,14 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 	// KeyMap that carries help text appears with its key and description.
 	m := tallHelp(t)
 	view := m.View()
-	if !ui.HelpOpen(m) || !strings.Contains(view, "? keys — ? or esc closes") {
+	if !ui.HelpOpen(m) || !strings.Contains(view, "? keys — ? q esc closes") {
 		t.Fatalf("? should open the keys panel:\n%s", view)
 	}
 	// A row is the key, padding, then the description on ONE line: a
 	// key and a description found apart do not count.
 	row := func(h key.Help) bool {
 		for _, l := range strings.Split(view, "\n") {
-			if i := strings.Index(l, h.Key); i >= 0 && strings.Contains(l[i+len(h.Key):], "  "+h.Desc) {
+			if rest, ok := strings.CutPrefix(l, "   "+h.Key+" "); ok && strings.Contains(rest, " "+h.Desc) {
 				return true
 			}
 		}
@@ -180,7 +180,7 @@ func TestModel_View_FooterIsAWhisper(t *testing.T) {
 		keys []string
 		want string
 	}{
-		{name: "tunnels focus", keys: []string{"l"}, want: "space toggle set"},
+		{name: "tunnels focus", keys: []string{"l"}, want: "esc/h host list · j/k move"}, // the way out leads, so an 80-col cut keeps it
 		{name: "filter", keys: []string{"/"}, want: "apply filter"},
 		{name: "prompt", keys: []string{"a"}, want: "connect · esc cancel"}, // the same separator as the whisper
 		{name: "settings", keys: []string{"o"}, want: "back / close"},

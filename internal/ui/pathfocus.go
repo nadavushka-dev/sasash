@@ -175,7 +175,7 @@ type pathsKeys struct{}
 
 func (pathsKeys) ShortHelp() []key.Binding {
 	return []key.Binding{
-		key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "move")),
+		moveKeys,
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "make active")),
 		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "keep current")),
 	}

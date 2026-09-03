@@ -75,7 +75,7 @@ func ContextKeymaps() []help.KeyMap {
 	// (filterKeys stays out: SPEC §5 keeps the filter's two keys to its
 	// own footer.)
 	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}}
-	for mode := promptConnect; mode <= promptEditFwd; mode++ {
+	for mode := promptConnect; mode < promptModeCount; mode++ {
 		out = append(out, promptKeys{mode: mode})
 	}
 	return out

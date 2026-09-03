@@ -583,7 +583,7 @@ func TestModel_View_HelpListsSettings(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "? keys") || strings.Contains(view, "o settings") {
 		t.Errorf("View() footer should be the whisper:\n%s", view)
 	}
-	if view := press(t, m, "?").View(); !strings.Contains(view, "settings") || !strings.Contains(view, "keys — ? or esc closes") {
+	if view := press(t, m, "?").View(); !strings.Contains(view, "settings") || !strings.Contains(view, "keys — ? q esc closes") {
 		t.Errorf("View() keys panel missing the o entry:\n%s", view)
 	}
 }

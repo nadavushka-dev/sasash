@@ -454,6 +454,8 @@ const (
 	promptTunnelName
 	promptTunnelSpecs
 	promptEditFwd // E: a highlighted forward's spec, prefilled
+
+	promptModeCount // sentinel: every mode above is walked by the keys panel
 )
 
 // New builds the root model. The prober's zero value probes for real and

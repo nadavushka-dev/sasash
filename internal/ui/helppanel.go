@@ -62,7 +62,7 @@ func (m Model) helpGroups() []helpGroup {
 func promptGroupKeys() []key.Binding {
 	var enters, escs []string
 	seen := map[string]bool{}
-	for mode := promptConnect; mode <= promptEditFwd; mode++ {
+	for mode := promptConnect; mode < promptModeCount; mode++ {
 		for _, b := range (promptKeys{mode: mode}).ShortHelp() {
 			h := b.Help()
 			if seen[h.Key+h.Desc] {
@@ -119,7 +119,7 @@ func padRight(s string, w int) string {
 
 // helpTitle marks the panel: ? and q close it, unlike an attention
 // popup, which wants esc or enter.
-const helpTitle = "keys — ? or esc closes"
+const helpTitle = "keys — ? q esc closes"
 
 // openHelp shows the panel. (While it is open the popup owns the keys,
 // and ? closes it there — see popupKey.)

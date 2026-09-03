@@ -84,7 +84,8 @@ func DefaultKeyMap() KeyMap {
 // builds from these bindings. The context keymaps below are what the
 // footer shows while a surface holds the keys.
 
-// moveKeys is the j/k row every focus and panel shares.
+// moveKeys is the j/k row every focus and panel shares (paths, tunnels,
+// settings, the popup).
 var moveKeys = key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "move"))
 
 // actionsLine is the keys panel's last section, naming the actions.toml
@@ -134,12 +135,14 @@ func (p promptKeys) FullHelp() [][]key.Binding {
 type tunnelsKeys struct{ k KeyMap }
 
 func (t tunnelsKeys) ShortHelp() []key.Binding {
+	// The way out comes first: a narrow footer cuts the tail, and this
+	// is the one line whose job is to say how to leave the focus.
 	return []key.Binding{
+		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "host list")),
 		moveKeys,
 		t.k.Toggle,
 		t.k.CancelFwd,
 		t.k.EditFwd,
-		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "host list")),
 	}
 }
 

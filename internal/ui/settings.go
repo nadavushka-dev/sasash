@@ -329,7 +329,7 @@ type settingsKeys struct{}
 
 func (settingsKeys) ShortHelp() []key.Binding {
 	return []key.Binding{
-		key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "move")),
+		moveKeys,
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back / close")),
 	}
