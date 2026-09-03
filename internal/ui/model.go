@@ -69,7 +69,7 @@ func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		if _, divider := item.(dividerItem); divider {
 			renderDivider(w, d.styles, m.Width())
 		}
-		return
+		return // the spacer renders as its blank line
 	}
 	if index == m.Index() {
 		if d.dim {

@@ -89,6 +89,17 @@ func TestModel_View_TiersAndDivider(t *testing.T) {
 	if !order(view, "› web", "bare", "described", "other entries ─", "plain", "office") {
 		t.Errorf("View() rows out of tier order:\n%s", view)
 	}
+	// A blank spacer row sits between the last managed row and the
+	// divider (breathing room), and is skipped like the divider.
+	lines := strings.Split(view, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "other entries ─") {
+			// Blank across the whole list column: up to where the rule ends.
+			if col := strings.LastIndex(l, "─") + len("─"); i == 0 || strings.TrimSpace(lines[i-1][:min(col, len(lines[i-1]))]) != "" {
+				t.Errorf("View() line above the divider should be blank in the list column:\n%s", view)
+			}
+		}
+	}
 	// The cursor skips the divider both ways, and g/G land on hosts.
 	m = press(t, m, "j", "j", "j")
 	if h, _ := m.Selected(); h.Alias != "plain" {

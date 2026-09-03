@@ -20,11 +20,20 @@ import (
 // leaves the rows altogether unless a filter term names it, the way a
 // folded variant does.
 
-// dividerItem is the row between the tiers. It is not a host: the cursor
-// never rests on it, and no filter matches it.
+// dividerItem is the row between the tiers and spacerItem the blank row
+// above it (breathing room after the last managed host). Neither is a
+// host: the cursor never rests on them, and no filter matches them.
 type dividerItem struct{}
+type spacerItem struct{}
 
 func (dividerItem) FilterValue() string { return "" }
+func (spacerItem) FilterValue() string  { return "" }
+
+// isHost reports a row the cursor may rest on.
+func isHost(it list.Item) bool {
+	_, ok := it.(hostItem)
+	return ok
+}
 
 // dividerLabels are the divider's wordings, longest first: the pane
 // takes the longest that fits whole, never a clipped one.
@@ -42,8 +51,9 @@ func (m Model) managed(h hostmodel.Host) bool {
 }
 
 // tierRows are the unfiltered rows: managed hosts, then — when both
-// tiers exist — the divider and the ambient hosts. One tier alone is
-// neither divided nor dimmed: de-emphasis needs something to contrast.
+// tiers exist — a blank spacer, the divider, and the ambient hosts. One
+// tier alone is neither divided nor dimmed: de-emphasis needs something
+// to contrast.
 func (m Model) tierRows(hosts []hostmodel.Host) []list.Item {
 	var managed, ambient []list.Item
 	for _, h := range hosts {
@@ -60,29 +70,31 @@ func (m Model) tierRows(hosts []hostmodel.Host) []list.Item {
 		}
 		return plain
 	}
-	return append(append(managed, dividerItem{}), ambient...)
+	return append(append(managed, spacerItem{}, dividerItem{}), ambient...)
 }
 
 // rowKey identifies a row for change detection.
 func rowKey(it list.Item) string {
-	if h, ok := it.(hostItem); ok {
-		return h.host.Alias
+	switch it.(type) {
+	case hostItem:
+		return it.(hostItem).host.Alias
+	case spacerItem:
+		return "\x00spacer"
 	}
 	return "\x00divider"
 }
 
-// skipDivider moves the cursor off the divider in the direction it was
-// travelling (down past it, or up), so it never rests there.
+// skipDivider moves the cursor off the spacer and divider rows in the
+// direction it was travelling (down past them, or up), so it never
+// rests there. They sit together between two non-empty tiers, so at
+// most two steps either way land on a host.
 func skipDivider(l *list.Model, before int) {
-	if _, divider := l.SelectedItem().(dividerItem); !divider {
-		return
-	}
-	// The divider is only ever between two non-empty tiers, so one step
-	// either way lands on a host.
-	if l.Index() >= before {
-		l.CursorDown()
-	} else {
-		l.CursorUp()
+	for n := 0; n < 2 && l.SelectedItem() != nil && !isHost(l.SelectedItem()); n++ {
+		if l.Index() >= before {
+			l.CursorDown()
+		} else {
+			l.CursorUp()
+		}
 	}
 }
 
