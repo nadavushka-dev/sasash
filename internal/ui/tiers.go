@@ -32,7 +32,8 @@ var dividerLabels = []string{"other ssh_config entries", "other entries", "other
 
 // managed reports the facts-only classification: the block lives in
 // sasash.conf (paths compared cleaned, as the include resolver spelled
-// them) or it says anything to sasash.
+// them — a sasash.conf reached by another spelling tiers by its meta,
+// which everything sasash writes carries) or it says anything to sasash.
 func (m Model) managed(h hostmodel.Host) bool {
 	if h.HasMeta {
 		return true
@@ -41,7 +42,8 @@ func (m Model) managed(h hostmodel.Host) bool {
 }
 
 // tierRows are the unfiltered rows: managed hosts, then — when both
-// tiers exist — the divider and the ambient hosts.
+// tiers exist — the divider and the ambient hosts. One tier alone is
+// neither divided nor dimmed: de-emphasis needs something to contrast.
 func (m Model) tierRows(hosts []hostmodel.Host) []list.Item {
 	var managed, ambient []list.Item
 	for _, h := range hosts {
@@ -52,7 +54,11 @@ func (m Model) tierRows(hosts []hostmodel.Host) []list.Item {
 		}
 	}
 	if len(managed) == 0 || len(ambient) == 0 {
-		return append(managed, ambient...)
+		plain := make([]list.Item, 0, len(hosts))
+		for _, h := range hosts {
+			plain = append(plain, hostItem{host: h})
+		}
+		return plain
 	}
 	return append(append(managed, dividerItem{}), ambient...)
 }
@@ -71,18 +77,12 @@ func skipDivider(l *list.Model, before int) {
 	if _, divider := l.SelectedItem().(dividerItem); !divider {
 		return
 	}
+	// The divider is only ever between two non-empty tiers, so one step
+	// either way lands on a host.
 	if l.Index() >= before {
 		l.CursorDown()
 	} else {
 		l.CursorUp()
-	}
-	// Still on it (a one-row list edge): the other way is a host.
-	if _, divider := l.SelectedItem().(dividerItem); divider {
-		if l.Index() >= before {
-			l.CursorUp()
-		} else {
-			l.CursorDown()
-		}
 	}
 }
 

@@ -523,7 +523,12 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		fwdIdx: -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
-	return m.applyTheme(idx)
+	m = m.applyTheme(idx)
+	// The rows need the model to classify tiers, so they are seeded here
+	// — Unfiltered at construction, so SetItems' cmd is nil and nothing
+	// is dropped (under a filter that cmd is the only refill: see v).
+	m.list.SetItems(m.listRows())
+	return m
 }
 
 // applyTheme is the whole theme switch (crush pattern): rebuild Styles
@@ -538,7 +543,6 @@ func (m Model) applyTheme(idx int) Model {
 	m.help.Styles.FullKey = m.styles.HelpKey
 	m.help.Styles.FullDesc = m.styles.HelpDesc
 	m.help.Styles.FullSeparator = m.styles.HelpSep
-	m.list.SetItems(m.listRows())
 	return m
 }
 
@@ -634,12 +638,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.list.Index()
 	next, cmd := m.update(msg)
 	n := next.(Model)
+	// Backstop for the early-return paths (half pages, reloads, a
+	// filter clearing): the key path corrects itself before its
+	// selection tail, so this is a no-op there.
 	skipDivider(&n.list, before)
 	return n.settleFocus(), cmd
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before, _ := m.Selected()
+	beforeIdx := m.list.Index()
 	var rowsCmd tea.Cmd // a SetItems round that must reach the runtime
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -1210,6 +1218,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	cmd = tea.Batch(cmd, rowsCmd)
+	// Off the divider BEFORE the selection tail below, so crossing it
+	// counts as the host change it is: the new host's status is fetched,
+	// never the old host's shown as its own.
+	skipDivider(&m.list, beforeIdx)
 	// A new host under the cursor: whatever status it had is stale — the
 	// tick refreshes only the selected host — so its rows go back to
 	// pending while a fresh poll runs. Never show a stale state as live.

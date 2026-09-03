@@ -63,8 +63,21 @@ func PickerOpen(m Model) bool { return m.picker.open() }
 func IsManaged(m Model, h hostmodel.Host) bool { return m.managed(h) }
 func EditTarget(m Model) string                { return m.editTarget() }
 
-// Editing reports the file the running editor handoff was opened on.
-func Editing(m Model) string { return m.editing }
+// Editing reports the file the running editor handoff was opened on;
+// SettingsEditExec is the process settings' "edit config file" builds;
+// AmbientRows lists the rows the list currently holds below the tier
+// line (styled dim), in order.
+func Editing(m Model) string             { return m.editing }
+func SettingsEditExec(m Model) *exec.Cmd { return settingsEditExec(m) }
+func AmbientRows(m Model) []string {
+	var out []string
+	for _, it := range m.list.Items() {
+		if h, ok := it.(hostItem); ok && h.ambient {
+			out = append(out, h.host.Alias)
+		}
+	}
+	return out
+}
 
 // WithRecordHandoff swaps the handoff stamp hook so tests can observe it.
 func WithRecordHandoff(m Model, f func(string) error) Model {

@@ -108,10 +108,22 @@ func TestModel_View_TiersAndDivider(t *testing.T) {
 	if view := press(t, m, "G").View(); !strings.Contains(view, "$ ssh office") {
 		t.Errorf("View() on an ambient host should preview ssh:\n%s", view)
 	}
-	// A single tier has no divider and no split.
+	// The ambient rows — and only they — carry the dim style, in both the
+	// unfiltered and the filtered row builds.
+	if got := ui.AmbientRows(m); !reflect.DeepEqual(got, []string{"plain", "office"}) {
+		t.Errorf("AmbientRows() = %v, want [plain office]", got)
+	}
+	if got := ui.AmbientRows(press(t, m, "/", "e")); !reflect.DeepEqual(got, []string{"plain", "office"}) {
+		t.Errorf("AmbientRows() under a filter = %v, want [plain office]", got)
+	}
+	// A single tier has no divider, no split, and nothing dimmed: there
+	// is nothing to contrast with.
 	one := tierModel(t, tierHosts()[:1])
 	if view := one.View(); strings.Contains(view, "other entries ─") || strings.Contains(view, "managed)") {
 		t.Errorf("View() with one tier should have no divider or split:\n%s", view)
+	}
+	if got := ui.AmbientRows(one); len(got) != 0 {
+		t.Errorf("AmbientRows() with only ambient hosts = %v, want none dimmed", got)
 	}
 }
 
@@ -126,13 +138,13 @@ func TestModel_Update_TiersUnderFilter(t *testing.T) {
 	}
 	// Naming the hidden host's whole alias reveals it.
 	f = press(t, m, "/", "s", "e", "c", "r", "e", "t")
-	if view := f.View(); !strings.Contains(view, "secret") {
-		t.Errorf("View() filtering by the hidden alias should reveal it:\n%s", view)
+	if h, ok := f.Selected(); !ok || h.Alias != "secret" {
+		t.Errorf("filtering by the hidden alias should reveal it as a row: selected %q, ok %v:\n%s", h.Alias, ok, f.View())
 	}
 	// A prefix does not.
 	f = press(t, m, "/", "s", "e", "c", "r")
-	if view := f.View(); strings.Contains(view, "secret") {
-		t.Errorf("View() filtering by a prefix should not reveal a hidden host:\n%s", view)
+	if _, ok := f.Selected(); ok {
+		t.Errorf("filtering by a prefix should not reveal a hidden host:\n%s", f.View())
 	}
 	// Back out of the filter: the tiers and the divider return.
 	f = press(t, f, "esc")
@@ -202,11 +214,76 @@ func TestModel_Update_EditOpensTheDeclaringFile(t *testing.T) {
 	if cmd == nil || ui.Editing(next.(ui.Model)) != confPath {
 		t.Errorf("settings edit: cmd %v, editing %q; want sasash.conf", cmd != nil, ui.Editing(next.(ui.Model)))
 	}
+	if got := ui.SettingsEditExec(s).Args; !reflect.DeepEqual(got, []string{"vi", confPath}) {
+		t.Errorf("SettingsEditExec().Args on an ambient host = %v, want vi %s", got, confPath)
+	}
 	// No host selected, or a host without a file: sasash.conf.
 	if got := ui.EditTarget(tierModel(t, nil)); got != confPath {
 		t.Errorf("EditTarget() with no hosts = %q, want sasash.conf", got)
 	}
 	if got := ui.EditTarget(tierModel(t, []hostmodel.Host{{Alias: "x", Paths: []probe.Path{{Host: "192.0.2.9"}}}})); got != confPath {
 		t.Errorf("EditTarget() for a file-less host = %q, want sasash.conf", got)
+	}
+}
+
+func TestModel_Update_ThemeUnderFilterKeepsTheRows(t *testing.T) {
+	t.Parallel()
+	// Cycling the theme under an applied filter must not blank the match
+	// set (SetItems under a filter returns the only refill cmd).
+	m := press(t, tierModel(t, tierHosts()), "/", "e", "enter")
+	if _, ok := m.Selected(); !ok {
+		t.Fatalf("filter applied but nothing selected:\n%s", m.View())
+	}
+	m = press(t, m, "t")
+	if h, ok := m.Selected(); !ok || strings.Contains(m.View(), "no hosts match") {
+		t.Errorf("after t under a filter: selected %q ok %v:\n%s", h.Alias, ok, m.View())
+	}
+	m = press(t, m, "o", "j", "j", "enter", "j", "enter") // settings → theme picker → pick
+	if h, ok := m.Selected(); !ok || strings.Contains(m.View(), "no hosts match") {
+		t.Errorf("after the theme picker under a filter: selected %q ok %v:\n%s", h.Alias, ok, m.View())
+	}
+}
+
+func TestModel_Update_CrossingTheDividerFetchesStatus(t *testing.T) {
+	t.Parallel()
+	// Landing on a host across the divider is a selection change like any
+	// other: its status is fetched, the old host's never shown as its own.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "plain")
+	d := fakedial.New()
+	hosts := []hostmodel.Host{
+		{Alias: "web", Paths: []probe.Path{{Host: "192.0.2.1"}}, File: confPath},
+		{Alias: "plain", Paths: []probe.Path{{Host: "192.0.2.4"}}, File: "/home/u/.ssh/config"},
+	}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: time.Millisecond}, r, ui.Config{ConfPath: confPath, Tunnels: tunnelEngine(t, r, d)})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = feed(t, m, m.Init())
+	before := len(r.CallKeys())
+	next, cmd := m.Update(keyMsg("j"))
+	m = next.(ui.Model)
+	if h, _ := m.Selected(); h.Alias != "plain" || cmd == nil {
+		t.Fatalf("j across the divider: selected %q, cmd %v; want plain and its status poll", h.Alias, cmd != nil)
+	}
+	m = feedAll(t, m, cmd)
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check plain"}) {
+		t.Errorf("calls after crossing down = %v, want plain's poll", got)
+	}
+	before = len(r.CallKeys())
+	next, cmd = m.Update(keyMsg("k"))
+	m = feedAll(t, next.(ui.Model), cmd)
+	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check web"}) {
+		t.Errorf("calls after crossing up = %v, want web's poll", got)
+	}
+}
+
+func TestModel_Update_HideTakesEffectOnReload(t *testing.T) {
+	t.Parallel()
+	// Adding "# @sasash hide" in the editor: the host leaves the rows on
+	// the reload the editor's return triggers.
+	m := ui.WithEditor(tierModel(t, tierHosts()), []string{"vi"}, "", confPath)
+	edited := tierHosts()
+	edited[0].Hidden = true // plain
+	m = reloadAndProbe(t, m, edited)
+	if view := m.View(); strings.Contains(view, "plain") {
+		t.Errorf("View() after a reload that hid plain still lists it:\n%s", view)
 	}
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -174,7 +175,7 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 			}
 			s.pane = settingsOff
 			m.editing = m.confPath
-			return m, tea.ExecProcess(editorExecOn(m.editor, m.confPath), func(err error) tea.Msg {
+			return m, tea.ExecProcess(settingsEditExec(m), func(err error) tea.Msg {
 				return editorExitMsg{err: err}
 			})
 		case entryTheme:
@@ -239,6 +240,10 @@ func (m Model) setTheme(idx int) (tea.Model, tea.Cmd) {
 	save, name := m.saveTheme, Themes[idx].Name
 	return m, func() tea.Msg { return themeSavedMsg{err: save(name)} }
 }
+
+// settingsEditExec is the ONE construction site of settings' editor
+// process: always sasash.conf, whatever host is selected.
+func settingsEditExec(m Model) *exec.Cmd { return editorExecOn(m.editor, m.confPath) }
 
 // settingsView renders the panel that replaces the panes while open.
 func (m Model) settingsView() string {
