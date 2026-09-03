@@ -676,6 +676,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.popup.open() {
+			// The room changed: a parked offset would eat the next key.
+			m.popup.offset = min(m.popup.offset, max(len(m.popupBody())-m.popupRoom(), 0))
+		}
 		m.help.Width = msg.Width
 		// The prompt needs an explicit width to get textinput's horizontal
 		// viewport: without one, long input silently loses its tail and
@@ -775,7 +779,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spawnDoneMsg:
 		if msg.err != nil {
-			m.notice = msg.err.Error()
+			m.notice = cleanLine(msg.err.Error())
 			lines := []string{}
 			if len(msg.argv) > 0 {
 				lines = append(lines, "ran: "+strings.Join(msg.argv, " "))
@@ -858,7 +862,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// just typed it, so it goes.
 			reason := oneLineText(string(msg.res.Stderr))
 			reason = strings.TrimPrefix(reason, adhocDest(m.pending)+": ")
-			m.notice = "ssh -fN failed: " + reason + " — keys/agent, or connect once"
+			m.notice = "ssh -fN failed: " + cleanLine(reason) + " — keys/agent, or connect once"
 			m = m.show("ssh -fN failed", append([]string{strings.Join(adhocTunnelArgv(m.pending), " "), "auth must be keys or an agent (BatchMode) — or connect once without -N"}, reasonLines(errors.New(strings.TrimSpace(string(msg.res.Stderr))))...)...)
 		} else {
 			m.notice = "tunnel up in the background"
@@ -938,7 +942,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(msg.warnings) > 1 {
 				lines := make([]string, len(msg.warnings))
 				for i, w := range msg.warnings {
-					lines[i] = w.Error()
+					lines[i] = cleanLine(w.Error())
 				}
 				m = m.show("config: "+fmt.Sprint(len(msg.warnings))+" warnings", lines...)
 			}
@@ -1422,9 +1426,11 @@ func (m Model) View() string {
 	body = clampHeight(body, m.contentHeight())
 
 	preview := m.previewView()
-	if m.settings.pane != settingsOff || m.popup.open() {
+	if m.settings.pane != settingsOff {
 		preview = "" // the panel's own footer says what enter does
 	}
+	// Under the popup the bottom line is its one-line partner: every
+	// popup sets one, and a notice replaces the preview below.
 	if m.mode != promptNone {
 		label := "connect:"
 		switch m.mode {

@@ -146,14 +146,23 @@ func TestModel_View_PopupScrolls(t *testing.T) {
 	if view := press(t, m, "G", "j", "j", "j", "k").View(); !strings.Contains(view, "   warning line 17") {
 		t.Errorf("View() after over-scrolling down, k should still move:\n%s", view)
 	}
-	// A frame that grows after G: the stored offset is re-clamped at
-	// render so the window shows a full screen, not a sliver.
+	// A frame that grows after G: the offset is re-clamped on the resize,
+	// so the window shows a full screen and the very next k moves.
 	small := press(t, update(t, m, tea.WindowSizeMsg{Width: 100, Height: 14}), "G")
 	if view := small.View(); !strings.Contains(view, "lines 34–40 of 40") {
 		t.Fatalf("View() at height 14 after G:\n%s", view)
 	}
-	if view := update(t, small, tea.WindowSizeMsg{Width: 100, Height: 30}).View(); !strings.Contains(view, "lines 18–40 of 40") {
+	grown := update(t, small, tea.WindowSizeMsg{Width: 100, Height: 30})
+	if view := grown.View(); !strings.Contains(view, "lines 18–40 of 40") {
 		t.Errorf("View() after growing the frame should re-clamp to a full screen:\n%s", view)
+	}
+	if view := press(t, grown, "k").View(); !strings.Contains(view, "lines 17–39 of 40") {
+		t.Errorf("View() one k after the resize should move one row:\n%s", view)
+	}
+	// The mirrored edge: half pages above the top park nothing; the next
+	// j moves one row.
+	if view := press(t, m, "g", "ctrl+u", "ctrl+u", "ctrl+u", "j").View(); !strings.Contains(view, "lines 2–24 of 40") {
+		t.Errorf("View() j after over-scrolling up should move one row:\n%s", view)
 	}
 	m = press(t, m, "g", "j", "j")
 	if view := m.View(); !strings.Contains(view, "   warning line 03") || strings.Contains(view, "   warning line 01") {
@@ -297,6 +306,16 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		if ui.PopupOpen(m) || !strings.Contains(m.View(), "web up") {
 			t.Errorf("a successful tunnel action is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
 		}
+		// A successful ad-hoc -N too.
+		argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "root@192.0.2.99"}
+		a := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, argv...), fakedial.New()))
+		a = press(t, a, "a")
+		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
+		next, cmd = a.Update(keyMsg("enter"))
+		a = update(t, next.(ui.Model), cmd())
+		if ui.PopupOpen(a) || !strings.Contains(a.View(), "tunnel up in the background") {
+			t.Errorf("a successful -N is a one-liner: popup %v:\n%s", ui.PopupOpen(a), a.View())
+		}
 	})
 	t.Run("the cache popup sets the one-line form and hides the command line", func(t *testing.T) {
 		t.Parallel()
@@ -322,6 +341,39 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		view := m.View()
 		if strings.ContainsAny(view, "\r\t") || strings.Contains(view, "\x1b[2J") || !strings.Contains(view, "midcarriage and [2J[H wipe") {
 			t.Errorf("View() should carry the reason with control characters dropped:\n%s", view)
+		}
+	})
+	t.Run("control characters in config warnings, spawn and -N reasons never reach the frame", func(t *testing.T) {
+		t.Parallel()
+		dirty := "bad\rmeta\there \x1b[2J\x1b[H"
+		m := ui.WithEditor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New()), []string{"vi"}, "", "/tmp/x/sasash.conf")
+		m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) {
+			return tunnelHosts(), []error{errors.New("host \"a\": " + dirty), errors.New("host \"b\": " + dirty)}, nil
+		})
+		next, reload := m.Update(ui.EditorExit(nil))
+		next, _ = next.(ui.Model).Update(reload())
+		if view := next.(ui.Model).View(); strings.ContainsAny(view, "\r\t\x1b") || !strings.Contains(view, "badmeta here [2J[H") {
+			t.Errorf("the reload popup and its line should be clean:\n%s", view)
+		}
+		// Spawn: the one-line form is clean like the popup.
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
+			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte(dirty), Code: 1}}, "herdr", "tab", "create", "--label", "web", "--no-focus")
+		sp := spawnModel(t, r, herdrCfg("tab"), nil)
+		next, cmd := sp.Update(keyMsg("enter"))
+		sp = update(t, next.(ui.Model), cmd())
+		if view := press(t, sp, "esc").View(); strings.ContainsAny(view, "\r\t\x1b") {
+			t.Errorf("the spawn one-liner should be clean:\n%s", view)
+		}
+		// Ad-hoc -N: same.
+		argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "root@192.0.2.99"}
+		r2 := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").Stub(fakerun.Reply{Result: run.Result{Stderr: []byte(dirty), Code: 255}}, argv...)
+		a := ui.StaticCursor(polled(t, r2, fakedial.New()))
+		a = press(t, a, "a")
+		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
+		next, cmd = a.Update(keyMsg("enter"))
+		a = update(t, next.(ui.Model), cmd())
+		if view := press(t, a, "esc").View(); strings.ContainsAny(view, "\r\t\x1b") {
+			t.Errorf("the -N one-liner should be clean:\n%s", view)
 		}
 	})
 	t.Run("a narrow frame wraps rather than cuts", func(t *testing.T) {

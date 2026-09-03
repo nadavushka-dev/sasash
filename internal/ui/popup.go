@@ -139,8 +139,9 @@ func reasonLines(err error) []string {
 }
 
 // cleanLine drops control characters from one line of remote-influenced
-// text (tabs become spaces) and trims its end: both tiers show stderr
-// through this, so neither can redraw the frame.
+// text (tabs become spaces) and trims its end: every reason either tier
+// shows — ssh's stderr, a tool's reply, a config warning — passes
+// through it, so none can redraw the frame.
 func cleanLine(l string) string {
 	l = strings.Map(func(r rune) rune {
 		switch {
