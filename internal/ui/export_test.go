@@ -44,8 +44,8 @@ var (
 )
 
 // ActiveIndex and SwitchNotice expose the p rules and rendering for
-// table tests; WithSwitcher wires the p hooks; PickerOpen reports the
-// picker owning the keyboard.
+// table tests; WithSwitcher wires the p hooks; PathsFocused reports the
+// paths pane holding focus.
 var (
 	ActiveIndex  = activeIndex
 	SwitchNotice = switchNotice
@@ -56,7 +56,7 @@ func WithSwitcher(m Model, sw func(alias, name string) (pathswitch.Result, error
 	return m
 }
 
-func PickerOpen(m Model) bool { return m.picker.open() }
+func PathsFocused(m Model) bool { return m.focus == focusPaths }
 
 // IsManaged and EditTarget expose the tier classification and e's file
 // (SASASH.2.9) for table tests.

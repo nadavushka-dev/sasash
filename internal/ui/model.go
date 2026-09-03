@@ -299,8 +299,9 @@ type Model struct {
 	// multiplexer; S is the classic handoff.
 	spawn spawnState
 
-	// Path picker (SASASH.2.8): p's panel while open.
-	picker pathPicker
+	// Path selection (SASASH.2.10): the highlighted named path row while
+	// the paths pane holds focus.
+	pathIdx int
 
 	// editing is the file the running editor handoff was opened on.
 	editing string
@@ -418,6 +419,7 @@ type paneFocus int
 const (
 	focusList    paneFocus = iota
 	focusTunnels           // j/k move the forward highlight
+	focusPaths             // j/k move the path highlight (p)
 )
 
 // promptMode says which prompt, if any, owns the keyboard.
@@ -536,7 +538,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 func (m Model) applyTheme(idx int) Model {
 	m.themeIdx = idx
 	m.styles = NewStyles(Themes[idx].Palette)
-	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: m.focus == focusTunnels})
+	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: m.focus != focusList})
 	m.help.Styles.ShortKey = m.styles.HelpKey
 	m.help.Styles.ShortDesc = m.styles.HelpDesc
 	m.help.Styles.ShortSeparator = m.styles.HelpSep
@@ -552,12 +554,13 @@ func (m Model) applyTheme(idx int) Model {
 func (m Model) setFocus(f paneFocus) Model {
 	m.focus = f
 	m.focusHost = ""
-	if f == focusList {
-		m.fwdIdx = -1
-	} else if host, ok := m.Selected(); ok {
-		m.focusHost = host.Alias
+	m.fwdIdx, m.pathIdx = -1, -1
+	if f != focusList {
+		if host, ok := m.Selected(); ok {
+			m.focusHost = host.Alias
+		}
 	}
-	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: f == focusTunnels})
+	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: f != focusList})
 	return m
 }
 
@@ -569,15 +572,21 @@ func (m Model) setFocus(f paneFocus) Model {
 // focused and no frame shows a focus with nothing marked. A shrink
 // clamps the highlight onto the last remaining row.
 func (m Model) settleFocus() Model {
-	if m.focus != focusTunnels {
-		return m
-	}
 	host, ok := m.Selected()
-	rows, _ := m.forwardRows(host)
-	if !ok || host.Alias != m.focusHost || len(rows) == 0 {
-		return m.setFocus(focusList)
+	switch m.focus {
+	case focusTunnels:
+		rows, _ := m.forwardRows(host)
+		if !ok || host.Alias != m.focusHost || len(rows) == 0 {
+			return m.setFocus(focusList)
+		}
+		m.fwdIdx = min(m.fwdIdx, len(rows)-1)
+	case focusPaths:
+		rows, _ := pathRows(host)
+		if !ok || host.Alias != m.focusHost || len(rows) == 0 {
+			return m.setFocus(focusList)
+		}
+		m.pathIdx = min(m.pathIdx, len(rows)-1)
 	}
-	m.fwdIdx = min(m.fwdIdx, len(rows)-1)
 	return m
 }
 
@@ -904,8 +913,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		before := pathList(m.hosts)
 		m.hosts = msg.hosts
 		m = m.pruneHist()
-		clear(m.blocks)         // sasash.conf may have changed under the preview
-		m.picker = pathPicker{} // its rows came from the old block
+		clear(m.blocks) // sasash.conf may have changed under the preview
 		// The last probe round is index-aligned with the OLD paths: when
 		// they changed in any way — order included — a host would read
 		// another path's state until the batched re-probe lands, so
@@ -946,11 +954,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.notice = ""
-		// The settings panel and the path picker own the keyboard while
-		// open (SPEC §5: action keys inert, like the filter).
-		if m.picker.open() {
-			return m.pickerKey(msg)
-		}
+		// The settings panel owns the keyboard while open (SPEC §5:
+		// action keys inert, like the filter).
 		if m.settings.pane != settingsOff {
 			return m.settingsKey(msg)
 		}
@@ -1005,6 +1010,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m = next
 				}
 			}
+			if m.focus == focusPaths {
+				if next, cmd, handled := m.pathsFocusKey(msg); handled {
+					return next, cmd
+				} else {
+					m = next
+				}
+			}
 			switch {
 			case key.Matches(msg, m.keys.Quit):
 				return m, tea.Quit
@@ -1040,7 +1052,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.notice = "a switch is already running for " + host.Alias
 					return m, nil
 				}
-				return m.openPicker(host), nil
+				return m.focusPathsOn(host), nil
 			case key.Matches(msg, m.keys.Herdr):
 				host, ok := m.Selected()
 				if !ok {
@@ -1084,7 +1096,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, m.keys.FocusRight):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil || m.focus == focusTunnels {
-					return m, nil // already there: l is idempotent
+					return m, nil // already there: l is idempotent (or from the paths pane)
 				}
 				if rows, _ := m.forwardRows(host); len(rows) == 0 {
 					m.notice = "no tunnels on " + host.Alias + " — + adds one"
@@ -1284,8 +1296,8 @@ func (m Model) contentHeight() int {
 func (m Model) helpView() string {
 	var k help.KeyMap = m.keys
 	switch {
-	case m.picker.open():
-		k = pickerKeys{}
+	case m.focus == focusPaths:
+		k = pathsKeys{}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:
@@ -1327,7 +1339,7 @@ func (m Model) View() string {
 	}
 	// The tally is decoration next to the filter term, which explains
 	// why the list is a subset: it is appended only when both fit whole.
-	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff && !m.picker.open() {
+	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff {
 		if with := header + "   " + m.styles.PathExtra.Render(sum); lipgloss.Width(with) <= m.width {
 			header = with
 		}
@@ -1336,12 +1348,7 @@ func (m Model) View() string {
 	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 
 	var body string
-	if m.picker.open() {
-		header += "   " + m.styles.CmdPreview.Render("path")
-		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
-		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.pickerView())
-		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
-	} else if m.settings.pane != settingsOff {
+	if m.settings.pane != settingsOff {
 		header += "   " + m.styles.CmdPreview.Render("settings")
 		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
@@ -1368,9 +1375,6 @@ func (m Model) View() string {
 	preview := m.previewView()
 	if m.settings.pane != settingsOff {
 		preview = "" // the panel's own footer says what enter does
-	}
-	if m.picker.open() {
-		preview = " " + m.styles.HelpDesc.Render(m.pickerPlan())
 	}
 	if m.mode != promptNone {
 		label := "connect:"
@@ -1468,6 +1472,7 @@ func (m Model) detailView() string {
 
 	var b strings.Builder
 	b.WriteString(m.styles.SectionLabel.Render("paths"))
+	marked := m.highlightedPath(host)
 	for i, p := range host.Paths {
 		glyph := m.styles.StatusWait.Render("◌")
 		extra := m.styles.PathExtra.Render("…")
@@ -1482,7 +1487,16 @@ func (m Model) detailView() string {
 				extra = m.styles.PathExtra.Render("down")
 			}
 		}
-		b.WriteString("\n " + glyph)
+		// The mark column exists only while the paths pane holds focus:
+		// the rows keep their width (and their sparkline room) otherwise.
+		mark := ""
+		if m.focus == focusPaths {
+			mark = "  "
+			if i == marked {
+				mark = m.styles.RowMark.Render("› ")
+			}
+		}
+		b.WriteString("\n " + mark + glyph)
 		if nameWidth > 0 {
 			b.WriteString(" " + m.styles.PathName.Render(fmt.Sprintf("%-*s", nameWidth, p.Name)))
 		}
@@ -1533,6 +1547,9 @@ func (m Model) detailView() string {
 // the highlighted action will run"). A set is one ssh call per forward;
 // the first is shown and the rest counted.
 func (m Model) previewView() string {
+	if host, ok := m.Selected(); ok && m.focus == focusPaths {
+		return " " + m.styles.HelpDesc.Render(m.pathPlan(host))
+	}
 	argv, more := m.actionPreview()
 	if argv == nil {
 		return ""
