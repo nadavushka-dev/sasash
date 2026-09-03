@@ -506,8 +506,26 @@ func TestModel_View_PathsFocus(t *testing.T) {
 		func(string) ([]probe.Path, string, bool) {
 			return []probe.Path{pathLAN, {Name: "ts", Host: "203.0.113.50"}}, "192.0.2.10", true
 		}, nil)
-	if view := press(t, m, "esc", "p", "j").View(); !strings.Contains(view, "› ○ ts  198.51.100.5:2222") {
-		t.Errorf("View() should offer ts by name though its host differs in the block:\n%s", view)
+	// The pane keeps its own address on the row; the plan names the
+	// block's, which is what enter writes.
+	if view := press(t, m, "esc", "p", "j").View(); !strings.Contains(view, "› ○ ts  198.51.100.5:2222") || !strings.Contains(view, "p → ts 203.0.113.50") {
+		t.Errorf("View() should offer ts by name and plan the block's address:\n%s", view)
+	}
+	// With the block's HostName on that address, ts is the active row.
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(string) ([]probe.Path, string, bool) {
+			return []probe.Path{pathLAN, {Name: "ts", Host: "203.0.113.50"}}, "203.0.113.50", true
+		}, nil)
+	if view := press(t, m, "esc", "p").View(); !strings.Contains(view, "› ○ ts  198.51.100.5:2222 down ← active") || !strings.Contains(view, "already active") {
+		t.Errorf("View() should judge the active row by the block's address:\n%s", view)
+	}
+	// Exactly one rendered row the block declares is not a choice.
+	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true }, nil)
+	one := reloadAndProbe(t, press(t, m, "esc"), append(tunnelHosts(), hostmodel.Host{Alias: "dual", Paths: []probe.Path{pathLAN, pathWAN}}))
+	next, cmd := press(t, one, "G").Update(keyMsg("p"))
+	if cmd != nil || ui.PathsFocused(next.(ui.Model)) || !strings.Contains(next.(ui.Model).View(), "not sasash.conf's") {
+		t.Errorf("p with one declared row rendered: cmd %v, focused %v:\n%s", cmd != nil, ui.PathsFocused(next.(ui.Model)), next.(ui.Model).View())
 	}
 	// The mark starts on the active row even when it is not the first.
 	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },

@@ -581,8 +581,11 @@ func (m Model) settleFocus() Model {
 		}
 		m.fwdIdx = min(m.fwdIdx, len(rows)-1)
 	case focusPaths:
+		if !ok || host.Alias != m.focusHost {
+			return m.setFocus(focusList)
+		}
 		rows, _ := pathRows(host, m.block(host.Alias))
-		if !ok || host.Alias != m.focusHost || len(rows) == 0 {
+		if len(rows) == 0 {
 			return m.setFocus(focusList)
 		}
 		m.pathIdx = min(m.pathIdx, len(rows)-1)

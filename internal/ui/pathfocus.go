@@ -19,18 +19,21 @@ import (
 
 // pathRows are the rows p moves over: the rendered named paths that the
 // sasash.conf block also declares (by name — Set works by name), in the
-// pane's order, with their index among ALL rendered paths. Unnamed
-// paths cannot be made active, and a rendered name the block lacks
-// would only be refused at enter, so both are skipped but keep their
-// line. The block is the caller's: read fresh at p, cached for frames.
+// pane's order, with their index among ALL rendered paths. Each row is
+// the BLOCK's path of that name: its address is what enter writes, so
+// the plan and the active row are judged against it even when the pane
+// shows another address for the same name. Unnamed paths cannot be
+// made active, and a rendered name the block lacks would only be
+// refused at enter, so both are skipped but keep their line. The block
+// is the caller's: read fresh at p, cached for frames.
 func pathRows(host hostmodel.Host, b pathBlock) (rows []probe.Path, at []int) {
-	declared := make(map[string]bool)
+	declared := make(map[string]probe.Path)
 	for _, p := range namedPaths(b.paths) {
-		declared[p.Name] = true
+		declared[p.Name] = p
 	}
 	for i, p := range host.Paths {
-		if p.Name != "" && declared[p.Name] {
-			rows = append(rows, p)
+		if bp, ok := declared[p.Name]; p.Name != "" && ok {
+			rows = append(rows, bp)
 			at = append(at, i)
 		}
 	}
