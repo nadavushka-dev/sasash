@@ -30,7 +30,7 @@ func TestDetectMux_Table(t *testing.T) {
 		{name: "herdr", env: map[string]string{"HERDR_ENV": "1", "HERDR_PANE_ID": "w24:p16"}, wantMux: ui.MuxHerdr, wantPane: "w24:p16"},
 		{name: "herdr without a pane id", env: map[string]string{"HERDR_ENV": "1"}, wantMux: ui.MuxHerdr},
 		{name: "tmux", env: map[string]string{"TMUX": "/tmp/tmux-501/default,123,0"}, wantMux: ui.MuxTmux},
-		{name: "tmux inside herdr is herdr", env: map[string]string{"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p2", "TMUX": "/tmp/tmux-501/default,123,0"}, wantMux: ui.MuxHerdr, wantPane: "w1:p2"},
+		{name: "tmux inside herdr is tmux: innermost wins", env: map[string]string{"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p2", "TMUX": "/tmp/tmux-501/default,123,0"}, wantMux: ui.MuxTmux},
 		{name: "any value counts as set", env: map[string]string{"HERDR_ENV": "0"}, wantMux: ui.MuxHerdr},
 	}
 	for _, tt := range tests {

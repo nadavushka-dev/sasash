@@ -243,9 +243,9 @@ reports it up — a stale remembered spec cannot ride a live one's listener.
 
 **Spawn (ratified 2026-09-03):** `enter` opens the connection *beside* the TUI so the
 switchboard never leaves the screen: sasash runs the surrounding multiplexer's own CLI — a
-previewed command the user could type — through the run seam. Detection order, first match
-wins: `HERDR_ENV` set → herdr; `TMUX` set → tmux; neither → the OS-window template; no
-template → the `S` handoff with a notice. The spawn target is a settings entry, persisted
+previewed command the user could type — through the run seam. Detection order, innermost
+first, first match wins: `TMUX` set → tmux; `HERDR_ENV` set → herdr; neither → the
+OS-window template; no template → the `S` handoff with a notice. The spawn target is a settings entry, persisted
 beside the theme (`~/.local/state/sasash/spawn-target`; default `tab`), and maps per
 multiplexer:
 
@@ -270,10 +270,10 @@ The outcome is a notice (`spawned ssh web → herdr tab`, or the failing command
 reason — herdr's error message, else the tool's stderr or stdout); each step is given ten
 seconds before it is reported as a failure. A spawn counts as `last connected`. `c` on the
 host row copies `ssh <host>`, the connection the line makes — the spawn line itself is two
-steps and a placeholder, not a shell command. Detection reads the environment as found: a
-tmux server started from a herdr pane carries that pane's `HERDR_*` into every pane it ever
-creates, so inside such a tmux enter still spawns herdr (its ratified place first in the
-order) — even after that herdr pane is gone, when the spawn fails or lands out of sight. Every spawned session rides the alias's ControlMaster, so `X` (`ssh -O
+steps and a placeholder, not a shell command. tmux comes before herdr because a tmux
+started inside a herdr pane sets both — and carries that pane's `HERDR_*` into every pane it
+ever creates, even once the pane is gone — while the user is in the tmux; the reverse
+nesting does not exist. Every spawned session rides the alias's ControlMaster, so `X` (`ssh -O
 exit`) tears down the master and every session on it, tabs included — sasash cannot
 enumerate those sessions (OpenSSH exposes master liveness only), and closing a tab closes
 just that session. No embedded terminal, no daemon: the master socket is the state.

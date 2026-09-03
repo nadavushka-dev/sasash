@@ -17,8 +17,8 @@ import (
 // Spawn (SASASH.4.10): enter opens the connection BESIDE the TUI through
 // the surrounding multiplexer's own CLI — a previewed command the user
 // could type themselves — so the switchboard never leaves the screen.
-// Detection order is ratified: herdr, tmux, an OS-window template, then
-// the classic handoff. Every spawn goes through the run seam.
+// Detection order is ratified, innermost first: tmux, herdr, an
+// OS-window template, then the classic handoff. Every spawn goes through the run seam.
 
 // Mux is the multiplexer sasash runs inside, as detected from the
 // environment.
@@ -54,15 +54,17 @@ type SpawnConfig struct {
 	SaveTarget func(string) error
 }
 
-// DetectMux reads the ratified detection order from the environment:
-// herdr wins over tmux (tmux inside a herdr pane still spawns herdr
-// tabs), and both need only be set, whatever the value.
+// DetectMux reads the ratified detection order from the environment,
+// innermost first: tmux before herdr, because a tmux started inside a
+// herdr pane sets both (and carries the pane's HERDR_* forever, even
+// once that pane is gone) while the user is in the tmux; the reverse
+// nesting does not exist. Both need only be set, whatever the value.
 func DetectMux(getenv func(string) string) (mux Mux, herdrPane string) {
 	switch {
-	case getenv("HERDR_ENV") != "":
-		return MuxHerdr, getenv("HERDR_PANE_ID")
 	case getenv("TMUX") != "":
 		return MuxTmux, ""
+	case getenv("HERDR_ENV") != "":
+		return MuxHerdr, getenv("HERDR_PANE_ID")
 	}
 	return MuxNone, ""
 }
