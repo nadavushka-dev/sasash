@@ -79,8 +79,13 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 		if err := os.WriteFile(path, []byte("wezterm start -- ssh {host}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if got := spawnConfig(home, func(k string) string { return env[k] }).WindowTemplate; got != "wezterm start -- ssh {host}" {
-			t.Errorf("WindowTemplate = %q, want the XDG file's line", got)
+		cfg := spawnConfig(home, func(k string) string { return env[k] })
+		if cfg.WindowTemplate != "wezterm start -- ssh {host}" {
+			t.Errorf("WindowTemplate = %q, want the XDG file's line", cfg.WindowTemplate)
+		}
+		// The failure hint names this file, not the default location.
+		if cfg.WindowPath != path {
+			t.Errorf("WindowPath = %q, want %q", cfg.WindowPath, path)
 		}
 	})
 }

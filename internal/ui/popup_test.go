@@ -227,11 +227,11 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		// the popup says where the command comes from.
 		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
 			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("xterm: no display\n"), Code: 1}}, "xterm\x1b[2J", "-e", "ssh", "web")
-		m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "xterm\x1b[2J -e ssh {host}"}, nil)
+		m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "xterm\x1b[2J -e ssh {host}", WindowPath: "/home/u/.dotfiles/sasash/spawn-window"}, nil)
 		next, cmd := m.Update(keyMsg("enter"))
 		m = update(t, next.(ui.Model), cmd())
 		view := m.View()
-		if !ui.PopupOpen(m) || !strings.Contains(view, "spawn failed for web") || !strings.Contains(view, "ran: xterm[2J -e ssh web") || !strings.Contains(view, "no display") || !strings.Contains(view, "~/.config/sasash/spawn-window") {
+		if !ui.PopupOpen(m) || !strings.Contains(view, "spawn failed for web") || !strings.Contains(view, "ran: xterm[2J -e ssh web") || !strings.Contains(view, "no display") || !strings.Contains(view, "comes from /home/u/.dotfiles/sasash/spawn-window") {
 			t.Errorf("a failed window spawn should show the cleaned argv, the reason and the file:\n%s", view)
 		}
 		if strings.Contains(view, "\x1b") {

@@ -512,6 +512,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 			mux:        cfg.Spawn.Mux,
 			herdrPane:  cfg.Spawn.HerdrPane,
 			window:     cfg.Spawn.WindowTemplate,
+			windowPath: cfg.Spawn.WindowPath,
 			target:     cfg.Spawn.Target,
 			saveTarget: cfg.Spawn.SaveTarget,
 		},
@@ -771,7 +772,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			lines = append(lines, reasonLines(msg.err)...)
 			if msg.where == "window" {
 				// A broken default is self-serviceable: name the file.
-				lines = append(lines, "", spawnWindowHint)
+				lines = append(lines, "")
+				lines = append(lines, m.spawn.windowHint()...)
 			}
 			m = m.show("spawn failed for "+msg.alias, lines...)
 			return m, nil

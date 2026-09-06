@@ -46,7 +46,9 @@ type SpawnConfig struct {
 	// WindowTemplate is the OS-window command outside any multiplexer,
 	// with actions.toml placeholders ({host} is the alias); "" means
 	// nothing to spawn into, so enter hands off with a notice.
+	// WindowPath is the file it is read from, named when it fails.
 	WindowTemplate string
+	WindowPath     string
 	// Target is the persisted spawn target (one of SpawnTargets; unknown
 	// or "" is DefaultSpawnTarget); SaveTarget persists a pick from the
 	// settings picker, nil disables persistence.
@@ -84,6 +86,7 @@ type spawnState struct {
 	mux        Mux
 	herdrPane  string
 	window     string
+	windowPath string
 	target     string
 	saveTarget func(string) error
 }
@@ -185,12 +188,15 @@ func windowArgv(template, alias string) ([]string, error) {
 	return inv.Argv, nil
 }
 
+// windowHint closes the OS-window failure popup: the command that failed
+// is the user's to change, and this is the file — the one the cmd layer
+// read (XDG_CONFIG_HOME moves it), named exactly.
+func (s spawnState) windowHint() []string {
+	return []string{"the window command comes from " + s.windowPath, "(one line, {host} is the alias; an empty file turns it off)"}
+}
+
 // spawnPlanFor builds enter's plan for an alias, or nil when the fallback
 // is the classic handoff.
-// spawnWindowHint closes the OS-window failure popup: the command that
-// failed is the user's to change, and this is where.
-const spawnWindowHint = "the window command is ~/.config/sasash/spawn-window (one line, {host} is the alias; an empty file turns it off)"
-
 func (s spawnState) planFor(alias string) *spawnPlan {
 	target := s.target
 	if _, ok := SpawnTargetIndex(target); !ok {

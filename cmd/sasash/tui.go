@@ -250,7 +250,8 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 	// No file: this OS's default. A file, even empty: exactly what it
 	// says — an empty one is how a macOS user turns the Terminal default
 	// off and gets the handoff instead.
-	tmpl, present := readStateFound(spawnWindowPath(home, getenv))
+	windowPath := spawnWindowPath(home, getenv)
+	tmpl, present := readStateFound(windowPath)
 	if !present {
 		tmpl = defaultWindowTemplate(runtime.GOOS, getenv)
 	}
@@ -258,6 +259,7 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 		Mux:            mux,
 		HerdrPane:      pane,
 		WindowTemplate: tmpl,
+		WindowPath:     windowPath,
 		Target:         target,
 		SaveTarget:     saveStateTo(statePath),
 	}
