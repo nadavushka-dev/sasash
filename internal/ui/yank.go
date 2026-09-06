@@ -133,6 +133,9 @@ func (m Model) copied(msg copyDoneMsg) Model {
 		}
 		return m
 	}
-	m.notice = "clipboard not available — " + msg.value
-	return m.show("clipboard not available here", "the value, to copy off the screen:", "  "+msg.value, "", "tried: "+msg.err.Error())
+	// The value is config-influenced (a HostName, an actions.toml
+	// template): cleaned on both tiers like the reasons are.
+	v := cleanLine(msg.value)
+	m.notice = "clipboard not available — " + v
+	return m.show("clipboard not available here", "the value, to copy off the screen:", "  "+v, "", "tried: "+msg.err.Error())
 }

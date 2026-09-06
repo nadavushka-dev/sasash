@@ -216,6 +216,27 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		if closed := press(t, m, "esc"); !strings.Contains(closed.View(), "herdr tab create failed: herdr server is not running") {
 			t.Errorf("the one-line outcome should remain after closing:\n%s", closed.View())
 		}
+		// A multiplexer step is not the window file's doing: no hint.
+		if strings.Contains(view, "spawn-window") {
+			t.Errorf("a herdr failure should not name the window file:\n%s", view)
+		}
+	})
+	t.Run("window spawn failure names the file and is sanitized", func(t *testing.T) {
+		t.Parallel()
+		// The template is the user's file: its argv is shown cleaned, and
+		// the popup says where the command comes from.
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
+			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("xterm: no display\n"), Code: 1}}, "xterm\x1b[2J", "-e", "ssh", "web")
+		m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "xterm\x1b[2J -e ssh {host}"}, nil)
+		next, cmd := m.Update(keyMsg("enter"))
+		m = update(t, next.(ui.Model), cmd())
+		view := m.View()
+		if !ui.PopupOpen(m) || !strings.Contains(view, "spawn failed for web") || !strings.Contains(view, "ran: xterm[2J -e ssh web") || !strings.Contains(view, "no display") || !strings.Contains(view, "~/.config/sasash/spawn-window") {
+			t.Errorf("a failed window spawn should show the cleaned argv, the reason and the file:\n%s", view)
+		}
+		if strings.Contains(view, "\x1b") {
+			t.Errorf("View() carries the escape:\n%s", view)
+		}
 	})
 	t.Run("ad-hoc -N failure shows the argv, the reason and the hint", func(t *testing.T) {
 		t.Parallel()

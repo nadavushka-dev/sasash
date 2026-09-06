@@ -187,6 +187,10 @@ func windowArgv(template, alias string) ([]string, error) {
 
 // spawnPlanFor builds enter's plan for an alias, or nil when the fallback
 // is the classic handoff.
+// spawnWindowHint closes the OS-window failure popup: the command that
+// failed is the user's to change, and this is where.
+const spawnWindowHint = "the window command is ~/.config/sasash/spawn-window (one line, {host} is the alias; an empty file turns it off)"
+
 func (s spawnState) planFor(alias string) *spawnPlan {
 	target := s.target
 	if _, ok := SpawnTargetIndex(target); !ok {

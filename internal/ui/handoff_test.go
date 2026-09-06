@@ -106,6 +106,33 @@ func probedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 	return update(t, m, m.Init()())
 }
 
+func TestModel_Update_CopyFloorSanitizesValue(t *testing.T) {
+	t.Parallel()
+	// The yanked value is a HostName from the config: on the floor it is
+	// shown on both tiers, so an escape in it must not redraw the frame.
+	hostile := "192.0.2.10\x1b[2J"
+	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{{Name: "lan", Host: hostile}}}}
+	runner := fakerun.New().StubExit(1, ui.Osc52Argv(hostile)...).StubExit(97, ui.ClipToolArgv(hostile)...)
+	dialer := fakedial.New().Up(hostile+":22", 5*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner, ui.Config{})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = update(t, m, m.Init()())
+
+	_, cmd := m.Update(keyMsg("y"))
+	if cmd == nil {
+		t.Fatalf("Update(y) cmd = nil, want clipboard cmd")
+	}
+	m = update(t, m, cmd())
+	popup := m.View()
+	closed := press(t, m, "esc").View()
+	if !ui.PopupOpen(m) || !strings.Contains(popup, "  192.0.2.10[2J") || strings.Contains(popup, "  "+hostile) {
+		t.Errorf("View() popup should show the value cleaned:\n%s", popup)
+	}
+	if !strings.Contains(closed, "clipboard not available — 192.0.2.10[2J") || strings.Contains(closed, "— "+hostile) {
+		t.Errorf("View() notice should carry the value cleaned:\n%s", closed)
+	}
+}
+
 func TestModel_Update_CopyAddr(t *testing.T) {
 	t.Parallel()
 	// y copies the bare active host — the clipboard twin of `sasash addr` —

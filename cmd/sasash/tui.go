@@ -264,25 +264,29 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 }
 
 // defaultWindowTemplate is the OS-window spawn outside any multiplexer,
-// per platform (SASASH.6): under WSL (WSL_DISTRO_NAME set) Windows
-// Terminal opens a tab running ssh in this distro; on Linux the
-// x-terminal-emulator alternative runs it; on macOS Terminal does.
-// Anything else has no default, so enter hands off until
-// ~/.config/sasash/spawn-window says otherwise. {host} lands in the
-// command unescaped — an alias is a plain ssh_config word, never quoted
-// (aliasProblem enforces that for the ones sasash writes), the same
-// trust actions.toml extends.
+// per platform (SASASH.6): under WSL (a Linux build with
+// WSL_DISTRO_NAME set and cmd.exe on PATH) Windows Terminal opens a tab
+// running ssh in this distro; on Linux the x-terminal-emulator
+// alternative runs it; on macOS Terminal does. Anything else has no
+// default, so enter hands off until ~/.config/sasash/spawn-window says
+// otherwise. {host} lands in the command unescaped — an alias is a
+// plain ssh_config word, never quoted (aliasProblem enforces that for
+// the ones sasash writes), the same trust actions.toml extends.
 func defaultWindowTemplate(goos string, getenv func(string) string) string {
-	if distro := getenv("WSL_DISTRO_NAME"); distro != "" {
-		// Through cmd.exe: wt.exe is an app execution alias, which the
-		// WSL interop cannot exec directly on every build (microsoft/WSL
-		// #4969); the distro is quoted, as its name may hold spaces.
-		return "cmd.exe /c wt.exe new-tab wsl.exe -d '" + distro + "' -- ssh {host}"
-	}
 	switch goos {
 	case "darwin":
 		return `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`
 	case "linux":
+		// WSL is a Linux build; the env alone does not prove the Windows
+		// side is reachable (interop can be off), so cmd.exe must be on
+		// PATH — probed rather than wt.exe, an app execution alias that
+		// does not always stat from WSL. Through cmd.exe because the
+		// interop cannot exec that alias directly on every build
+		// (microsoft/WSL #4969); the distro is quoted, as its name may
+		// hold spaces. Without cmd.exe the Linux probe below still runs.
+		if distro := getenv("WSL_DISTRO_NAME"); distro != "" && onPath(getenv("PATH"), "cmd.exe") {
+			return "cmd.exe /c wt.exe new-tab wsl.exe -d '" + distro + "' -- ssh {host}"
+		}
 		// The Debian alternative first, then gnome-terminal by name;
 		// probed on PATH once here, so the default is a terminal that
 		// exists (other desktops set ~/.config/sasash/spawn-window).

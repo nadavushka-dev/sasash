@@ -99,17 +99,22 @@ func TestDefaultWindowTemplate_Table(t *testing.T) {
 		{name: "the alternative wins over gnome-terminal", goos: "linux", env: map[string]string{"PATH": "gnome:alt"}, want: "x-terminal-emulator -e ssh {host}"},
 		{name: "linux without either has no default", goos: "linux", env: map[string]string{"PATH": "empty"}},
 		{name: "a non-executable file does not count", goos: "linux", env: map[string]string{"PATH": "noexec"}},
-		{name: "WSL opens a Windows Terminal tab in this distro through cmd.exe", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu 24.04"}, want: "cmd.exe /c wt.exe new-tab wsl.exe -d 'Ubuntu 24.04' -- ssh {host}"},
+		{name: "WSL opens a Windows Terminal tab in this distro through cmd.exe", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu 24.04", "PATH": "wsl"}, want: "cmd.exe /c wt.exe new-tab wsl.exe -d 'Ubuntu 24.04' -- ssh {host}"},
+		{name: "WSL prefers Windows Terminal over a Linux terminal", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu", "PATH": "alt:wsl"}, want: "cmd.exe /c wt.exe new-tab wsl.exe -d 'Ubuntu' -- ssh {host}"},
+		{name: "WSL without cmd.exe on PATH (interop off) falls back to the Linux probe", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu", "PATH": "alt"}, want: "x-terminal-emulator -e ssh {host}"},
+		{name: "WSL without cmd.exe or a Linux terminal has no default", goos: "linux", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu", "PATH": "empty"}},
+		{name: "WSL_DISTRO_NAME outside a Linux build is ignored", goos: "darwin", env: map[string]string{"WSL_DISTRO_NAME": "Ubuntu", "PATH": "wsl"}, want: `osascript -e 'tell application "Terminal" to do script "ssh {host}"'`},
 		{name: "anything else has no default", goos: "freebsd"},
 	}
 	// PATH entries are names of temp dirs built here: "alt" holds an
-	// executable x-terminal-emulator, "gnome" a gnome-terminal, "noexec"
-	// a non-executable x-terminal-emulator, "empty" nothing.
+	// executable x-terminal-emulator, "gnome" a gnome-terminal, "wsl" a
+	// cmd.exe (the interop mount), "noexec" a non-executable
+	// x-terminal-emulator, "empty" nothing.
 	dirs := map[string]string{}
-	for _, name := range []string{"alt", "gnome", "empty", "noexec"} {
+	for _, name := range []string{"alt", "gnome", "wsl", "empty", "noexec"} {
 		dirs[name] = t.TempDir()
 	}
-	for dir, file := range map[string]string{"alt": "x-terminal-emulator", "gnome": "gnome-terminal"} {
+	for dir, file := range map[string]string{"alt": "x-terminal-emulator", "gnome": "gnome-terminal", "wsl": "cmd.exe"} {
 		if err := os.WriteFile(filepath.Join(dirs[dir], file), []byte("#!/bin/sh\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}

@@ -765,9 +765,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = cleanLine(msg.err.Error())
 			lines := []string{}
 			if len(msg.argv) > 0 {
-				lines = append(lines, "ran: "+strings.Join(msg.argv, " "))
+				// The argv comes from the spawn-window file: cleaned.
+				lines = append(lines, "ran: "+cleanLine(strings.Join(msg.argv, " ")))
 			}
-			m = m.show("spawn failed for "+msg.alias, append(lines, reasonLines(msg.err)...)...)
+			lines = append(lines, reasonLines(msg.err)...)
+			if msg.where == "window" {
+				// A broken default is self-serviceable: name the file.
+				lines = append(lines, "", spawnWindowHint)
+			}
+			m = m.show("spawn failed for "+msg.alias, lines...)
 			return m, nil
 		}
 		m.notice = "spawned ssh " + msg.alias + " → " + msg.where
