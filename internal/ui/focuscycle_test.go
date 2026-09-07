@@ -60,7 +60,7 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 		if !ui.PathsFocused(m) || ui.TunnelsFocused(m) {
 			t.Fatalf("l from the list should focus the paths pane (paths %v, tunnels %v)", ui.PathsFocused(m), ui.TunnelsFocused(m))
 		}
-		if view := m.View(); !strings.Contains(view, "make active") || !strings.Contains(view, "l tunnels pane") {
+		if view := m.View(); !strings.Contains(view, "make active") || !strings.Contains(view, "l tunnels pane") || !strings.HasPrefix(strings.TrimSpace(strings.Split(view, "\n")[len(strings.Split(view, "\n"))-1]), "esc/h keep current") {
 			t.Errorf("View() under the paths focus should show its footer with the way on:\n%s", view)
 		}
 		m = press(t, m, "l")
@@ -128,12 +128,37 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 			t.Errorf("l on a single-path host should focus the tunnels pane")
 		}
 	})
-	t.Run("a host with paths but no tunnels stays on the paths pane and says so", func(t *testing.T) {
+	t.Run("a host with paths but no tunnels: l closes the cycle and says so", func(t *testing.T) {
 		t.Parallel()
 		m, _ := pickerModel(t, fakerun.New()) // dual: two paths, no forwards
 		m = press(t, m, "l", "l")
-		if !ui.PathsFocused(m) || !strings.Contains(m.View(), "no tunnels on dual — + adds one") {
-			t.Errorf("l on to a host without tunnels should say so and keep the paths focus:\n%s", m.View())
+		if ui.PathsFocused(m) || ui.TunnelsFocused(m) || !strings.Contains(m.View(), "no tunnels on dual — + adds one") {
+			t.Errorf("l on to a host without tunnels should return to the list with the reason:\n%s", m.View())
+		}
+	})
+	t.Run("l reads the block fresh, as p does", func(t *testing.T) {
+		t.Parallel()
+		// The hook first answers one path (no choice: l goes to the
+		// tunnels); then two — an out-of-band edit — and the next l must
+		// see them rather than the cached block.
+		both := hostmodel.Host{Alias: "both", Paths: []probe.Path{pathLAN, pathTS}, Forwards: []hostmodel.ForwardSet{{Name: "web", Specs: []string{"3000:localhost:3000"}}}}
+		hosts := append(tunnelHosts(), both)
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "check", "both")
+		d := fakedial.New().Up("192.0.2.10:22", 5*time.Millisecond).Down("198.51.100.5:2222")
+		m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d)})
+		m = feed(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), m.Init())
+		paths := []probe.Path{pathLAN}
+		m = ui.WithSwitcher(m,
+			func(alias, name string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+			func(alias string) ([]probe.Path, string, bool) { return paths, "192.0.2.10", true }, nil)
+		m = press(t, m, "G", "l")
+		if !ui.TunnelsFocused(m) {
+			t.Fatalf("with one path l should reach the tunnels pane")
+		}
+		paths = []probe.Path{pathLAN, pathTS} // the file changed underneath
+		m = press(t, m, "h", "l")
+		if !ui.PathsFocused(m) {
+			t.Errorf("after the edit l should read the block fresh and enter the paths pane")
 		}
 	})
 	t.Run("a declared path the pane does not render is no choice: on to the tunnels", func(t *testing.T) {
@@ -153,8 +178,21 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 				return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true
 			}, nil)
 		m = press(t, m, "G", "l")
-		if !ui.TunnelsFocused(m) || ui.PathsFocused(m) {
-			t.Errorf("l should pass a pane with one rendered path by (paths %v, tunnels %v):\n%s", ui.PathsFocused(m), ui.TunnelsFocused(m), m.View())
+		if !ui.TunnelsFocused(m) || ui.PathsFocused(m) || !strings.Contains(m.View(), "the paths on screen are not sasash.conf's") {
+			t.Errorf("l should pass a pane with one rendered path by, keeping p's diagnostic (paths %v, tunnels %v):\n%s", ui.PathsFocused(m), ui.TunnelsFocused(m), m.View())
+		}
+	})
+	t.Run("the keys panel says what l does at both ends of the cycle", func(t *testing.T) {
+		t.Parallel()
+		m, _ := cycleModel(t)
+		inner := strings.Join(boxLines(press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 80}), "?").View()), "\n")
+		for _, want := range []string{"l/tab      paths / tunnels pane", "l          host list (the cycle closes)", "l          tunnels pane"} {
+			if !strings.Contains(inner, want) {
+				t.Errorf("keys panel missing %q:\n%s", want, inner)
+			}
+		}
+		if strings.Contains(inner, "l/tab      tunnels pane") {
+			t.Errorf("keys panel still gives l/tab its old meaning:\n%s", inner)
 		}
 	})
 	t.Run("a running switch refuses l as it refuses p", func(t *testing.T) {

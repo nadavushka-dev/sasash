@@ -584,7 +584,7 @@ func TestModel_Update_EditForwardGuards(t *testing.T) {
 	m := editModel(t, r, &calls, nil)
 	// No highlight: a hint, nothing opened.
 	m = press(t, m, "E")
-	if ui.Prompting(m) || !strings.Contains(m.View(), "l focuses") {
+	if ui.Prompting(m) || !strings.Contains(m.View(), "l cycles") {
 		t.Errorf("E without a highlight: prompting %v:\n%s", ui.Prompting(m), m.View())
 	}
 	// Unchanged spec and a bad spec keep the prompt; esc leaves it.

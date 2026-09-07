@@ -60,7 +60,7 @@ func DefaultKeyMap() KeyMap {
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
 		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
-		FocusRight:  key.NewBinding(key.WithKeys("l", "tab"), key.WithHelp("l/tab", "tunnels pane")),
+		FocusRight:  key.NewBinding(key.WithKeys("l", "tab"), key.WithHelp("l/tab", "paths / tunnels pane")),
 		FocusLeft:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "host list")),
 		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
 		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward")),
@@ -143,6 +143,7 @@ func (t tunnelsKeys) ShortHelp() []key.Binding {
 		t.k.Toggle,
 		t.k.CancelFwd,
 		t.k.EditFwd,
+		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "host list (the cycle closes)")),
 	}
 }
 

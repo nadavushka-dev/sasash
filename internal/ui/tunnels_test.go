@@ -467,7 +467,7 @@ func TestModel_Update_SpaceNeedsHighlight(t *testing.T) {
 	if cmd != nil || len(r.CallKeys()) != before {
 		t.Errorf("Update(space) without a highlight ran something: cmd %v, calls %v", cmd != nil, r.CallKeys()[before:])
 	}
-	if view := m.View(); !strings.Contains(view, "l focuses") {
+	if view := m.View(); !strings.Contains(view, "l cycles") {
 		t.Errorf("View() missing the tab hint:\n%s", view)
 	}
 }

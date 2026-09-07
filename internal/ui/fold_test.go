@@ -161,7 +161,8 @@ func TestModel_Update_ReloadRefolds(t *testing.T) {
 
 func TestModel_View_HelpListsVariants(t *testing.T) {
 	t.Parallel()
-	m := update(t, sized(t, nil), tea.WindowSizeMsg{Width: 100, Height: 30})
+	// Tall enough for the whole host-list group (it grew a row in 2.11).
+	m := update(t, sized(t, nil), tea.WindowSizeMsg{Width: 100, Height: 40})
 	if view := press(t, m, "?").View(); !strings.Contains(view, "pinned variants") {
 		t.Errorf("View() full help missing v:\n%s", view)
 	}

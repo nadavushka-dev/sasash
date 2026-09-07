@@ -645,7 +645,7 @@ func (m Model) tunnelsFocusKey(msg tea.KeyMsg) (Model, bool) {
 	case key.Matches(msg, m.keys.Bottom):
 		m.fwdIdx = len(rows) - 1
 		return m, true
-	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter), msg.String() == "l":
+	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter), m.cycleKey(msg):
 		return m.setFocus(focusList), true
 	}
 	return m, false
@@ -1160,7 +1160,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				if m.focus == focusPaths {
-					return m, nil // already there: p is idempotent, like l
+					return m, nil // already there: p is idempotent
 				}
 				return m.focusPathsOn(host), nil
 			case key.Matches(msg, m.keys.Herdr):
@@ -1212,12 +1212,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !ok {
 					return m, nil
 				}
-				if m.pathChoice(host) {
-					if m.switching[host.Alias] {
-						m.notice = "a switch is already running for " + host.Alias
-						return m, nil
-					}
-					return m.focusPathsOn(host), nil
+				b, choice := m.pathChoice(host)
+				switch {
+				case choice == choiceOK && m.switching[host.Alias]:
+					m.notice = "a switch is already running for " + host.Alias
+					return m, nil
+				case choice == choiceOK:
+					return m.focusPathsWith(host, b), nil
+				case choice == choiceShadowed:
+					// The diagnostic p would give is kept on the way past.
+					m.notice = shadowedPaths
 				}
 				return m.focusTunnelsOn(host), nil
 			case key.Matches(msg, m.keys.FocusLeft):
@@ -1229,7 +1233,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				row, ok := m.highlighted(host)
 				if !ok {
-					m.notice = "no forward highlighted — l focuses the tunnels pane"
+					m.notice = "no forward highlighted — l cycles to the tunnels pane"
 					return m, nil
 				}
 				return m, m.toggleCmd(host, row)
@@ -1246,7 +1250,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				row, ok := m.highlighted(host)
 				if !ok {
-					m.notice = "no forward highlighted — l focuses the tunnels pane"
+					m.notice = "no forward highlighted — l cycles to the tunnels pane"
 					return m, nil
 				}
 				return m, m.cancelCmd(host, row)
@@ -1257,7 +1261,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				row, ok := m.highlighted(host)
 				if !ok {
-					m.notice = "no forward highlighted — l focuses the tunnels pane"
+					m.notice = "no forward highlighted — l cycles to the tunnels pane"
 					return m, nil
 				}
 				return m.openEditFwd(host, row)

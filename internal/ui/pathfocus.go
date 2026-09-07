@@ -57,49 +57,75 @@ func activeIndex(rows []probe.Path, hostName string) int {
 	return cur
 }
 
-// pathChoice reports whether the paths focus has anything to offer on
-// host — a managed block with two or more named paths the pane renders —
-// so the focus cycle can pass the pane by, silently, when it does not.
-// The block is read against disk, as focusPathsOn reads it.
-func (m Model) pathChoice(host hostmodel.Host) bool {
+// pathChoice is the one gate for the paths focus, read against disk —
+// whether a write is possible at all must not lag an out-of-band edit,
+// so the render cache is evicted and refilled here (the cycle re-read
+// the file on every keypress too; p and l read it once each). choiceOK
+// comes with the block the focus will use; choiceNone is a host with
+// nothing to choose (not managed, fewer than two named paths) and
+// choiceShadowed a block with a choice the pane does not render (a Host
+// above the sasash Include shadows it, or an edit not yet reloaded).
+func (m Model) pathChoice(host hostmodel.Host) (pathBlock, pathChoiceKind) {
 	if m.pathBlock == nil || m.setPath == nil {
-		return false // no switcher wired: nothing the focus could do
+		return pathBlock{}, choiceNone // no switcher wired: nothing the focus could do
 	}
 	delete(m.blocks, host.Alias)
 	b := m.block(host.Alias)
 	if !b.managed || len(namedPaths(b.paths)) < 2 {
-		return false
+		return b, choiceNone
 	}
-	rows, _ := pathRows(host, b)
-	return len(rows) >= 2
+	if rows, _ := pathRows(host, b); len(rows) < 2 {
+		return b, choiceShadowed
+	}
+	return b, choiceOK
 }
 
+type pathChoiceKind int
+
+const (
+	choiceNone pathChoiceKind = iota
+	choiceShadowed
+	choiceOK
+)
+
+// shadowedPaths is the diagnostic for choiceShadowed, the same under p
+// and on the cycle's way past.
+const shadowedPaths = "p: the paths on screen are not sasash.conf's — e reloads on return"
+
 // focusPathsOn is p on the selected host: the paths focus when there is
-// a choice, otherwise the cycle's own no-op wording as a notice. The
-// block is read against disk here, not the render cache: whether a
-// write is possible at all must not lag an out-of-band edit (the cycle
-// re-read the file on every keypress too).
+// a choice, otherwise the reason as a notice — the cycle's own no-op
+// wording for a host without one.
 func (m Model) focusPathsOn(host hostmodel.Host) Model {
-	delete(m.blocks, host.Alias)
-	b := m.block(host.Alias)
-	if !b.managed {
-		m.notice = "p: not managed by sasash"
+	b, choice := m.pathChoice(host)
+	switch choice {
+	case choiceShadowed:
+		m.notice = shadowedPaths
 		return m
-	}
-	if len(namedPaths(b.paths)) < 2 {
+	case choiceNone:
+		if !b.managed {
+			m.notice = "p: not managed by sasash"
+			return m
+		}
 		m.notice = switchNotice(pathswitchNoop, len(namedPaths(b.paths)), b.hostName)
 		return m
 	}
+	return m.focusPathsWith(host, b)
+}
+
+// focusPathsWith takes the paths focus over a block pathChoice accepted:
+// the mark on the active row.
+func (m Model) focusPathsWith(host hostmodel.Host, b pathBlock) Model {
 	rows, _ := pathRows(host, b)
-	if len(rows) < 2 {
-		// The pane renders another block's paths (a Host declared above
-		// the sasash Include shadows it) or an edit not yet reloaded.
-		m.notice = "p: the paths on screen are not sasash.conf's — e reloads on return"
-		return m
-	}
 	m = m.setFocus(focusPaths)
 	m.pathIdx = max(activeIndex(rows, b.hostName), 0)
 	return m
+}
+
+// cycleKey is the key that advances the pane-focus cycle from inside a
+// pane: FocusRight's keys less tab, which moves the mark there — one
+// source of truth with the list's binding.
+func (m Model) cycleKey(msg tea.KeyMsg) bool {
+	return key.Matches(msg, m.keys.FocusRight) && msg.String() != "tab"
 }
 
 // pathsFocusKey routes navigation while the paths pane holds focus:
@@ -133,9 +159,14 @@ func (m Model) pathsFocusKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter):
 		return m.setFocus(focusList), nil, true
-	case msg.String() == "l":
+	case m.cycleKey(msg):
 		// On to the tunnels pane (2.11) — tab keeps moving the mark, as
-		// under the tunnels focus.
+		// under the tunnels focus. A host without tunnels closes the
+		// cycle instead: back to the list, with the reason.
+		if rows, _ := m.forwardRows(host); len(rows) == 0 {
+			m.notice = "no tunnels on " + host.Alias + " — + adds one"
+			return m.setFocus(focusList), nil, true
+		}
 		return m.focusTunnelsOn(host), nil, true
 	case msg.Type == tea.KeyEnter:
 		name := rows[m.pathIdx].Name
@@ -199,10 +230,12 @@ func (m Model) pathPlan(host hostmodel.Host) string {
 type pathsKeys struct{}
 
 func (pathsKeys) ShortHelp() []key.Binding {
+	// The way out comes first, as the tunnels footer has it: a narrow
+	// footer cuts the tail.
 	return []key.Binding{
+		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "keep current")),
 		moveKeys,
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "make active")),
-		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "keep current")),
 		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "tunnels pane")),
 	}
 }
