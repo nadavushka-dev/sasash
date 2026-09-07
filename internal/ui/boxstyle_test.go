@@ -61,7 +61,10 @@ func TestNewStyles_BoxRolesFollowPalette(t *testing.T) {
 			// Legible in every theme: the roles the box paints text and
 			// glyphs in clear WCAG's 3:1 floor for graphics against the
 			// ground they sit on — the background, and the selection fill
-			// under the highlighted row's accent.
+			// under the highlighted row's accent. FgDim is not in the list
+			// on purpose: it fails the floor in nord and tokyonight, so it
+			// carries only dim prose that predates the box, never a glyph
+			// or a role here — the BoxOff row above holds that line.
 			pairs := []struct {
 				name   string
 				fg, bg lipgloss.Color
@@ -144,7 +147,7 @@ func TestModel_View_BoxSurfacesReachTheirRoles(t *testing.T) {
 		wantNot []string
 	}{
 		{name: "settings menu", keys: []string{"o"},
-			want:    []string{"«REF»", "«TITLE»settings", "› «SEL»create config file", "  «NAME»edit config file", "«VALUE»gruvbox", "«VALUE»tab"},
+			want:    []string{"«REF»", "«TITLE»settings", "› «SEL»", "  «NAME»", "«VALUE»gruvbox", "«VALUE»tab"},
 			wantNot: []string{"«ALERT»", "«WARNTITLE»"}},
 		{name: "settings search", keys: []string{"o", "/", "th"}, want: []string{"«QUERY»/th▏", "› «SEL»theme"}},
 		{name: "theme picker", keys: []string{"o", "j", "j", "enter"},
@@ -180,13 +183,15 @@ func TestModel_View_BoxSurfacesReachTheirRoles(t *testing.T) {
 }
 
 // TestModel_View_SettingsRowsFitTheFixedWidth keeps the constant honest:
-// every menu row with its fixed detail fits the frame with slack, and a
-// value that does not — a config path outside home — is cut on its
-// row, never wrapped onto another.
+// every menu row with its fixed detail fits the frame with slack — the
+// labels as shipped, and the rows as rendered — and a value that does
+// not — a config path outside home — is cut on its row, never wrapped
+// onto another.
 func TestModel_View_SettingsRowsFitTheFixedWidth(t *testing.T) {
 	t.Parallel()
+	const slack = 4
 	longest := 0
-	for i, label := range []string{"create config file", "edit config file", "theme", "spawn target", "add new connection", "add new tunnel"} {
+	for i, label := range ui.EntryLabels() {
 		row := "  " + label
 		switch i {
 		case 1:
@@ -200,8 +205,18 @@ func TestModel_View_SettingsRowsFitTheFixedWidth(t *testing.T) {
 		}
 		longest = max(longest, lipgloss.Width(row))
 	}
-	if longest > 60-4 {
-		t.Errorf("longest menu row = %d cells, want <= 56 to leave the fixed width slack", longest)
+	if longest > 60-slack {
+		t.Errorf("longest menu row = %d cells, want <= %d to leave the fixed width slack", longest, 60-slack)
+	}
+	// The rendered rows too, with the widest live values in place: the
+	// last theme and the widest spawn target.
+	wide := ui.WithEditor(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 120, Height: 30}), []string{"vi"}, "", "/home/u/.ssh/config.d/sasash.conf")
+	wide = ui.WithHome(wide, "/home/u")
+	wide = press(t, wide, "o", "j", "j", "enter", "G", "enter", "esc") // last theme applied
+	for _, l := range boxLines(wide.View())[2:] {
+		if w := lipgloss.Width(strings.TrimRight(l, " ")); w > 3+60-slack {
+			t.Errorf("rendered menu row %q = %d cells, want <= %d", l, w, 3+60-slack)
+		}
 	}
 	long := "/Volumes/work-laptop/engineering/team/.ssh/config.d/sasash.conf"
 	m := press(t, ui.WithEditor(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 120, Height: 30}), []string{"vi"}, "", long), "o")

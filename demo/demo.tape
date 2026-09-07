@@ -48,7 +48,7 @@ Type "jj"
 Sleep 500ms
 Enter
 Sleep 1s
-Screenshot demo/out/frame-picker-mocha.png
+Screenshot demo/out/frame-e.png
 Escape
 Sleep 300ms
 Escape

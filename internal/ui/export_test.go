@@ -137,7 +137,10 @@ func WithSaveTheme(m Model, f func(string) error) Model {
 // (GetForeground needs no rendering and no profile).
 func StylesOf(m Model) Styles            { return m.styles }
 func WithStyles(m Model, s Styles) Model { m.styles = s; return m }
-func HelpStyles(m Model) help.Styles     { return m.help.Styles }
+
+// EntryLabels is the settings menu's labels, in menu order.
+func EntryLabels() []string          { return entryLabels[:] }
+func HelpStyles(m Model) help.Styles { return m.help.Styles }
 
 // StaticCursor turns off the filter and prompt inputs' cursor blink so
 // the key-path tests never produce blink tick cmds (which sleep when
