@@ -524,8 +524,12 @@ func TestRemove_ExactBytes(t *testing.T) {
 			if string(got) != tt.want {
 				t.Errorf("file = %q, want %q", got, tt.want)
 			}
-			if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o640 {
-				t.Errorf("perm = %v, %v; want 0640 preserved", fi.Mode().Perm(), err)
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat: %v", err)
+			}
+			if perm := fi.Mode().Perm(); perm != 0o640 {
+				t.Errorf("perm = %v, want 0640 preserved", perm)
 			}
 		})
 	}
@@ -565,12 +569,29 @@ func TestRemove_AttachmentIsExclusive(t *testing.T) {
 		t.Errorf("host a OwnMeta after = %v, want unchanged %v", metaText(got), metaText(wantA))
 	}
 	hb, _ := after.Host("b")
-	if got := hb.OwnMetaVerb("forwards"); got != nil {
+	if got := hb.OwnMetaVerb("forwards"); len(got) != 0 {
 		t.Errorf("host b forwards meta after = %+v, want none", got)
 	}
 	hc, _ := after.Host("c")
 	if got := hc.OwnMetaVerb("forwards"); len(got) != 1 || !reflect.DeepEqual(got[0].Args, []string{"db", "5433:localhost:5432"}) {
 		t.Errorf("host c forwards meta after = %+v, want its own db set untouched", got)
+	}
+}
+
+func TestRemove_NextHostsRunIsNotOurs(t *testing.T) {
+	t.Parallel()
+	// The run leading into the NEXT Host line belongs to that host: for
+	// host a it is out of scope, so the set is "not declared" and the
+	// file is untouched — a search over the raw Meta() range would find
+	// and delete host b's line while reporting success.
+	const in = "Host a\n  HostName 192.0.2.1\n# @sasash forwards db 5432:localhost:5432\nHost b\n  HostName 192.0.2.2\n"
+	path := writeConf(t, in)
+	err := fwdset.Remove(path, "a", "db")
+	if err == nil || !strings.Contains(err.Error(), `forward set "db" not declared for "a"`) {
+		t.Errorf("Remove() = %v, want error containing %q", err, `forward set "db" not declared for "a"`)
+	}
+	if got, rerr := os.ReadFile(path); rerr != nil || string(got) != in {
+		t.Errorf("file after a rejected Remove = %q, want untouched", got)
 	}
 }
 
