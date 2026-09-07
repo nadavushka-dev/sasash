@@ -158,7 +158,7 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 
 func TestModel_Rename_BusyHostRefused(t *testing.T) {
 	t.Parallel()
-	const busy = "web is busy — a path switch or tunnel action is running; try again"
+	const busy = "web is busy — a status check or an action is running; try again"
 	tests := []struct {
 		name string
 		mark func(ui.Model, string) ui.Model
@@ -277,6 +277,7 @@ func TestModel_Rename_Renamed(t *testing.T) {
 		hosts[0].Alias, hosts[1].Alias, hosts[2].Alias = "srv", "srv.lan", "srv.wan" // web.old stays
 		return hosts, nil, nil
 	})
+	m = update(t, m, ui.TunnelStatus("web", tunnel.HostStatus{}, nil))
 	m = press(t, m, "R", "ctrl+u", "srv")
 	m, msgs := submit(t, m)
 	if ui.Prompting(m) || !strings.Contains(m.View(), "renaming web → srv …") || len(h.calls) != 1 || h.calls[0] != "web→srv" {
@@ -304,6 +305,11 @@ func TestModel_Rename_Renamed(t *testing.T) {
 	// hand-authored dotted block the writer left as-is under its own.
 	if got := selectedAlias(t, m); got != "srv" {
 		t.Errorf("Selected() after the rename = %q, want srv", got)
+	}
+	// The old alias's tunnel state is evicted: the reload never touches
+	// tstatus, and a host reusing the name must not inherit it.
+	if ui.TunnelStatusKnown(m, "web") {
+		t.Error("tstatus should forget the old alias")
 	}
 	if view := press(t, m, "v").View(); !strings.Contains(view, "srv.lan") || !strings.Contains(view, "srv.wan") || !strings.Contains(view, "web.old") || strings.Contains(view, "srv.old") || strings.Contains(view, "web.lan") {
 		t.Errorf("rows before the reload: variants should follow and web.old stay:\n%s", view)

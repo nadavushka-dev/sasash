@@ -82,7 +82,9 @@ func (m Model) openRename() (Model, tea.Cmd) {
 
 // busyNotice is the one-writer-per-host refusal.
 func busyNotice(alias string) string {
-	return alias + " is busy — a path switch or tunnel action is running; try again"
+	// tinflight also marks a plain status check (issued on every cursor
+	// move): named, so the user is not sent chasing an action.
+	return alias + " is busy — a status check or an action is running; try again"
 }
 
 // inConf reports a host whose block lives in sasash.conf (paths compared
@@ -216,7 +218,7 @@ func renameLines(msg renameDoneMsg) []string {
 			"  (not written by sasash — rename them by hand, e)")
 	}
 	if msg.err != nil {
-		lines = append(lines, cleanLine(msg.err.Error()), "  (the observed history stays under "+msg.old+")")
+		lines = append(lines, cleanLine(msg.err.Error()), "  (what did not move stays under "+msg.old+")")
 	}
 	return append(lines, "",
 		"a running master is not touched: its socket is keyed by the old",

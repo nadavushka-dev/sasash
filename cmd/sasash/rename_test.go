@@ -93,16 +93,23 @@ func TestRenameHost_KeptCache(t *testing.T) {
 	if err := os.WriteFile(confPath, []byte("Host old\n  HostName 192.0.2.7\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The stats file after it still moves: one failure never orphans
+	// the next cache under the old name.
 	state := filepath.Join(dir, "state")
 	if err := os.MkdirAll(filepath.Join(state, "new.json", "x"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(state, "old.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"old.json", "old.stats.json"} {
+		if err := os.WriteFile(filepath.Join(state, f), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_, err := renameHost(confPath, state)("old", "new")
-	if !errors.Is(err, ui.ErrCacheKept) {
-		t.Errorf("renameHost() err = %v, want ErrCacheKept", err)
+	if !errors.Is(err, ui.ErrCacheKept) || !strings.Contains(err.Error(), "old.json") {
+		t.Errorf("renameHost() err = %v, want ErrCacheKept naming old.json", err)
+	}
+	if _, err := os.Stat(filepath.Join(state, "new.stats.json")); err != nil {
+		t.Errorf("new.stats.json should have moved despite the earlier failure: %v", err)
 	}
 	if got, _ := os.ReadFile(confPath); string(got) != "Host new\n  HostName 192.0.2.7\n" {
 		t.Errorf("sasash.conf after = %q, want the host renamed", got)

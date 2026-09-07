@@ -31,10 +31,16 @@ func renameHost(confPath, stateDir string) func(old, new string) (pathswitch.Ren
 		if err != nil {
 			return res, err
 		}
+		// Every cache is tried: one failing must not leave the next
+		// orphaned under the old name; the report names what stayed.
+		var kept []error
 		for _, cr := range pathswitch.CacheRenames(stateDir, old, new) {
 			if err := os.Rename(cr.From, cr.To); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return res, fmt.Errorf("%w: %v", ui.ErrCacheKept, err)
+				kept = append(kept, err)
 			}
+		}
+		if len(kept) > 0 {
+			return res, fmt.Errorf("%w: %v", ui.ErrCacheKept, errors.Join(kept...))
 		}
 		return res, nil
 	}

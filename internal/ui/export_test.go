@@ -323,3 +323,6 @@ func MarkInflight(m Model, alias string) Model {
 	return m
 }
 func Inflight(m Model, alias string) bool { return m.tinflight[alias] }
+
+// TunnelStatusKnown reports a tstatus entry for alias.
+func TunnelStatusKnown(m Model, alias string) bool { _, ok := m.tstatus[alias]; return ok }
