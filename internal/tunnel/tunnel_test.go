@@ -276,18 +276,32 @@ func TestEngine_DownSet(t *testing.T) {
 
 func TestEngine_DownSet_JoinsCancelErrors(t *testing.T) {
 	t.Parallel()
-	r := fakerun.New().
-		Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("no such forward"), Code: 255}},
-			"ssh", "-O", "cancel", "-L", "3000:localhost:3000", "ubuntu").
-		StubExit(0, "ssh", "-O", "cancel", "-L", "3001:localhost:3001", "ubuntu")
-	e := engine(t, r, fakedial.New())
-	err := e.DownSet(context.Background(), "ubuntu", "web", []string{"3000:localhost:3000", "3001:localhost:3001"})
-	if err == nil || !strings.Contains(err.Error(), "no such forward") {
-		t.Fatalf("DownSet() err = %v, want the cancel failure", err)
+	// Named and ad-hoc alike: the ad-hoc path returns early without a
+	// state write, and must still carry ssh's refusal.
+	for _, set := range []string{"web", ""} {
+		t.Run(setLabel(set), func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().
+				Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("no such forward"), Code: 255}},
+					"ssh", "-O", "cancel", "-L", "3000:localhost:3000", "ubuntu").
+				StubExit(0, "ssh", "-O", "cancel", "-L", "3001:localhost:3001", "ubuntu")
+			e := engine(t, r, fakedial.New())
+			err := e.DownSet(context.Background(), "ubuntu", set, []string{"3000:localhost:3000", "3001:localhost:3001"})
+			if err == nil || !strings.Contains(err.Error(), "no such forward") {
+				t.Fatalf("DownSet() err = %v, want the cancel failure", err)
+			}
+			if got := len(r.CallKeys()); got != 2 {
+				t.Errorf("DownSet() made %d calls, want 2 (keeps going after a failure)", got)
+			}
+		})
 	}
-	if got := len(r.CallKeys()); got != 2 {
-		t.Errorf("DownSet() made %d calls, want 2 (keeps going after a failure)", got)
+}
+
+func setLabel(set string) string {
+	if set == "" {
+		return "ad-hoc"
 	}
+	return set
 }
 
 func TestEngine_StateLifecycle(t *testing.T) {
@@ -916,4 +930,184 @@ func TestStatus_String(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rows renders Status as "set/spec=state" strings, the shape the C1 tests
+// compare: which rows survive a down, and what reality says about them.
+func rows(t *testing.T, e tunnel.Engine, host string) []string {
+	t.Helper()
+	st, err := e.Status(context.Background(), host, nil)
+	if err != nil {
+		t.Fatalf("Status() err = %v", err)
+	}
+	var out []string
+	for _, f := range st.Forwards {
+		out = append(out, f.Set+"/"+f.Spec+"="+f.State.String())
+	}
+	return out
+}
+
+func TestEngine_DownSet_AdhocRecordSurvivesAndReups(t *testing.T) {
+	t.Parallel()
+	// The human repro: ad-hoc up -> space (DownSet) -> the row must stay,
+	// reconciled to Down by reality, and space again (Up) brings it back.
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	ctx := context.Background()
+	const spec = "4444:localhost:8080"
+	if err := e.Forward(ctx, "ubuntu", "", spec); err != nil {
+		t.Fatalf("Forward() err = %v", err)
+	}
+
+	r2 := fakerun.New()
+	r2.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e.Runner = r2
+	if err := e.DownSet(ctx, "ubuntu", "", []string{spec}); err != nil {
+		t.Fatalf("DownSet() err = %v", err)
+	}
+	if got, want := r2.CallKeys(), []string{"ssh -O cancel -L " + spec + " ubuntu"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("DownSet() calls = %q, want %q", got, want)
+	}
+	if got, want := rows(t, e, "ubuntu"), []string{"/" + spec + "=down"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after ad-hoc DownSet = %v, want %v (record kept, reality says down)", got, want)
+	}
+
+	r3 := fakerun.New().
+		StubExit(0, "ssh", "-O", "check", "ubuntu").
+		StubExit(0, "ssh", "-O", "forward", "-L", spec, "ubuntu")
+	e.Runner = r3
+	if err := e.Up(ctx, "ubuntu", "", []string{spec}); err != nil {
+		t.Fatalf("Up() after ad-hoc down err = %v", err)
+	}
+	e.Dialer = fakedial.New().Up("127.0.0.1:4444", time.Millisecond)
+	if got, want := rows(t, e, "ubuntu"), []string{"/" + spec + "=up"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after re-up = %v, want %v", got, want)
+	}
+	// Status dedups by spec, so the record's idempotence is pinned on the
+	// file itself: a duplicated ad-hoc record would now be immortal.
+	data, err := os.ReadFile(filepath.Join(e.StateDir, "ubuntu.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if got, want := strings.Count(string(data), spec), 1; got != want {
+		t.Errorf("state file records %q %d times, want %d: %s", spec, got, want, data)
+	}
+}
+
+func TestEngine_Replumb_ForgetDropsTheOldAdhocSpec(t *testing.T) {
+	t.Parallel()
+	// The consumer's edit of an ad-hoc forward (E): Cancel old, Forward
+	// new, then Forget old — without the Forget the old record would
+	// linger as a dead row forever (contract amendment C1).
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	ctx := context.Background()
+	const oldSpec, newSpec = "4444:localhost:8080", "5555:localhost:8080"
+	if err := e.Forward(ctx, "ubuntu", "", oldSpec); err != nil {
+		t.Fatalf("Forward() err = %v", err)
+	}
+	if err := e.Cancel(ctx, "ubuntu", oldSpec); err != nil {
+		t.Fatalf("Cancel() err = %v", err)
+	}
+	if err := e.Forward(ctx, "ubuntu", "", newSpec); err != nil {
+		t.Fatalf("Forward(new) err = %v", err)
+	}
+	if got, want := rows(t, e, "ubuntu"), []string{"/" + oldSpec + "=down", "/" + newSpec + "=down"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows before Forget = %v, want %v (Cancel alone keeps the ad-hoc record)", got, want)
+	}
+	if err := e.Forget("ubuntu", oldSpec); err != nil {
+		t.Fatalf("Forget() err = %v", err)
+	}
+	if got, want := rows(t, e, "ubuntu"), []string{"/" + newSpec + "=down"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after Forget = %v, want %v", got, want)
+	}
+}
+
+func TestEngine_DownSet_AdhocWritesNoState(t *testing.T) {
+	t.Parallel()
+	// Nothing changes in the cache for an ad-hoc down, so no write is
+	// attempted: an unwritable state dir is not an error here, while the
+	// same call on a named set still reports ErrStateWrite.
+	blocker := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile() err = %v", err)
+	}
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := tunnel.Engine{Runner: r, Dialer: fakedial.New(), StateDir: blocker}
+	ctx := context.Background()
+	if err := e.DownSet(ctx, "ubuntu", "", []string{"3000:localhost:3000"}); err != nil {
+		t.Errorf("DownSet(ad-hoc) err = %v, want nil (no state write)", err)
+	}
+	if err := e.DownSet(ctx, "ubuntu", "web", []string{"3000:localhost:3000"}); !errors.Is(err, tunnel.ErrStateWrite) {
+		t.Errorf("DownSet(web) err = %v, want ErrStateWrite", err)
+	}
+}
+
+func TestEngine_Cancel_KeepsAdhocRecordOnly(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	ctx := context.Background()
+	for _, f := range [][2]string{{"", "4444:localhost:8080"}, {"web", "3000:localhost:3000"}} {
+		if err := e.Forward(ctx, "ubuntu", f[0], f[1]); err != nil {
+			t.Fatalf("Forward(%v) err = %v", f, err)
+		}
+	}
+	for _, spec := range []string{"4444:localhost:8080", "3000:localhost:3000"} {
+		if err := e.Cancel(ctx, "ubuntu", spec); err != nil {
+			t.Fatalf("Cancel(%s) err = %v", spec, err)
+		}
+	}
+	want := []string{"/4444:localhost:8080=down"}
+	if got := rows(t, e, "ubuntu"); !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after Cancel of both = %v, want %v (ad-hoc kept, named-set record removed)", got, want)
+	}
+}
+
+func TestEngine_Forget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("drops the record without ssh", func(t *testing.T) {
+		t.Parallel()
+		r := fakerun.New()
+		r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+		e := engine(t, r, fakedial.New())
+		ctx := context.Background()
+		// The spec is recorded under the ad-hoc set AND a named set: Forget
+		// drops every record of it, whatever the set.
+		for _, f := range [][2]string{{"", "4444:localhost:8080"}, {"web", "4444:localhost:8080"}, {"", "5555:localhost:5555"}} {
+			if err := e.Forward(ctx, "ubuntu", f[0], f[1]); err != nil {
+				t.Fatalf("Forward(%v) err = %v", f, err)
+			}
+		}
+		r2 := fakerun.New()
+		e.Runner = r2
+		if err := e.Forget("ubuntu", "4444:localhost:8080"); err != nil {
+			t.Fatalf("Forget() err = %v", err)
+		}
+		if calls := r2.CallKeys(); len(calls) != 0 {
+			t.Errorf("Forget() ran %q, want no ssh at all", calls)
+		}
+		e.Runner = fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		want := []string{"/5555:localhost:5555=down"}
+		if got := rows(t, e, "ubuntu"); !reflect.DeepEqual(got, want) {
+			t.Errorf("rows after Forget = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("state write failure", func(t *testing.T) {
+		t.Parallel()
+		blocker := filepath.Join(t.TempDir(), "notadir")
+		if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile() err = %v", err)
+		}
+		e := tunnel.Engine{Runner: fakerun.New(), Dialer: fakedial.New(), StateDir: blocker}
+		if err := e.Forget("ubuntu", "4444:localhost:8080"); !errors.Is(err, tunnel.ErrStateWrite) {
+			t.Errorf("Forget() err = %v, want ErrStateWrite", err)
+		}
+	})
 }
