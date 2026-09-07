@@ -185,7 +185,11 @@ func (m Model) promptExpansion() string {
 			}
 			line := strings.Join(argv, " ")
 			if saved != "" {
-				line = strings.Join(engineTunnelPreview(saved, t.Forwards), " ; ")
+				steps := m.engineTunnelPreview(saved, t.Forwards)
+				if len(steps) == 0 {
+					return "" // a live master and nothing to add: nothing would run
+				}
+				line = strings.Join(steps, " ; ")
 			}
 			if t.FromSelection {
 				// The disclosure leads: the line's tail is what a narrow

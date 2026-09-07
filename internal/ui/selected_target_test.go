@@ -67,8 +67,9 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		m = ui.StaticCursor(m)
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec)})
-		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -fN ubuntu ; ssh -O forward -L "+spec+" ubuntu") {
-			t.Errorf("View() should name the defaulted target and the engine's flow before enter:\n%s", view)
+		// The last poll saw the master up (check exit 0): no -fN step.
+		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -O forward -L "+spec+" ubuntu") || strings.Contains(view, "-fN") {
+			t.Errorf("View() should name the defaulted target and the engine's steps that would run:\n%s", view)
 		}
 		before := len(r.CallKeys())
 		next, cmd := m.Update(keyMsg("enter"))
@@ -82,7 +83,7 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		if got, want := r.CallKeys()[before:], []string{"ssh -O check ubuntu", "ssh -O forward -L " + spec + " ubuntu"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("calls = %v, want %v", got, want)
 		}
-		if ui.PromptingSave(m) || ui.PopupOpen(m) || after == nil || !strings.Contains(m.View(), "tunnel up on ubuntu: "+spec+" — ad-hoc, in the tunnels pane") {
+		if ui.PromptingSave(m) || ui.PopupOpen(m) || after == nil || !strings.Contains(m.View(), "added "+spec+" on ubuntu") {
 			t.Errorf("after the tunnel: save prompt %v (want none), popup %v, view:\n%s", ui.PromptingSave(m), ui.PopupOpen(m), m.View())
 		}
 		// The regression: the re-poll finds the recorded ad-hoc forward,

@@ -906,10 +906,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case adhocSavedMsg:
-		offer, tunnel := m.saveThenConnect, m.tunnelFirst
-		m.saveThenConnect, m.tunnelFirst = false, false
+		offer := m.saveThenConnect
+		m.saveThenConnect = false
 		if msg.err != nil {
 			m.notice = "not saved: " + msg.err.Error()
+			if msg.tunnel {
+				// The tunnel is not dropped with the save: the choice the
+				// user was one esc away from is put up (4.17), under the
+				// save's own reason.
+				m.pending = msg.target
+				m = m.offerUnmanagedTunnel()
+				m.notice = "not saved: " + msg.err.Error() + " — run it unmanaged? enter · esc cancels"
+			}
 			return m, nil
 		}
 		m.notice = "saved " + msg.alias
@@ -917,11 +925,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.loadHosts != nil {
 			reload = m.reloadCmd(false)
 		}
-		if tunnel {
+		if msg.tunnel {
 			// Save-first tunnel (4.17): the block is on disk, so ssh
 			// resolves the alias now; the engine brings the tunnel up
-			// through it while the list reloads.
-			next, start := m.engineTunnel(msg.alias, m.pending.Forwards)
+			// through it while the list reloads. The host is not loaded
+			// yet, so the engine takes the entry as the pane will see it.
+			m.hosts = append(m.hosts, hostmodel.Host{Alias: msg.alias})
+			next, start := m.engineTunnel(msg.alias, msg.target.Forwards)
 			return next, tea.Batch(reload, start)
 		}
 		if offer {
@@ -1340,7 +1350,7 @@ func (m Model) helpView() string {
 	// while a prompt has the key.
 	switch {
 	case m.popup.open():
-		k = popupKeys{}
+		k = popupKeys{confirm: m.popup.confirm}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:

@@ -355,7 +355,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 8080:localhost:80")})
 		next, cmd = a.Update(keyMsg("enter"))
 		a = update(t, next.(ui.Model), cmd())
-		if ui.PopupOpen(a) || !strings.Contains(a.View(), "tunnel up on ubuntu") {
+		if ui.PopupOpen(a) || !strings.Contains(a.View(), "added 8080:localhost:80 on ubuntu") {
 			t.Errorf("a successful engine -N is a one-liner: popup %v:\n%s", ui.PopupOpen(a), a.View())
 		}
 		// An unmanaged one is not: the popup names the cleanup (4.17).

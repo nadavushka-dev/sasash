@@ -245,10 +245,13 @@ func adhocTunnelCmd(r run.Runner, t adhocTarget) tea.Cmd {
 // adhocExitMsg arrives when the terminal returns from an ad-hoc handoff.
 type adhocExitMsg struct{ err error }
 
-// adhocSavedMsg reports the SaveHost outcome.
+// adhocSavedMsg reports the SaveHost outcome; tunnel and target say
+// whether a -N waited on it and for what.
 type adhocSavedMsg struct {
-	alias string
-	err   error
+	alias  string
+	err    error
+	tunnel bool
+	target adhocTarget
 }
 
 // aliasProblem validates a proposed alias against ssh_config token rules
@@ -304,6 +307,12 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 			m.notice = err.Error() // stay in the prompt for correction
 			return m, nil
 		}
+		if target.TunnelOnly {
+			if why := m.tunnelRefusal(target); why != "" {
+				m.notice = why // stay in the prompt for correction
+				return m, nil
+			}
+		}
 		m.pending = target
 		m.mode = promptNone
 		m.prompt.Blur()
@@ -333,9 +342,12 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 			Port:     m.pending.Port,
 			Forwards: m.pending.Forwards,
 		}
-		save := m.saveHost
+		// The save runs off the thread while keys keep flowing: what it
+		// was for travels with it, not in the one pending slot (4.17).
+		save, tunnel, target := m.saveHost, m.tunnelFirst, m.pending
+		m.tunnelFirst = false
 		return m, func() tea.Msg {
-			return adhocSavedMsg{alias: alias, err: save(entry)}
+			return adhocSavedMsg{alias: alias, err: save(entry), tunnel: tunnel, target: target}
 		}
 	}
 	return m, nil
@@ -367,9 +379,7 @@ func (m Model) declineSave() (Model, tea.Cmd) {
 // unmanaged run is offered, never silent.
 
 // savedTunnelTarget is the alias a -N target names when it IS a saved
-// host: the bare alias, as the selection supplies it or as typed. A user
-// or a port beside it makes another destination, which the alias's
-// config would not honour — that is an unsaved target.
+// host: the bare alias, as the selection supplies it or as typed.
 func (m Model) savedTunnelTarget(t adhocTarget) (string, bool) {
 	if t.User != "" || t.Port != "" {
 		return "", false
@@ -378,6 +388,20 @@ func (m Model) savedTunnelTarget(t adhocTarget) (string, bool) {
 		return t.Host, true
 	}
 	return "", false
+}
+
+// tunnelRefusal is why a -N cannot run at all: a saved alias with a
+// user or a port beside it. It is neither the alias (whose block sets
+// those) nor a new destination (a save would write `HostName <alias>`,
+// which ssh resolves as a name — a broken block); "" when it can.
+func (m Model) tunnelRefusal(t adhocTarget) string {
+	if t.User == "" && t.Port == "" {
+		return ""
+	}
+	if _, ok := m.hostByAlias(t.Host); !ok {
+		return ""
+	}
+	return t.Host + " is a saved host — a user or port beside it is another destination: give its address, or -N " + t.Host + " alone"
 }
 
 // startTunnelOnly is enter on a -N input: the engine for a saved host,
@@ -394,7 +418,7 @@ func (m Model) startTunnelOnly(t adhocTarget) (Model, tea.Cmd) {
 	m.tunnelFirst = true
 	m.mode = promptAlias
 	m.prompt.Reset()
-	m.prompt.Placeholder = "alias to save as — a saved host's tunnel is shown and stoppable · esc: run it unmanaged?"
+	m.prompt.Placeholder = "alias — saved, the tunnel is shown and stoppable · esc: run it unmanaged?"
 	return m, m.prompt.Focus()
 }
 
@@ -407,23 +431,40 @@ func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
 		m.notice = "tunnels are not available here — nothing started"
 		return m, nil
 	}
+	host, ok := m.hostByAlias(alias)
+	if !ok {
+		m.notice = "host " + alias + " is gone — nothing started"
+		return m, nil
+	}
+	// One spec is `+` exactly: the local port is dialled first, and a
+	// held port comes back as the remap offer, never a silent failure.
+	if len(specs) == 1 {
+		if port, _ := localPort(specs[0]); port != "" {
+			m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
+			return m, m.addForwardCmd(host, specs[0], port)
+		}
+	}
 	eng := m.tunnels
 	done := "master up on " + alias
 	if len(specs) > 0 {
 		done = "tunnel up on " + alias + ": " + strings.Join(specs, " ") + " — ad-hoc, in the tunnels pane"
 	}
-	m.notice = "starting " + strings.Join(engineTunnelPreview(alias, specs), " ; ") + " …"
+	m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
 	return m, m.tunnelActionCmd(alias, "tunnel", done, func(ctx context.Context) error {
 		return eng.Up(ctx, alias, "", specs)
 	})
 }
 
 // engineTunnelPreview is the engine's flow for a -N as the prompt's
-// expansion line shows it: the master start, then each forward — the
-// engine's own argv, pinned to its calls like the tunnels pane's preview
-// (the check that skips a live master's start is not a step to show).
-func engineTunnelPreview(alias string, specs []string) []string {
-	steps := []string{strings.Join(startArgv(alias), " ")}
+// expansion line shows it: the master start when the last poll saw it
+// down (the pane's own gate), then each forward — the engine's own
+// argv, pinned to its calls like the tunnels pane's preview (the check
+// itself is not a step to show). Empty when nothing would run.
+func (m Model) engineTunnelPreview(alias string, specs []string) []string {
+	var steps []string
+	if ts, ok := m.tstatus[alias]; !ok || !ts.status.Master {
+		steps = append(steps, strings.Join(startArgv(alias), " "))
+	}
 	for _, s := range specs {
 		steps = append(steps, strings.Join(forwardArgv(alias, s), " "))
 	}
@@ -442,7 +483,7 @@ func (m Model) offerUnmanagedTunnel() Model {
 	m.notice = "unmanaged tunnel: enter starts it anyway, esc cancels"
 	m = m.show("run an unmanaged tunnel? enter starts it · esc cancels",
 		argv,
-		"not saved, so it runs outside sasash: no ControlMaster, so it will not appear in the tunnels pane and x/X cannot stop it",
+		"not saved, so its ssh has no sasash.conf block and no ControlMaster from it: it will not appear in the tunnels pane and x/X cannot stop it",
 		unmanagedCleanup)
 	m.popup.confirm = true
 	return m
