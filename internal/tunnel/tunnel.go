@@ -201,6 +201,11 @@ func (e Engine) Forward(ctx context.Context, host, set, spec string) error {
 // intent, and the cache is never truth). An ad-hoc record stays: for the
 // ad-hoc set the record IS the declaration (contract amendment C1), so a
 // down keeps the row and Up brings it back; only Forget or Exit purges it.
+// The state is rewritten even when the predicate drops nothing (an ad-hoc
+// only spec): the write is a no-op and an unwritable state dir then reads
+// as a spurious ErrStateWrite — accepted over teaching mutateState to
+// report "changed". A caller re-plumbing a forward (Cancel old, Forward
+// new) Forgets the old spec afterwards, or its record lingers as a row.
 func (e Engine) Cancel(ctx context.Context, host, spec string) error {
 	err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host)
 	if serr := e.mutateState(host, "cancel attempted", func(st *hostState) {

@@ -968,7 +968,46 @@ func TestEngine_DownSet_AdhocRecordSurvivesAndReups(t *testing.T) {
 	}
 	e.Dialer = fakedial.New().Up("127.0.0.1:4444", time.Millisecond)
 	if got, want := rows(t, e, "ubuntu"), []string{"/" + spec + "=up"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("rows after re-up = %v, want %v (one record, idempotent)", got, want)
+		t.Errorf("rows after re-up = %v, want %v", got, want)
+	}
+	// Status dedups by spec, so the record's idempotence is pinned on the
+	// file itself: a duplicated ad-hoc record would now be immortal.
+	data, err := os.ReadFile(filepath.Join(e.StateDir, "ubuntu.json"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if got, want := strings.Count(string(data), spec), 1; got != want {
+		t.Errorf("state file records %q %d times, want %d: %s", spec, got, want, data)
+	}
+}
+
+func TestEngine_Replumb_ForgetDropsTheOldAdhocSpec(t *testing.T) {
+	t.Parallel()
+	// The consumer's edit of an ad-hoc forward (E): Cancel old, Forward
+	// new, then Forget old — without the Forget the old record would
+	// linger as a dead row forever (contract amendment C1).
+	r := fakerun.New()
+	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
+	e := engine(t, r, fakedial.New())
+	ctx := context.Background()
+	const oldSpec, newSpec = "4444:localhost:8080", "5555:localhost:8080"
+	if err := e.Forward(ctx, "ubuntu", "", oldSpec); err != nil {
+		t.Fatalf("Forward() err = %v", err)
+	}
+	if err := e.Cancel(ctx, "ubuntu", oldSpec); err != nil {
+		t.Fatalf("Cancel() err = %v", err)
+	}
+	if err := e.Forward(ctx, "ubuntu", "", newSpec); err != nil {
+		t.Fatalf("Forward(new) err = %v", err)
+	}
+	if got, want := rows(t, e, "ubuntu"), []string{"/" + oldSpec + "=down", "/" + newSpec + "=down"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows before Forget = %v, want %v (Cancel alone keeps the ad-hoc record)", got, want)
+	}
+	if err := e.Forget("ubuntu", oldSpec); err != nil {
+		t.Fatalf("Forget() err = %v", err)
+	}
+	if got, want := rows(t, e, "ubuntu"), []string{"/" + newSpec + "=down"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after Forget = %v, want %v", got, want)
 	}
 }
 
@@ -1024,15 +1063,22 @@ func TestEngine_Forget(t *testing.T) {
 		r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
 		e := engine(t, r, fakedial.New())
 		ctx := context.Background()
-		for _, f := range [][2]string{{"", "4444:localhost:8080"}, {"", "5555:localhost:5555"}} {
+		// The spec is recorded under the ad-hoc set AND a named set: Forget
+		// drops every record of it, whatever the set.
+		for _, f := range [][2]string{{"", "4444:localhost:8080"}, {"web", "4444:localhost:8080"}, {"", "5555:localhost:5555"}} {
 			if err := e.Forward(ctx, "ubuntu", f[0], f[1]); err != nil {
 				t.Fatalf("Forward(%v) err = %v", f, err)
 			}
 		}
-		e.Runner = fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu") // anything else fails loudly
+		r2 := fakerun.New()
+		e.Runner = r2
 		if err := e.Forget("ubuntu", "4444:localhost:8080"); err != nil {
 			t.Fatalf("Forget() err = %v", err)
 		}
+		if calls := r2.CallKeys(); len(calls) != 0 {
+			t.Errorf("Forget() ran %q, want no ssh at all", calls)
+		}
+		e.Runner = fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 		want := []string{"/5555:localhost:5555=down"}
 		if got := rows(t, e, "ubuntu"); !reflect.DeepEqual(got, want) {
 			t.Errorf("rows after Forget = %v, want %v", got, want)
