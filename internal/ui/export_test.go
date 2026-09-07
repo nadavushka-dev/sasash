@@ -74,7 +74,9 @@ func HelpOpen(m Model) bool  { return m.popup.open() && m.popup.title == helpTit
 func ContextKeymaps() []help.KeyMap {
 	// (filterKeys stays out: SPEC §5 keeps the filter's two keys to its
 	// own footer.)
-	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}, popupKeys{confirm: true}}
+	// (A question's footer names enter's deed per question — "run it",
+	// "write it" — and the panel carries one row for all of them.)
+	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}}
 	for mode := promptConnect; mode < promptModeCount; mode++ {
 		out = append(out, promptKeys{mode: mode})
 	}
@@ -222,6 +224,12 @@ func WithEditorWarn(m Model, warn string) Model {
 // tests can observe them.
 func WithSaveHost(m Model, f func(AdhocEntry) error) Model {
 	m.saveHost = f
+	return m
+}
+
+// WithControlHooks swaps the ControlMaster-trio hooks (4.18).
+func WithControlHooks(m Model, missing func(string) ([]string, error), enable func(string) ([]string, error)) Model {
+	m.missingControl, m.enableControl = missing, enable
 	return m
 }
 

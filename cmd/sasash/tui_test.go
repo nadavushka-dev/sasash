@@ -338,7 +338,8 @@ func TestSaveHostTo_AppendsPreservingBytes(t *testing.T) {
 	}
 	// Full == so the missing-trailing-newline repair is load-bearing:
 	// exactly one added terminator, exactly one blank separator.
-	want := existing + "\n\n# @sasash forwards adhoc 8080:localhost:80 5432:127.0.0.1:5432\nHost edge\n  HostName 192.0.2.99\n  User root\n  Port 2222\n"
+	// The managed-entry template, ControlMaster trio included (4.18).
+	want := existing + "\n\n# @sasash forwards adhoc 8080:localhost:80 5432:127.0.0.1:5432\nHost edge\n  HostName 192.0.2.99\n  User root\n  Port 2222\n  ControlMaster auto\n  ControlPath ~/.ssh/cm/%C\n  ControlPersist 30m\n"
 	if string(got) != want {
 		t.Errorf("file = %q, want %q", got, want)
 	}
@@ -411,7 +412,8 @@ func TestSaveHostTo_MinimalEntryAndSecondAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read back: %v", err)
 	}
-	want := "# header\n\nHost a1\n  HostName 192.0.2.5\n\nHost a2\n  HostName 192.0.2.6\n"
+	trio := "  ControlMaster auto\n  ControlPath ~/.ssh/cm/%C\n  ControlPersist 30m\n"
+	want := "# header\n\nHost a1\n  HostName 192.0.2.5\n" + trio + "\nHost a2\n  HostName 192.0.2.6\n" + trio
 	if string(got) != want {
 		t.Errorf("file = %q, want %q", got, want)
 	}

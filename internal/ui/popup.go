@@ -29,9 +29,11 @@ type popup struct {
 	offset int    // first visible line when the content outgrows the frame
 	glyph  string // "!" for attention (the default), "?" for the keys panel
 	find   finder // the / search over the rows
-	// confirm makes the popup a question (4.17): enter proceeds with the
-	// unmanaged tunnel, esc declines; the title says which is which.
-	confirm bool
+	// confirm makes the popup a question (4.17): enter runs it, esc
+	// declines; the title says which is which and verb names enter's
+	// deed in the footer ("run it", "write it").
+	confirm func(Model) (Model, tea.Cmd)
+	verb    string
 }
 
 // popupLine is one row: the text as drawn and the words the / search
@@ -135,7 +137,7 @@ func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	p := &m.popup
 	// A question has no search: its rows are the terms of the choice, and
 	// enter must mean one thing there.
-	if !p.confirm {
+	if p.confirm == nil {
 		if p.find.key(msg) {
 			p.offset = 0 // the rows changed under the window
 			return m, nil
@@ -150,11 +152,12 @@ func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	if p.confirm {
+	if p.confirm != nil {
 		switch {
 		case msg.Type == tea.KeyEnter:
+			run := p.confirm
 			m.popup = popup{}
-			return m.runUnmanagedTunnel()
+			return run(m)
 		case key.Matches(msg, m.keys.ClearFilter):
 			m.popup = popup{}
 			m.notice = "cancelled — nothing started"
@@ -387,12 +390,15 @@ func scrollHint(from, to, total int, typing bool) string {
 // popupKeys is the help shown while the popup owns the keyboard; on a
 // question (confirm) enter runs and esc cancels, and the footer says so
 // — the one popup where enter is not a dismissal.
-type popupKeys struct{ confirm bool }
+type popupKeys struct {
+	confirm bool
+	verb    string
+}
 
 func (k popupKeys) ShortHelp() []key.Binding {
 	if k.confirm {
 		return []key.Binding{
-			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "run it")),
+			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", k.verb)),
 			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 			key.NewBinding(key.WithKeys("j", "k"), key.WithHelp("j/k", "scroll")),
 		}

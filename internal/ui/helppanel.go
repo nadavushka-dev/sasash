@@ -34,7 +34,7 @@ func (m Model) helpGroups() []helpGroup {
 		{"tunnels (l)", append([]key.Binding{k.FocusRight, k.FocusLeft, k.AddFwd, k.Restart, k.Exit}, tunnelsKeys{k: k}.ShortHelp()...)},
 		{"prompts", promptGroupKeys()},
 		{"settings (o)", settingsKeys{}.ShortHelp()},
-		{"popups", append(popupKeys{}.ShortHelp(), key.NewBinding(key.WithKeys("enter", "esc"), key.WithHelp("enter/esc", "on a question: run it / cancel")))},
+		{"popups", append(popupKeys{}.ShortHelp(), key.NewBinding(key.WithKeys("enter", "esc"), key.WithHelp("enter/esc", "on a question: enter does what its title says · esc cancels")))},
 	}
 	// The surface holding the keys comes first.
 	// (A focused prompt owns ? as typed text, so the panel never opens

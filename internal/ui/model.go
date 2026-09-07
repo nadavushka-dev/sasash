@@ -25,6 +25,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/stats"
 )
 
@@ -225,11 +226,13 @@ type Model struct {
 	// while it is focused, action keys are inert exactly as while
 	// filtering. pending holds the parsed target between the handoff and
 	// the save offer.
-	mode      promptMode
-	prompt    textinput.Model
-	pending   adhocTarget
-	saveHost  func(AdhocEntry) error // nil -> no save offer after connect
-	loadHosts func() ([]hostmodel.Host, []error, error)
+	mode           promptMode
+	prompt         textinput.Model
+	pending        adhocTarget
+	saveHost       func(AdhocEntry) error // nil -> no save offer after connect
+	missingControl func(alias string) ([]string, error)
+	enableControl  func(alias string) ([]string, error)
+	loadHosts      func() ([]hostmodel.Host, []error, error)
 
 	// Tunnels section (SPEC §5): tunnels is the engine seam, nil = off.
 	// tstatus is the last Status per alias; fwdIdx is the highlighted
@@ -340,6 +343,11 @@ type Config struct {
 	// SaveHost persists an ad-hoc connection the user chose to keep; nil
 	// disables the save offer after an ad-hoc connect.
 	SaveHost func(AdhocEntry) error
+	// MissingControl lists the ControlMaster trio lines a managed host's
+	// block lacks; EnableControl writes them (4.18). Both nil disables the
+	// offer that follows a No-ControlPath tunnel failure.
+	MissingControl func(alias string) ([]string, error)
+	EnableControl  func(alias string) ([]string, error)
 	// LoadHosts re-reads the config after a save or an edit so the change
 	// appears in the list; nil skips the reload. Its warnings (malformed
 	// @sasash lines, hostmodel.Load's second result) are shown after an
@@ -478,26 +486,28 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 	prompt.CharLimit = 128
 
 	m := Model{
-		hosts:      hosts,
-		fold:       fold,
-		list:       l,
-		help:       contextHelp(),
-		keys:       keys,
-		prober:     prober,
-		runner:     runner,
-		saveTheme:  cfg.SaveTheme,
-		prompt:     prompt,
-		saveHost:   cfg.SaveHost,
-		loadHosts:  cfg.LoadHosts,
-		editor:     cfg.Editor,
-		editorHint: cfg.EditorHint,
-		editorWarn: cfg.EditorWarn,
-		confPath:   cfg.ConfPath,
-		tunnels:    cfg.Tunnels,
-		tstatus:    make(map[string]tunnelState),
-		tinflight:  make(map[string]bool),
-		actions:    cfg.Actions,
-		home:       cfg.Home,
+		hosts:          hosts,
+		fold:           fold,
+		list:           l,
+		help:           contextHelp(),
+		keys:           keys,
+		prober:         prober,
+		runner:         runner,
+		saveTheme:      cfg.SaveTheme,
+		prompt:         prompt,
+		saveHost:       cfg.SaveHost,
+		missingControl: cfg.MissingControl,
+		enableControl:  cfg.EnableControl,
+		loadHosts:      cfg.LoadHosts,
+		editor:         cfg.Editor,
+		editorHint:     cfg.EditorHint,
+		editorWarn:     cfg.EditorWarn,
+		confPath:       cfg.ConfPath,
+		tunnels:        cfg.Tunnels,
+		tstatus:        make(map[string]tunnelState),
+		tinflight:      make(map[string]bool),
+		actions:        cfg.Actions,
+		home:           cfg.Home,
 
 		saveForwardSet:  cfg.SaveForwardSet,
 		saveForwardEdit: cfg.SaveForwardEdit,
@@ -745,6 +755,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stateWriteOnly(msg.err):
 			// The ssh side succeeded; only the cache write failed.
 			m.notice = "warning: " + oneLine(msg.err, msg.host)
+		case noControlPath(msg.err):
+			// The block has no ControlMaster trio (4.18): the reason, then
+			// the offer to write exactly the missing lines — or, for a host
+			// sasash does not manage, where to add them by hand.
+			m.notice = msg.label + ": " + oneLine(msg.err, msg.host)
+			m = m.offerControl(msg.host, msg.label, reasonLines(msg.err))
 		default:
 			// The whole reason, not one line of it: ssh's stderr is the
 			// diagnosis, and the argv it ran is the first line.
@@ -842,6 +858,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.offerSave()
 
+	case controlEnabledMsg:
+		if msg.err != nil {
+			m.notice = "tunnels not enabled on " + msg.host + ": " + msg.err.Error()
+			return m, nil
+		}
+		m.notice = "tunnels enabled on " + msg.host + " — " + strings.Join(msg.added, ", ") + " written; space or + again"
+		if m.loadHosts != nil {
+			return m, m.reloadCmd(false)
+		}
+		return m, nil
+
 	case adhocTunnelDoneMsg:
 		// The unmanaged run (4.17): the user declined the save, so no
 		// offer follows; a success is not a one-liner — the popup says
@@ -921,6 +948,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.notice = "saved " + msg.alias
+		if m.home != "" {
+			// The saved block's ControlPath points under ~/.ssh/cm: setup's
+			// directory, said here when it is not there yet (4.18).
+			if st, err := setup.Check(m.home); err == nil && !st.CMDirPresent {
+				m.notice += " — ~/.ssh/cm is missing: o → create config file, or `sasash setup`"
+			}
+		}
 		var reload tea.Cmd
 		if m.loadHosts != nil {
 			reload = m.reloadCmd(false)
@@ -1348,7 +1382,7 @@ func (m Model) helpView() string {
 	// while a prompt has the key.
 	switch {
 	case m.popup.open():
-		k = popupKeys{confirm: m.popup.confirm}
+		k = popupKeys{confirm: m.popup.confirm != nil, verb: m.popup.verb}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:

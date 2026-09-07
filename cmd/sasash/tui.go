@@ -148,6 +148,10 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		SaveForwardEdit: func(alias, set, old, new string) error {
 			return fwdset.Update(confPath, alias, set, old, new)
 		},
+		// 4.18: an older managed entry without the ControlMaster trio is
+		// offered the missing lines from the No-ControlPath failure.
+		MissingControl: func(alias string) ([]string, error) { return setup.MissingControl(confPath, alias) },
+		EnableControl:  func(alias string) ([]string, error) { return setup.EnsureControl(confPath, alias) },
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg
@@ -199,10 +203,13 @@ func resolveEditor(env string) (argv []string, hint string) {
 }
 
 // saveHostTo persists an ad-hoc connection as a Host block appended to
-// sasash.conf (SPEC §2: the one file sasash writes). The existing content
-// rides through the lossless parser untouched — appending cannot reflow
-// it — and the write is atomic. A missing sasash.conf means setup has not
-// run; the error says so instead of creating a file setup owns.
+// sasash.conf (SPEC §2: the one file sasash writes) — the managed-entry
+// template, ControlMaster trio included (4.18: without it the tunnel
+// engine's -O commands have no ControlPath and every saved host showed
+// its master down). The existing content rides through the lossless
+// parser untouched — appending cannot reflow it — and the write is
+// atomic. A missing sasash.conf means setup has not run; the error says
+// so instead of creating a file setup owns.
 func saveHostTo(confPath string) func(ui.AdhocEntry) error {
 	return func(e ui.AdhocEntry) error {
 		f, err := sshconf.ParseFile(confPath)
@@ -222,14 +229,7 @@ func saveHostTo(confPath string) func(ui.AdhocEntry) error {
 		if len(e.Forwards) > 0 {
 			b.WriteString("# @sasash forwards adhoc " + strings.Join(e.Forwards, " ") + "\n")
 		}
-		b.WriteString("Host " + e.Alias + "\n")
-		b.WriteString("  HostName " + e.Host + "\n")
-		if e.User != "" {
-			b.WriteString("  User " + e.User + "\n")
-		}
-		if e.Port != "" {
-			b.WriteString("  Port " + e.Port + "\n")
-		}
+		b.WriteString(setup.ManagedBlock(e.Alias, e.Host, e.User, e.Port))
 		nf := sshconf.Parse(confPath, []byte(b.String()))
 		nf.Perm = f.Perm
 		return nf.WriteAtomic(confPath)

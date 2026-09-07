@@ -28,6 +28,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
+	"github.com/nadavushka-dev/sasash/internal/setup"
 )
 
 const sshBin = "/usr/bin/ssh" // SPEC §1: shell out to /usr/bin/ssh, always
@@ -274,4 +275,59 @@ func TestControlMaster_LiveForwardLifecycle(t *testing.T) {
 		res, err := ssh("-O", "check")
 		return err == nil && !res.OK()
 	})
+}
+
+// TestControlMaster_SavedEntryTemplate is SASASH.4.18's regression: a
+// Host block exactly as sasash saves it (setup.ManagedBlock — the
+// ControlMaster trio included) drives the engine's flow against a real
+// sshd: `ssh -fN <alias>` starts a master under ControlMaster auto, and
+// `ssh -O check <alias>` finds it. The one substitution is the socket
+// path: the template's `~/.ssh/cm/%C` expands to the passwd home, which
+// a test must not touch, so ControlPath is overridden on the command
+// line (first value wins) with a socket under a short temp directory.
+// Everything else — ControlMaster, ControlPersist, HostName, User, Port —
+// comes from the saved block through -F.
+func TestControlMaster_SavedEntryTemplate(t *testing.T) {
+	t.Parallel()
+	r := run.OS{}
+	userKey, sshdPort, login := startSshd(t, r)
+	sock := filepath.Join(controlSocketDir(t), "cm.sock")
+
+	block := setup.ManagedBlock("saved", "127.0.0.1", login, sshdPort)
+	if !strings.Contains(block, "ControlMaster auto") || !strings.Contains(block, "ControlPersist 30m") {
+		t.Fatalf("ManagedBlock() lacks the trio:\n%s", block)
+	}
+	conf := block + fmt.Sprintf(`  IdentityFile %s
+  IdentitiesOnly yes
+  IdentityAgent none
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  BatchMode yes
+  LogLevel ERROR
+`, userKey)
+	confPath := filepath.Join(t.TempDir(), "sasash.conf")
+	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
+		t.Fatalf("WriteFile() err = %v", err)
+	}
+	ssh := func(extra ...string) (run.Result, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		argv := append([]string{sshBin, "-F", confPath, "-o", "ControlPath=" + sock}, extra...)
+		return r.Run(ctx, append(argv, "saved")...)
+	}
+	// Before the master: -O check on the alias says down, not "No
+	// ControlPath" — the block's trio is what makes -O reachable at all.
+	if res, err := ssh("-O", "check"); err != nil || res.OK() || strings.Contains(string(res.Stderr), "No ControlPath") {
+		t.Fatalf("ssh -O check before the master = %v, %v\n%s", res.Code, err, res.Stderr)
+	}
+	// The engine's start (SPEC §4): no -M — ControlMaster auto from the
+	// block makes this the master.
+	if res, err := ssh("-fN"); err != nil || !res.OK() {
+		t.Fatalf("ssh -fN saved = %v, %v\n%s", res.Code, err, res.Stderr)
+	}
+	t.Cleanup(func() { _, _ = ssh("-O", "exit") })
+	res, err := ssh("-O", "check")
+	if err != nil || !res.OK() || !strings.Contains(string(res.Stderr), "Master running") {
+		t.Fatalf("ssh -O check after the start = %v, %v\n%s", res.Code, err, res.Stderr)
+	}
 }

@@ -83,6 +83,16 @@ Host ubuntu.ts
 **`ControlPath ~/.ssh/cm/%C`** — not `%r@%h:%p`. macOS caps unix socket paths at 104 bytes and
 the readable form overflows on long hostnames. `%C` is a hash. `mkdir -p ~/.ssh/cm` on first run.
 
+**The trio is load-bearing (SASASH.4.18).** Every `-O` command reaches a master only through a
+ControlPath, and the engine's `ssh -fN <alias>` starts one only under `ControlMaster auto` — so a
+managed entry without the three directives fails every tunnel action with ssh's `No ControlPath
+specified for "-O" command` and shows its master down forever. Every entry sasash saves (`a` then
+save, settings → add new connection) carries the trio verbatim; an older managed entry without
+it is offered exactly the lines it lacks from that failure's popup (`enter` writes them under
+the Host line in one atomic insert, nothing else touched, existing values kept; `esc` closes),
+while a host sasash does not manage gets the `e` hint — its block is not sasash's to write. The
+`~/.ssh/cm` directory stays setup's job: a save says when it is missing.
+
 ### Parser requirement
 Line-oriented, round-trip faithful: every line sasash doesn't understand is retained byte-for-byte,
 including blank lines, comments, and directives sasash has never heard of. Rewrite only the lines
