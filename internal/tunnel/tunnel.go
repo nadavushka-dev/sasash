@@ -196,17 +196,29 @@ func (e Engine) Forward(ctx context.Context, host, set, spec string) error {
 	return e.record(host, set, spec)
 }
 
-// Cancel removes one forward: `ssh -O cancel -L <spec> <host>`. The state
-// entry is removed even when ssh refuses (the attempt expresses intent, and
-// the cache is never truth).
+// Cancel removes one forward: `ssh -O cancel -L <spec> <host>`. A named
+// set's state entry is removed even when ssh refuses (the attempt expresses
+// intent, and the cache is never truth). An ad-hoc record stays: for the
+// ad-hoc set the record IS the declaration (contract amendment C1), so a
+// down keeps the row and Up brings it back; only Forget or Exit purges it.
 func (e Engine) Cancel(ctx context.Context, host, spec string) error {
 	err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host)
 	if serr := e.mutateState(host, "cancel attempted", func(st *hostState) {
-		st.remove(func(f stateForward) bool { return f.Spec == spec })
+		st.remove(func(f stateForward) bool { return f.Spec == spec && f.Set != "" })
 	}); serr != nil && err == nil {
 		err = serr
 	}
 	return err
+}
+
+// Forget drops every record of spec from the cache without touching ssh:
+// the explicit purge of a remembered ad-hoc forward (contract amendment
+// C1). A live forward is the caller's to Cancel first. Errors wrap
+// ErrStateWrite.
+func (e Engine) Forget(host, spec string) error {
+	return e.mutateState(host, "forget requested", func(st *hostState) {
+		st.remove(func(f stateForward) bool { return f.Spec == spec })
+	})
 }
 
 // Exit tears the master down: `ssh -O exit <host>`. Every recorded forward
@@ -264,9 +276,11 @@ func (e Engine) Up(ctx context.Context, host, set string, specs []string) error 
 }
 
 // DownSet cancels every spec of the set — the given (desired) specs plus any
-// recorded under the set — joining errors. The set's state entries are
+// recorded under the set — joining errors. A named set's state entries are
 // cleared regardless: the cache is never truth, and the next Status
-// re-derives reality.
+// re-derives reality. The ad-hoc set's records stay (contract amendment
+// C1): they are its declaration, so the rows survive a down and Up brings
+// them back; only Forget or Exit purges them.
 func (e Engine) DownSet(ctx context.Context, host, set string, specs []string) error {
 	st, _ := e.loadState(host)
 	seen := make(map[string]bool)
@@ -289,6 +303,12 @@ func (e Engine) DownSet(ctx context.Context, host, set string, specs []string) e
 		if err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	// The ad-hoc set's records are its declaration (contract amendment
+	// C1): a down keeps them, so nothing changes in the cache and no
+	// write is attempted.
+	if set == "" {
+		return errors.Join(errs...)
 	}
 	if serr := e.mutateState(host, "set cancelled", func(st *hostState) {
 		st.remove(func(f stateForward) bool { return f.Set == set })
