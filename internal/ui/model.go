@@ -886,12 +886,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case controlEnabledMsg:
 		if msg.err != nil {
-			m.notice = "tunnels not enabled on " + msg.host + ": " + msg.err.Error()
+			m.notice = "master reuse not enabled on " + msg.host + ": " + msg.err.Error()
 			return m, nil
 		}
 		// The instruction leads: it is what an 80-column line must keep
 		// (the popup already listed the lines).
-		m.notice = "tunnels enabled on " + msg.host + " — space or + again (" + strings.Join(msg.added, ", ") + " written)"
+		m.notice = "reuse enabled on " + msg.host + " — connect, then r (" + strings.Join(msg.added, ", ") + " written)"
 		if m.loadHosts != nil {
 			return m, m.reloadCmd(false)
 		}

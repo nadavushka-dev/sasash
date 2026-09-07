@@ -7,11 +7,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// The ControlMaster trio (SASASH.4.18). The tunnel engine's -O commands
-// reach a master only through a ControlPath, so a managed entry saved
-// without SPEC §2's three directives fails every tunnel action with
-// "No ControlPath specified" — and showed its master down for as long
-// as it existed. New saves carry the trio (the save, from controlmaster.Trio); an older
+// The ControlMaster trio (SASASH.4.18). The interactive master's -O
+// commands (r, X) reach it only through a ControlPath, so a managed
+// entry saved without SPEC §2's three directives fails them with "No
+// ControlPath specified" — and shows its master down for as long as it
+// exists. Tunnels are their own processes (Model B) and need none of it.
+// New saves carry the trio (the save, from controlmaster.Trio); an older
 // entry is offered exactly the lines it lacks, from the failure itself.
 // The writer is controlmaster.Enable, the one owner of the insert; the
 // cmd layer hands the UI what it reads and a closure over the write.
@@ -68,7 +69,7 @@ func (m Model) offerControl(alias, label string, reason []string) Model {
 	title := label + " failed on " + alias + " — no ControlPath"
 	lines := append([]string{}, reason...)
 	say := func(more ...string) Model { return m.show(title, append(lines, more...)...) }
-	trio := "tunnels need ControlMaster auto, ControlPath ~/.ssh/cm/%C and ControlPersist 30m on the host's block"
+	trio := "master reuse needs ControlMaster auto, ControlPath ~/.ssh/cm/%C and ControlPersist 30m on the host's block (tunnels do not: each is its own process)"
 	host, ok := m.hostByAlias(alias)
 	if !ok || !m.managed(host) || m.inspectControl == nil || m.enableControl == nil {
 		return say("", trio+" — not managed by sasash: "+byHand)
@@ -79,8 +80,8 @@ func (m Model) offerControl(alias, label string, reason []string) Model {
 	case errors.As(err, &variant):
 		// A pinned variant's block is the generator's, kept to
 		// HostName/User/Port: a directive of sasash's own would take it
-		// out of the generator's hands for good. Tunnels ride the parent.
-		return say("", alias+" is "+variant.Parent+"'s pinned variant for path "+variant.Path+": sasash never writes into a generated block, so tunnels ride the parent — use "+variant.Parent+" (its master follows the active path), or "+byHand)
+		// out of the generator's hands for good. The master rides the parent.
+		return say("", alias+" is "+variant.Parent+"'s pinned variant for path "+variant.Path+": sasash never writes into a generated block, so the master rides the parent — use "+variant.Parent+" (its master follows the active path), or "+byHand)
 	case errors.Is(err, ErrNotManaged):
 		// @sasash meta on a host outside sasash.conf: managed in the
 		// list's eyes, but its block is not in the file sasash writes.
@@ -98,14 +99,14 @@ func (m Model) offerControl(alias, label string, reason []string) Model {
 	if len(c.Missing) == 0 {
 		return say("", "the block already carries the ControlMaster trio — check ~/.ssh/cm exists (o → create config file)")
 	}
-	lines = append(lines, "", "enable tunnels for "+alias+": sasash writes under its Host line in ~/.ssh/config.d/sasash.conf")
+	lines = append(lines, "", "enable master reuse for "+alias+": sasash writes under its Host line in ~/.ssh/config.d/sasash.conf")
 	for _, l := range c.Missing {
 		lines = append(lines, "  "+l)
 	}
-	lines = append(lines, "nothing else is touched; then space or + again")
+	lines = append(lines, "nothing else is touched; then connect, and r again")
 	enable := m.enableControl
-	return m.ask("enable tunnels on "+alias+"? enter writes · esc closes", lines, "write it", "nothing written", func(m Model) (Model, tea.Cmd) {
-		m.notice = "enabling tunnels on " + alias + " …"
+	return m.ask("enable master reuse on "+alias+"? enter writes · esc closes", lines, "write it", "nothing written", func(m Model) (Model, tea.Cmd) {
+		m.notice = "enabling master reuse on " + alias + " …"
 		return m, func() tea.Msg {
 			added, err := enable(alias)
 			return controlEnabledMsg{host: alias, added: added, err: err}

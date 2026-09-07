@@ -9,6 +9,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -62,13 +63,14 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		// SASASH.4.17: the selected host is saved, so -N is `+` by another
 		// road — the engine's exact flow, recorded, so Status shows it.
 		const spec = "1234:localhost:8080"
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", spec, "ubuntu")
-		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
-		m = ui.StaticCursor(m)
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d)
+		m := ui.WithSaveHost(polledSpawn(t, r, sp, d, t.TempDir()), func(ui.AdhocEntry) error { return nil })
+		m = ui.StaticCursor(update(t, m, tea.WindowSizeMsg{Width: 160, Height: 30})) // the spawn line is long
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec)})
-		// The last poll saw the master up (check exit 0): no -fN step.
-		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -O forward -L "+spec+" ubuntu") || strings.Contains(view, "-fN") {
+		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · "+spawnArgv("ubuntu", spec)) || strings.Contains(view, "-fN") {
 			t.Errorf("View() should name the defaulted target and the engine's steps that would run:\n%s", view)
 		}
 		before := len(r.CallKeys())
@@ -79,21 +81,22 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		}
 		next, after := m.Update(cmd())
 		m = next.(ui.Model)
-		// The master was alive (check exit 0), so no start: just the forward.
-		if got, want := r.CallKeys()[before:], []string{"ssh -O check ubuntu", "ssh -O forward -L " + spec + " ubuntu"}; !reflect.DeepEqual(got, want) {
-			t.Errorf("calls = %v, want %v", got, want)
+		// One process for the spec, nothing through the runner.
+		if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", spec)}; !reflect.DeepEqual(got, want) || len(r.CallKeys()) != before {
+			t.Errorf("spawned = %v (runner %v), want %v", got, r.CallKeys()[before:], want)
 		}
 		if ui.PromptingSave(m) || ui.PopupOpen(m) || after == nil || !strings.Contains(m.View(), "added "+spec+" on ubuntu") {
 			t.Errorf("after the tunnel: save prompt %v (want none), popup %v, view:\n%s", ui.PromptingSave(m), ui.PopupOpen(m), m.View())
 		}
 		// The regression: the re-poll finds the recorded ad-hoc forward,
 		// and the tunnels pane shows it as an ad-hoc row with a live state
-		// (the notice on the bottom line carries the spec too: the row is
-		// the one that ends in a state).
+		// — up: our process, its port answering (the notice on the bottom
+		// line carries the spec too: the row is the one that ends in a
+		// state).
 		m = feed(t, m, after)
 		row := ""
 		for _, l := range strings.Split(m.View(), "\n") {
-			if strings.Contains(l, spec) && strings.HasSuffix(strings.TrimSpace(l), "down") {
+			if strings.Contains(l, spec) && strings.HasSuffix(strings.TrimSpace(l), "up") {
 				row = l
 			}
 		}

@@ -241,10 +241,9 @@ func WithLoadHosts(m Model, f func() ([]hostmodel.Host, []error, error)) Model {
 // Tunnel preview argv builders, exposed so the parity test can pin them
 // to the engine's real calls.
 var (
-	StartArgv   = startArgv
-	ForwardArgv = forwardArgv
-	CancelArgv  = cancelArgv
-	ExitArgv    = exitArgv
+	SpawnArgv = spawnArgv
+	KillArgv  = killArgv
+	ExitArgv  = exitArgv
 )
 
 // HerdrCommand and HerdrExec expose the H handoff: the argv and the one

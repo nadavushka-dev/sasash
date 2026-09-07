@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/stats"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
@@ -29,143 +29,13 @@ const (
 	argvDB  = "ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 5432:localhost:5432 ubuntu"
 )
 
-// fakeSpawner is the run.Spawner for the unit tier: pids are handed out
-// in sequence from 1000, a spawn keyed by its joined argv can be scripted
-// to die at once with a stderr text, Alive is a set the test controls, and
-// every Kill is recorded (and, unless stubborn, flips the pid dead). When
-// wired to a fakedial (engine() does it), the local port of a live spawn
-// starts answering and stops when the pid is killed — the port follows the
-// process, as it does for real.
-type fakeSpawner struct {
-	mu           sync.Mutex
-	nextPid      int
-	spawnErr     error
-	killErr      error
-	stubborn     bool              // Kill is recorded but the process lives on
-	stubbornPids map[int]bool      // the same, per pid
-	neverListens bool              // the process runs but its port never answers
-	onSpawn      func()            // runs inside Spawn (a test cancels its ctx here)
-	exits        map[string]string // argv key -> stderr; the process exits at start
-	alive        map[int]bool
-	dial         *fakedial.Fake
-	ports        map[int]string // pid -> local port it answers on
-	spawned      []string
-	logPaths     []string
-	killed       []int
-	probed       []int // every Alive call
-}
-
-var _ run.Spawner = (*fakeSpawner)(nil)
-
-func newSpawner() *fakeSpawner {
-	return &fakeSpawner{nextPid: 999, exits: map[string]string{}, alive: map[int]bool{}, ports: map[int]string{}}
-}
-
-// Live marks pid alive, for records a test pre-writes.
-func (f *fakeSpawner) Live(pid int) *fakeSpawner {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.alive[pid] = true
-	return f
-}
-
-// Exits scripts argv to die at start with stderr text.
-func (f *fakeSpawner) Exits(stderr string, argv ...string) *fakeSpawner {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.exits[strings.Join(argv, " ")] = stderr
-	return f
-}
-
-func (f *fakeSpawner) Spawn(argv []string, stderrPath string) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	key := strings.Join(argv, " ")
-	f.spawned = append(f.spawned, key)
-	f.logPaths = append(f.logPaths, stderrPath)
-	if f.onSpawn != nil {
-		f.onSpawn()
-	}
-	if f.spawnErr != nil {
-		return 0, f.spawnErr
-	}
-	f.nextPid++
-	pid := f.nextPid
-	if text, dead := f.exits[key]; dead {
-		if err := os.WriteFile(stderrPath, []byte(text), 0o600); err != nil {
-			return 0, err
-		}
-		f.alive[pid] = false
-		return pid, nil
-	}
-	f.alive[pid] = true
-	if f.dial != nil && !f.neverListens {
-		// The spec follows -L; every spec here starts with its local port.
-		for i, a := range argv {
-			if a == "-L" && i+1 < len(argv) {
-				port := strings.SplitN(argv[i+1], ":", 2)[0]
-				f.ports[pid] = port
-				f.dial.Up("127.0.0.1:"+port, time.Millisecond)
-			}
-		}
-	}
-	return pid, nil
-}
-
-func (f *fakeSpawner) Alive(pid int) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.probed = append(f.probed, pid)
-	return f.alive[pid]
-}
-
-func (f *fakeSpawner) Probed() []int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]int(nil), f.probed...)
-}
-
-func (f *fakeSpawner) Kill(pid int) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.killed = append(f.killed, pid)
-	if f.killErr != nil {
-		return f.killErr
-	}
-	if !f.stubborn && !f.stubbornPids[pid] {
-		f.alive[pid] = false
-		if port := f.ports[pid]; port != "" && f.dial != nil {
-			f.dial.Down("127.0.0.1:" + port)
-		}
-	}
-	return nil
-}
-
-func (f *fakeSpawner) Spawned() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.spawned...)
-}
-
-func (f *fakeSpawner) LogPaths() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.logPaths...)
-}
-
-func (f *fakeSpawner) Killed() []int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]int(nil), f.killed...)
-}
-
 // engine wires the fakes with a permissive runner (the interactive master
 // check answers alive unless a test stubs otherwise).
-func engine(t *testing.T, s *fakeSpawner, d *fakedial.Fake) tunnel.Engine {
+func engine(t *testing.T, s *fakespawn.Fake, d *fakedial.Fake) tunnel.Engine {
 	t.Helper()
 	r := fakerun.New()
 	r.Unmatched = &fakerun.Reply{Result: run.Result{Code: 0}}
-	s.dial = d
+	s.Dial(d)
 	return tunnel.Engine{Runner: r, Spawner: s, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
 }
 
@@ -213,7 +83,7 @@ func TestEngine_Argv(t *testing.T) {
 	t.Parallel()
 	t.Run("spawn", func(t *testing.T) {
 		t.Parallel()
-		s := newSpawner()
+		s := fakespawn.New()
 		e := engine(t, s, fakedial.New())
 		if err := e.Spawn(context.Background(), "ubuntu", "web", specWeb); err != nil {
 			t.Fatalf("Spawn() err = %v", err)
@@ -250,7 +120,7 @@ func TestEngine_Argv(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSpawner()
+			s := fakespawn.New()
 			e := engine(t, s, fakedial.New())
 			if err := tt.call(e); err != nil {
 				t.Fatalf("%s: err = %v", tt.name, err)
@@ -274,7 +144,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 		spec          string
 		host          string
 		dial          func(d *fakedial.Fake)
-		spawner       func(s *fakeSpawner)
+		spawner       func(s *fakespawn.Fake)
 		cancelOnSpawn bool   // the ctx ends once the process is running
 		wantErr       string // substring; "" = success
 		wantCtxErr    bool
@@ -293,7 +163,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			name:      "process exits: error is its stderr, nothing recorded",
 			spec:      specWeb,
 			dial:      func(d *fakedial.Fake) { d.Down("127.0.0.1:3000") },
-			spawner:   func(s *fakeSpawner) { s.Exits("Permission denied (publickey).\n", strings.Fields(argvWeb)...) },
+			spawner:   func(s *fakespawn.Fake) { s.Exits("Permission denied (publickey).\n", strings.Fields(argvWeb)...) },
 			wantErr:   argvWeb + ": Permission denied (publickey).",
 			wantSpawn: true,
 		},
@@ -301,7 +171,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			name:      "process exits silently: a stand-in message",
 			spec:      specWeb,
 			dial:      func(d *fakedial.Fake) { d.Down("127.0.0.1:3000") },
-			spawner:   func(s *fakeSpawner) { s.Exits("", strings.Fields(argvWeb)...) },
+			spawner:   func(s *fakespawn.Fake) { s.Exits("", strings.Fields(argvWeb)...) },
 			wantErr:   "exited before listening",
 			wantSpawn: true,
 		},
@@ -315,7 +185,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			name:          "context ends while connecting: killed, not recorded",
 			spec:          specWeb,
 			dial:          func(d *fakedial.Fake) { d.Down("127.0.0.1:3000") },
-			spawner:       func(s *fakeSpawner) { s.neverListens = true },
+			spawner:       func(s *fakespawn.Fake) { s.NeverListens = true },
 			cancelOnSpawn: true,
 			wantErr:       "not listening on 3000",
 			wantCtxErr:    true,
@@ -326,7 +196,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			name:          "context ends and the process survives SIGTERM: recorded, so KillAll can reach it",
 			spec:          specWeb,
 			dial:          func(d *fakedial.Fake) { d.Down("127.0.0.1:3000") },
-			spawner:       func(s *fakeSpawner) { s.neverListens = true; s.stubborn = true },
+			spawner:       func(s *fakespawn.Fake) { s.NeverListens = true; s.Stubborn = true },
 			cancelOnSpawn: true,
 			wantErr:       "pid 1000 survived SIGTERM (recorded)",
 			wantCtxErr:    true,
@@ -348,7 +218,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 		{
 			name:      "spawner failure is reported with the argv",
 			spec:      specWeb,
-			spawner:   func(s *fakeSpawner) { s.spawnErr = errors.New("no ssh binary") },
+			spawner:   func(s *fakespawn.Fake) { s.SpawnErr = errors.New("no ssh binary") },
 			wantErr:   argvWeb + ": no ssh binary",
 			wantSpawn: true,
 		},
@@ -356,7 +226,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSpawner()
+			s := fakespawn.New()
 			if tt.spawner != nil {
 				tt.spawner(s)
 			}
@@ -368,7 +238,7 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if tt.cancelOnSpawn {
-				s.onSpawn = cancel
+				s.OnSpawn = cancel
 			}
 			host := "ubuntu"
 			if tt.host != "" {
@@ -405,15 +275,15 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 // only the cache failed" to the CLI's errors.Is switch.
 func TestEngine_Spawn_SurvivorRecordFailureIsNotErrStateWrite(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
-	s.neverListens, s.stubborn = true, true
+	s := fakespawn.New()
+	s.NeverListens, s.Stubborn = true, true
 	e := engine(t, s, fakedial.New())
 	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
 		t.Fatalf("Mkdir() err = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s.onSpawn = cancel
+	s.OnSpawn = cancel
 	err := e.Spawn(ctx, "ubuntu", "web", specWeb)
 	if err == nil || !strings.Contains(err.Error(), "survived SIGTERM (NOT recorded") {
 		t.Fatalf("Spawn() err = %v, want the survivor and the record failure named", err)
@@ -426,7 +296,7 @@ func TestEngine_Spawn_SurvivorRecordFailureIsNotErrStateWrite(t *testing.T) {
 // A cancelled context before anything starts spawns nothing.
 func TestEngine_Spawn_AlreadyCancelled(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -446,7 +316,7 @@ func TestEngine_Spawn_StateDirBlocked(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatalf("WriteFile() err = %v", err)
 	}
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	e.StateDir = blocker
 	if err := e.Spawn(context.Background(), "ubuntu", "web", specWeb); err == nil {
@@ -461,7 +331,7 @@ func TestEngine_Spawn_StateDirBlocked(t *testing.T) {
 // hears ErrStateWrite and knows the process side succeeded.
 func TestEngine_Spawn_ErrStateWrite(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	// A directory where the state file should be: readable as corrupt,
 	// unwritable as a file.
@@ -481,7 +351,7 @@ func TestEngine_Spawn_ErrStateWrite(t *testing.T) {
 // pid — one entry per set+spec.
 func TestEngine_Spawn_RefreshesPid(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":7}]}`)
 	if err := e.Spawn(context.Background(), "ubuntu", "web", specWeb); err != nil {
@@ -499,7 +369,7 @@ func TestEngine_Kill(t *testing.T) {
 		name       string
 		state      string
 		live       []int
-		spawner    func(s *fakeSpawner)
+		spawner    func(s *fakespawn.Fake)
 		ctx        func() context.Context
 		wantKilled []int
 		wantErr    string
@@ -541,7 +411,7 @@ func TestEngine_Kill(t *testing.T) {
 			name:       "signal refused: error, record retired — a pid we may not signal is not ours",
 			state:      `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
 			live:       []int{41},
-			spawner:    func(s *fakeSpawner) { s.killErr = errors.New("operation not permitted") },
+			spawner:    func(s *fakespawn.Fake) { s.KillErr = errors.New("operation not permitted") },
 			wantKilled: []int{41},
 			wantErr:    "pid 41: operation not permitted",
 			wantState:  `{"forwards":[]}`,
@@ -550,7 +420,7 @@ func TestEngine_Kill(t *testing.T) {
 			name:    "process outlives the wait: error, record kept",
 			state:   `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
 			live:    []int{41},
-			spawner: func(s *fakeSpawner) { s.stubborn = true },
+			spawner: func(s *fakespawn.Fake) { s.Stubborn = true },
 			ctx: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
@@ -564,7 +434,7 @@ func TestEngine_Kill(t *testing.T) {
 			name:    "ctx ends on a stubborn first pid: the second is still signalled; only the survivor's record stays",
 			state:   `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"old","spec":"3000:localhost:3000","pid":43}]}`,
 			live:    []int{41, 43},
-			spawner: func(s *fakeSpawner) { s.stubbornPids = map[int]bool{41: true} },
+			spawner: func(s *fakespawn.Fake) { s.StubbornPids = map[int]bool{41: true} },
 			ctx: func() context.Context {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
@@ -578,7 +448,7 @@ func TestEngine_Kill(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSpawner()
+			s := fakespawn.New()
 			for _, pid := range tt.live {
 				s.Live(pid)
 			}
@@ -611,8 +481,8 @@ func TestEngine_Kill(t *testing.T) {
 // A signal error and a state error both surface from one Kill.
 func TestEngine_Kill_JoinsStateError(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Live(41)
-	s.killErr = errors.New("nope")
+	s := fakespawn.New().Live(41)
+	s.KillErr = errors.New("nope")
 	e := engine(t, s, fakedial.New())
 	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
 		t.Fatalf("Mkdir() err = %v", err)
@@ -625,7 +495,7 @@ func TestEngine_Kill_JoinsStateError(t *testing.T) {
 
 func TestEngine_KillAll(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Live(41).Live(43)
+	s := fakespawn.New().Live(41).Live(43)
 	e := engine(t, s, fakedial.New())
 	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"db","spec":"5432:localhost:5432","pid":42},{"set":"","spec":"8080:localhost:80","pid":43}]}`)
 	if err := e.KillAll(context.Background(), "ubuntu"); err != nil {
@@ -649,8 +519,8 @@ func TestEngine_KillAll(t *testing.T) {
 // unsignalled and forgotten. Survivors keep their records.
 func TestEngine_KillAll_SurvivorsStayRecorded(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Live(41).Live(42).Live(43)
-	s.stubbornPids = map[int]bool{41: true}
+	s := fakespawn.New().Live(41).Live(42).Live(43)
+	s.StubbornPids = map[int]bool{41: true}
 	e := engine(t, s, fakedial.New())
 	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"db","spec":"5432:localhost:5432","pid":42},{"set":"","spec":"8080:localhost:80","pid":43}]}`)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -669,7 +539,7 @@ func TestEngine_KillAll_SurvivorsStayRecorded(t *testing.T) {
 
 func TestEngine_KillAll_ErrStateWrite(t *testing.T) {
 	t.Parallel()
-	e := engine(t, newSpawner(), fakedial.New())
+	e := engine(t, fakespawn.New(), fakedial.New())
 	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
 		t.Fatalf("Mkdir() err = %v", err)
 	}
@@ -682,7 +552,7 @@ func TestEngine_KillAll_ErrStateWrite(t *testing.T) {
 // nothing: adding a port disturbs nothing.
 func TestEngine_SpawnSet_AddsOnlyWhatIsMissing(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Live(41).Live(42)
+	s := fakespawn.New().Live(41).Live(42)
 	d := fakedial.New().
 		Up("127.0.0.1:3000", time.Millisecond).
 		Up("127.0.0.1:5432", time.Millisecond)
@@ -742,7 +612,7 @@ func TestEngine_SpawnSet_RespawnsWhatIsNotServing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSpawner()
+			s := fakespawn.New()
 			if tt.live {
 				s.Live(41)
 			}
@@ -770,7 +640,7 @@ func TestEngine_SpawnSet_RespawnsWhatIsNotServing(t *testing.T) {
 
 func TestEngine_SpawnSet_FirstErrorAborts(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Exits("Permission denied (publickey).", strings.Fields(argvDB)...)
+	s := fakespawn.New().Exits("Permission denied (publickey).", strings.Fields(argvDB)...)
 	e := engine(t, s, fakedial.New())
 	err := e.SpawnSet(context.Background(), "ubuntu", "web", []string{specWeb, specDB, "8080:localhost:80"})
 	if err == nil || !strings.Contains(err.Error(), "Permission denied") {
@@ -792,7 +662,7 @@ func TestEngine_SpawnSet_FirstErrorAborts(t *testing.T) {
 // B1 survives Model B: a record failure never stops real tunnels.
 func TestEngine_SpawnSet_ContinuesOnStateWriteFailure(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
 		t.Fatalf("Mkdir() err = %v", err)
@@ -810,7 +680,7 @@ func TestEngine_SpawnSet_ContinuesOnStateWriteFailure(t *testing.T) {
 // own port and refuse it as foreign, aborting the rest of the set.
 func TestEngine_SpawnSet_DuplicateSpecIsOneProcess(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	if err := e.SpawnSet(context.Background(), "ubuntu", "web", []string{specWeb, specWeb, specDB}); err != nil {
 		t.Fatalf("SpawnSet() err = %v", err)
@@ -822,7 +692,7 @@ func TestEngine_SpawnSet_DuplicateSpecIsOneProcess(t *testing.T) {
 
 func TestEngine_SpawnSet_Empty(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	if err := e.SpawnSet(context.Background(), "ubuntu", "", nil); err != nil {
 		t.Errorf("SpawnSet() err = %v, want nil", err)
@@ -872,7 +742,7 @@ func TestEngine_KillSet(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSpawner()
+			s := fakespawn.New()
 			for _, pid := range tt.live {
 				s.Live(pid)
 			}
@@ -895,8 +765,8 @@ func TestEngine_KillSet(t *testing.T) {
 
 func TestEngine_KillSet_JoinsErrors(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Live(41).Live(42)
-	s.killErr = errors.New("operation not permitted")
+	s := fakespawn.New().Live(41).Live(42)
+	s.KillErr = errors.New("operation not permitted")
 	e := engine(t, s, fakedial.New())
 	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"web","spec":"5432:localhost:5432","pid":42}]}`)
 	err := e.KillSet(context.Background(), "ubuntu", "web", nil)
@@ -909,8 +779,8 @@ func TestEngine_KillSet_JoinsErrors(t *testing.T) {
 
 	t.Run("a survivor keeps its record, the rest are retired", func(t *testing.T) {
 		t.Parallel()
-		s := newSpawner().Live(41).Live(42)
-		s.stubbornPids = map[int]bool{42: true}
+		s := fakespawn.New().Live(41).Live(42)
+		s.StubbornPids = map[int]bool{42: true}
 		e := engine(t, s, fakedial.New())
 		writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"web","spec":"5432:localhost:5432","pid":42}]}`)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -928,7 +798,7 @@ func TestEngine_KillSet_JoinsErrors(t *testing.T) {
 
 	t.Run("state failure surfaces as ErrStateWrite", func(t *testing.T) {
 		t.Parallel()
-		e := engine(t, newSpawner(), fakedial.New())
+		e := engine(t, fakespawn.New(), fakedial.New())
 		if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
 			t.Fatalf("Mkdir() err = %v", err)
 		}
@@ -942,7 +812,7 @@ func TestEngine_KillSet_JoinsErrors(t *testing.T) {
 // and Up brings it back with a fresh process.
 func TestEngine_KillSet_AdhocRecordSurvivesAndReups(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	ctx := context.Background()
 
@@ -980,7 +850,7 @@ func TestEngine_KillSet_AdhocRecordSurvivesAndReups(t *testing.T) {
 // Forget the old ad-hoc spec lingers as a dead row.
 func TestEngine_Replumb_ForgetDropsTheOldAdhocSpec(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	ctx := context.Background()
 	if err := e.Spawn(ctx, "ubuntu", "", specWeb); err != nil {
@@ -1007,7 +877,7 @@ func TestEngine_Forget(t *testing.T) {
 	t.Parallel()
 	t.Run("drops every record of the spec, any set, signals nothing", func(t *testing.T) {
 		t.Parallel()
-		s := newSpawner().Live(41)
+		s := fakespawn.New().Live(41)
 		e := engine(t, s, fakedial.New())
 		writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"","spec":"3000:localhost:3000"},{"set":"db","spec":"5432:localhost:5432","pid":42}]}`)
 		if err := e.Forget("ubuntu", specWeb); err != nil {
@@ -1022,7 +892,7 @@ func TestEngine_Forget(t *testing.T) {
 	})
 	t.Run("state failure wraps ErrStateWrite", func(t *testing.T) {
 		t.Parallel()
-		e := engine(t, newSpawner(), fakedial.New())
+		e := engine(t, fakespawn.New(), fakedial.New())
 		if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
 			t.Fatalf("Mkdir() err = %v", err)
 		}
@@ -1032,7 +902,7 @@ func TestEngine_Forget(t *testing.T) {
 	})
 	t.Run("host alias that walks out of the dir", func(t *testing.T) {
 		t.Parallel()
-		e := engine(t, newSpawner(), fakedial.New())
+		e := engine(t, fakespawn.New(), fakedial.New())
 		if err := e.Forget("../evil", specWeb); !errors.Is(err, tunnel.ErrStateWrite) {
 			t.Errorf("Forget() err = %v, want ErrStateWrite", err)
 		}
@@ -1057,7 +927,7 @@ func TestEngine_CheckMaster(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			e := engine(t, newSpawner(), fakedial.New())
+			e := engine(t, fakespawn.New(), fakedial.New())
 			e.Runner = fakerun.New().Stub(tt.reply, "ssh", "-O", "check", "ubuntu")
 			got, err := e.CheckMaster(context.Background(), "ubuntu")
 			if (err != nil) != tt.wantErr || got != tt.want {
@@ -1084,7 +954,7 @@ func TestEngine_Exit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			e := engine(t, newSpawner(), fakedial.New())
+			e := engine(t, fakespawn.New(), fakedial.New())
 			e.Runner = fakerun.New().Stub(tt.reply, "ssh", "-O", "exit", "ubuntu")
 			const state = `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`
 			writeState(t, e, "ubuntu", state)
@@ -1208,7 +1078,7 @@ func TestEngine_Status_Matrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSpawner()
+			s := fakespawn.New()
 			for _, pid := range tt.live {
 				s.Live(pid)
 			}
@@ -1243,7 +1113,7 @@ func TestEngine_Status_Matrix(t *testing.T) {
 // same with it down.
 func TestEngine_Status_MasterIsOnlyAnIndicator(t *testing.T) {
 	t.Parallel()
-	s := newSpawner().Live(41)
+	s := fakespawn.New().Live(41)
 	e := engine(t, s, fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
 	e.Runner = fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
 	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`)
@@ -1264,7 +1134,7 @@ func TestEngine_Status_UnreadableState(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("chmod 000 does not stop root")
 	}
-	e := engine(t, newSpawner(), fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
+	e := engine(t, fakespawn.New(), fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
 	if err := os.WriteFile(filepath.Join(e.StateDir, "ubuntu.json"), []byte(`{"forwards":[]}`), 0o000); err != nil {
 		t.Fatalf("WriteFile() err = %v", err)
 	}
@@ -1282,7 +1152,7 @@ func TestEngine_Status_UnreadableState(t *testing.T) {
 
 func TestEngine_Status_InvalidHostHasNoState(t *testing.T) {
 	t.Parallel()
-	got, err := engine(t, newSpawner(), fakedial.New()).Status(context.Background(), "../evil", nil)
+	got, err := engine(t, fakespawn.New(), fakedial.New()).Status(context.Background(), "../evil", nil)
 	if err != nil {
 		t.Fatalf("Status() err = %v", err)
 	}
@@ -1341,7 +1211,7 @@ func TestEngine_Status_Defaults(t *testing.T) {
 
 func TestEngine_Status_SeamFailure(t *testing.T) {
 	t.Parallel()
-	e := engine(t, newSpawner(), fakedial.New())
+	e := engine(t, fakespawn.New(), fakedial.New())
 	e.Runner = fakerun.New().Stub(fakerun.Reply{Err: errors.New("boom")}, "ssh", "-O", "check", "ubuntu")
 	if _, err := e.Status(context.Background(), "ubuntu", nil); err == nil {
 		t.Error("Status() err = nil, want seam failure")
@@ -1356,7 +1226,7 @@ func TestEngine_Status_ObservedTimes(t *testing.T) {
 	now := t0
 	web := []hostmodel.ForwardSet{{Name: "web", Specs: []string{specWeb}}}
 
-	s := newSpawner().Live(41)
+	s := fakespawn.New().Live(41)
 	e := engine(t, s, fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
 	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return now }}
 	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`)
@@ -1404,7 +1274,7 @@ func TestEngine_Status_ObservedTimes(t *testing.T) {
 func TestEngine_Status_ListeningStampsSince(t *testing.T) {
 	t.Parallel()
 	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
-	e := engine(t, newSpawner(), fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
+	e := engine(t, fakespawn.New(), fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
 	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
 	got, err := e.Status(context.Background(), "ubuntu", []hostmodel.ForwardSet{{Name: "web", Specs: []string{specWeb}}})
 	if err != nil {
@@ -1422,7 +1292,7 @@ func TestEngine_Exit_ObservesMasterDead(t *testing.T) {
 	observedAlive := func(t *testing.T) (tunnel.Engine, *time.Time) {
 		t.Helper()
 		now := t0
-		e := engine(t, newSpawner(), fakedial.New())
+		e := engine(t, fakespawn.New(), fakedial.New())
 		e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return now }}
 		if _, err := e.Status(context.Background(), "ubuntu", nil); err != nil { // alive at t0
 			t.Fatalf("Status() err = %v", err)
@@ -1467,7 +1337,7 @@ func TestEngine_StatsWriteFailureConventions(t *testing.T) {
 	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 	newEngine := func(t *testing.T) tunnel.Engine {
 		t.Helper()
-		e := engine(t, newSpawner(), fakedial.New())
+		e := engine(t, fakespawn.New(), fakedial.New())
 		e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
 		if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.stats.json"), 0o700); err != nil {
 			t.Fatalf("Mkdir() err = %v", err)
@@ -1496,7 +1366,7 @@ func TestEngine_StatsWriteFailureConventions(t *testing.T) {
 func TestEngine_Status_CorruptStats(t *testing.T) {
 	t.Parallel()
 	t0 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
-	e := engine(t, newSpawner(), fakedial.New())
+	e := engine(t, fakespawn.New(), fakedial.New())
 	e.Stats = &stats.Store{Dir: e.StateDir, Clock: func() time.Time { return t0 }}
 	if err := os.WriteFile(filepath.Join(e.StateDir, "ubuntu.stats.json"), []byte("{nope"), 0o600); err != nil {
 		t.Fatalf("WriteFile() err = %v", err)
@@ -1539,7 +1409,7 @@ func TestStatus_String(t *testing.T) {
 // refuses it before anything starts.
 func TestEngine_SpawnSet_UnparseableSpecIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSpawner()
+	s := fakespawn.New()
 	e := engine(t, s, fakedial.New())
 	err := e.SpawnSet(context.Background(), "ubuntu", "web", []string{"[::1]:3000:localhost:3000"})
 	if err == nil || !strings.Contains(err.Error(), "no local port to verify") {

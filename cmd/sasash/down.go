@@ -11,7 +11,7 @@ import (
 )
 
 func init() {
-	register("down", "tear down the control master (ssh -O exit)", cmdDown)
+	register("down", "kill every tunnel process of a host", cmdDown)
 }
 
 // cmdDown wires the real world; every decision lives in runDown.
@@ -25,10 +25,11 @@ func cmdDown(args []string, stdout, stderr io.Writer) int {
 	return runDown(args, stdout, stderr, sshConfigPath(home), home, eng)
 }
 
-// runDown is `ssh -O exit` with the addr/status exit-code contract on top:
-// 0 = master torn down, 1 = ssh refused (its message on stderr — a master
-// that was never up reports here; down is not idempotent), 2 = usage,
-// 3 = config problem.
+// runDown kills every tunnel process the host has recorded (Engine.KillAll)
+// with the addr/status exit-code contract on top: 0 = every process gone
+// (nothing running is success — down is idempotent), 1 = a process could
+// not be ended (the reason on stderr), 2 = usage, 3 = config problem. The
+// interactive master is not touched: it is the next connect's to reuse.
 func runDown(args []string, stdout, stderr io.Writer, root, home string, eng tunneler) int {
 	if len(args) != 1 {
 		fmt.Fprintln(stderr, "usage: sasash down <host>")
@@ -41,11 +42,11 @@ func runDown(args []string, stdout, stderr io.Writer, root, home string, eng tun
 		return code
 	}
 
-	switch err := eng.Exit(context.Background(), h.Alias); {
+	switch err := eng.KillAll(context.Background(), h.Alias); {
 	case err == nil:
 	case errors.Is(err, tunnel.ErrStateWrite):
-		// The master really went down; only the cache clear failed
-		// (CONTRACT-tunnel §4: a state write failure must not fail the ssh
+		// The processes really went down; only the cache clear failed
+		// (CONTRACT-tunnel: a state write failure must not fail the
 		// action that succeeded).
 		fmt.Fprintf(stderr, "sasash down: warning: %v\n", err)
 	default:

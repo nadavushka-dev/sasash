@@ -14,6 +14,8 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -135,9 +137,11 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		// The block is on disk after the save: the engine starts the master
 		// through the new alias and adds the forward — recorded, shown.
 		const spec = "8080:localhost:80"
-		r := fakerun.New().StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", spec, "edge")
+		r := fakerun.New().StubExit(1, "ssh", "-O", "check", "edge")
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d)
 		var saved []ui.AdhocEntry
-		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(e ui.AdhocEntry) error { saved = append(saved, e); return nil })
+		m := ui.WithSaveHost(polledSpawn(t, r, sp, d, t.TempDir()), func(e ui.AdhocEntry) error { saved = append(saved, e); return nil })
 		m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec + " root@192.0.2.99")})
@@ -156,14 +160,16 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		if len(saved) != 1 || saved[0].Alias != "edge" || saved[0].Host != "192.0.2.99" || saved[0].User != "root" || !reflect.DeepEqual(saved[0].Forwards, []string{spec}) {
 			t.Errorf("saved = %+v, want the typed target under edge", saved)
 		}
-		if start == nil || !strings.Contains(m.View(), "starting ssh -fN edge ; ssh -O forward -L "+spec+" edge") {
-			// (edge has no poll yet, so the start step shows.)
+		if start == nil || !strings.Contains(m.View(), "starting "+spawnArgv("edge", spec)) {
 			t.Fatalf("the save should start the engine flow (cmd %v):\n%s", start != nil, m.View())
 		}
 		before := len(r.CallKeys())
 		m = feed(t, m, start)
-		if got, want := r.CallKeys()[before:], []string{"ssh -O check edge", "ssh -fN edge", "ssh -O forward -L " + spec + " edge"}; !reflect.DeepEqual(got, want) {
-			t.Errorf("calls = %v, want the engine's flow %v", got, want)
+		if got, want := sp.Spawned(), []string{spawnArgv("edge", spec)}; !reflect.DeepEqual(got, want) {
+			t.Errorf("spawned = %v, want the engine's flow %v", got, want)
+		}
+		if got := r.CallKeys()[before:]; len(got) != 0 {
+			t.Errorf("the flow ran %v through the runner, want nothing", got)
 		}
 		if view := m.View(); !strings.Contains(view, "added "+spec+" on edge") || ui.PopupOpen(m) || ui.Prompting(m) {
 			t.Errorf("View() after the engine flow (popup %v, prompting %v):\n%s", ui.PopupOpen(m), ui.Prompting(m), view)
@@ -208,15 +214,14 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 	})
 	t.Run("a typed saved alias goes through the engine; a user or port beside it is refused; an address saves first", func(t *testing.T) {
 		t.Parallel()
-		// The master was polled up, so the preview has no -fN step.
 		tests := []struct {
 			name    string
 			input   string
 			preview string // "" when nothing would run
-			route   string // engine, refused, save
+			route   string // engine, nothing, refused, save
 		}{
-			{name: "bare alias", input: "-N ubuntu -L 8080:localhost:80", preview: "ssh -O forward -L 8080:localhost:80 ubuntu", route: "engine"},
-			{name: "alias with no specs on a live master previews nothing", input: "ubuntu -N", route: "engine"},
+			{name: "bare alias", input: "-N ubuntu -L 8080:localhost:80", preview: spawnArgv("ubuntu", "8080:localhost:80"), route: "engine"},
+			{name: "alias with no specs has nothing to start", input: "ubuntu -N", route: "nothing"},
 			{name: "alias with a user", input: "-N root@ubuntu", route: "refused"},
 			{name: "alias with a port", input: "-N ubuntu:2222", route: "refused"},
 			{name: "not a host", input: "-N 192.0.2.99", route: "save"},
@@ -224,8 +229,10 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Parallel()
-				r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu")
-				m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
+				r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+				d := fakedial.New()
+				sp := fakespawn.New().Dial(d)
+				m := ui.WithSaveHost(polledSpawn(t, r, sp, d, t.TempDir()), func(ui.AdhocEntry) error { return nil })
 				m = press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), "a")
 				m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.input)})
 				if view := m.View(); (tt.preview != "" && !strings.Contains(view, "→ "+tt.preview)) || strings.Contains(view, "-fN") {
@@ -240,8 +247,12 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 						t.Fatalf("enter: cmd %v, prompting %v; want the engine action", cmd != nil, ui.Prompting(m))
 					}
 					m = update(t, m, cmd())
-					if got := r.CallKeys()[before:]; len(got) == 0 || got[0] != "ssh -O check ubuntu" || strings.Contains(strings.Join(got, " "), "BatchMode") {
-						t.Errorf("calls = %v, want the engine's, never the raw ssh -fN", got)
+					if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", "8080:localhost:80")}) || len(r.CallKeys()) != before {
+						t.Errorf("spawned = %v, runner %v; want the engine's one process, never the raw ssh -fN", got, r.CallKeys()[before:])
+					}
+				case "nothing":
+					if cmd != nil || len(sp.Spawned()) != 0 || len(r.CallKeys()) != before || !strings.Contains(m.View(), "nothing to start") {
+						t.Errorf("enter on -N without -L: cmd %v, spawned %v, calls %v; want nothing started and the notice:\n%s", cmd != nil, sp.Spawned(), r.CallKeys()[before:], m.View())
 					}
 				case "refused":
 					if cmd != nil || !ui.Prompting(m) || ui.PromptingSave(m) || len(r.CallKeys()) != before || !strings.Contains(m.View(), "ubuntu is saved: -N ubuntu alone, or its address") {
@@ -295,9 +306,10 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 	t.Run("the save carries its own target: a later prompt cannot change what starts", func(t *testing.T) {
 		t.Parallel()
 		const spec = "8080:localhost:80"
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", "9999:localhost:99", "ubuntu").
-			StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", spec, "edge")
-		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(1, "ssh", "-O", "check", "edge")
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d)
+		m := ui.WithSaveHost(polledSpawn(t, r, sp, d, t.TempDir()), func(ui.AdhocEntry) error { return nil })
 		m = press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec + " root@192.0.2.99")})
 		m = press(t, m, "enter")
@@ -315,11 +327,11 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		if start == nil {
 			t.Fatalf("the save should start the engine flow")
 		}
-		before := len(r.CallKeys())
+		n := len(sp.Spawned())
 		feed(t, m, start)
-		got := strings.Join(r.CallKeys()[before:], " | ")
-		if !strings.Contains(got, "ssh -fN edge") || !strings.Contains(got, "ssh -O forward -L "+spec+" edge") || strings.Contains(got, "9999") {
-			t.Errorf("calls = %q, want the first -N's spec on edge and nothing of the later prompt", got)
+		got := strings.Join(sp.Spawned()[n:], " | ")
+		if !strings.Contains(got, spawnArgv("edge", spec)) || strings.Contains(got, "9999") {
+			t.Errorf("spawned = %q, want the first -N's spec on edge and nothing of the later prompt", got)
 		}
 	})
 	t.Run("a plain connect saved after a save-first -N starts nothing", func(t *testing.T) {
@@ -381,39 +393,37 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 }
 
 // editModel is the tunnels fixture with the edit hook recording calls:
-// master alive, web's first port up, everything else down.
-func editModel(t *testing.T, r *fakerun.Fake, calls *[][]string, hookErr error) ui.Model {
+// master alive, web's first forward up as our pid 41, everything else
+// down.
+func editModel(t *testing.T, r *fakerun.Fake, calls *[][]string, hookErr error) (ui.Model, *fakespawn.Fake) {
 	t.Helper()
 	r.StubExit(0, "ssh", "-O", "check", "ubuntu")
-	// The cache records web's second spec: taking the whole set down
-	// would cancel it too (unstubbed), so only per-spec surgery passes.
+	// The cache also records web's second spec as a dead pid: taking the
+	// whole set down would touch it too, so only per-spec surgery passes.
 	stateDir := t.TempDir()
-	state := `{"forwards":[{"set":"web","spec":"` + specWeb1 + `"}]}`
-	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	m := tunnelModel(t, r, fakedial.New().Up("127.0.0.1:3000", time.Millisecond), stateDir)
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"web","spec":"`+specWeb1+`","pid":42}]}`)
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	sp := fakespawn.New().Dial(d).LiveOn(41, "3000")
+	m := tunnelModelSpawn(t, r, sp, d, stateDir)
 	m = feed(t, m, m.Init())
 	return ui.WithSaveForwardEdit(m, func(alias, set, old, new string) error {
 		*calls = append(*calls, []string{alias, set, old, new})
 		return hookErr
-	})
+	}), sp
 }
 
 func TestModel_Update_EditForwardLive(t *testing.T) {
 	t.Parallel()
 	var calls [][]string
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", "3005:localhost:3000", "ubuntu")
-	m := editModel(t, r, &calls, nil)
+	r := fakerun.New()
+	m, sp := editModel(t, r, &calls, nil)
 	m = press(t, m, "l", "E") // web0, live
 	view := m.View()
 	if !ui.Prompting(m) || !strings.Contains(view, "edit web on ubuntu: "+specWeb0) {
 		t.Fatalf("E should open the prompt prefilled with the spec:\n%s", view)
 	}
 	// The row shows exactly what enter will run, following the typing.
-	for _, w := range []string{"sasash.conf: forwards web: " + specWeb0 + " → " + specWeb0, "ssh -O cancel -L " + specWeb0 + " ubuntu", "ssh -O forward -L " + specWeb0 + " ubuntu"} {
+	for _, w := range []string{"sasash.conf: forwards web: " + specWeb0 + " → " + specWeb0, "kill -TERM 41", spawnArgv("ubuntu", specWeb0)} {
 		if !strings.Contains(view, w) {
 			t.Errorf("View() while editing missing the plan line %q:\n%s", w, view)
 		}
@@ -422,7 +432,7 @@ func TestModel_Update_EditForwardLive(t *testing.T) {
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
 	}
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3005:localhost:3000")})
-	if view := m.View(); !strings.Contains(view, "ssh -O forward -L 3005:localhost:3000 ubuntu") || !strings.Contains(view, "ssh -O cancel -L "+specWeb0+" ubuntu") {
+	if view := m.View(); !strings.Contains(view, spawnArgv("ubuntu", "3005:localhost:3000")) || !strings.Contains(view, "kill -TERM 41") {
 		t.Errorf("View() plan did not follow the typing:\n%s", view)
 	}
 	before := len(r.CallKeys())
@@ -433,14 +443,19 @@ func TestModel_Update_EditForwardLive(t *testing.T) {
 	}
 	next, after := m.Update(cmd())
 	m = next.(ui.Model)
-	// Config first, then per-spec surgery only: cancel old, forward new,
-	// nothing else on the master.
+	// Config first, then per-process surgery only: kill old, spawn new,
+	// nothing else.
 	if want := [][]string{{"ubuntu", "web", specWeb0, "3005:localhost:3000"}}; !reflect.DeepEqual(calls, want) {
 		t.Errorf("hook calls = %v, want %v", calls, want)
 	}
-	want := []string{"ssh -O cancel -L " + specWeb0 + " ubuntu", "ssh -O forward -L 3005:localhost:3000 ubuntu"}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("ssh calls = %v, want exactly %v", got, want)
+	if got, want := sp.Killed(), []int{41}; !reflect.DeepEqual(got, want) {
+		t.Errorf("killed = %v, want %v", got, want)
+	}
+	if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", "3005:localhost:3000")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("spawned = %v, want exactly %v", got, want)
+	}
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("the edit ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "re-plumbed "+specWeb0+" → 3005:localhost:3000") {
 		t.Errorf("View() missing the outcome:\n%s", view)
@@ -453,69 +468,67 @@ func TestModel_Update_EditForwardLive(t *testing.T) {
 func TestModel_Update_EditForwardOutcomes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		setup     func(r *fakerun.Fake)
-		hookErr   error
-		row       []string // keys to reach the row after l
-		masterUp  bool
-		newSpec   string
-		wantHook  bool
-		wantCalls []string
-		wantNote  []string
-		wantPlan  []string
-		notPlan   []string
+		name        string
+		script      func(sp *fakespawn.Fake)
+		hookErr     error
+		row         []string // keys to reach the row after l
+		ours        bool     // web0 served by our pid 41 (editModel)
+		newSpec     string
+		wantHook    bool
+		wantKilled  []int
+		wantSpawned []string
+		wantNote    []string
+		wantPlan    []string
+		notPlan     []string
 	}{
 		{
 			name:     "down row is config only",
 			row:      []string{"j"}, // web1: down
-			masterUp: true,
+			ours:     true,
 			newSpec:  "3001:localhost:3009",
 			wantHook: true,
 			wantNote: []string{"declared 3001:localhost:3009 in web"},
 			wantPlan: []string{"sasash.conf: forwards web"},
-			notPlan:  []string{"-O cancel", "-O forward"},
+			notPlan:  []string{"kill -TERM", "ssh -N"},
 		},
 		{
-			name:     "master down is config only even for an answering port",
-			masterUp: false, // web0's port answers but nothing can be re-plumbed
+			name:     "a port that answers without a process of ours is config only",
+			ours:     false, // web0's port answers but nothing of ours can be re-plumbed
 			newSpec:  "3000:localhost:3009",
 			wantHook: true,
 			wantNote: []string{"declared 3000:localhost:3009 in web"},
-			notPlan:  []string{"-O cancel"},
+			notPlan:  []string{"kill -TERM"},
 		},
 		{
-			name: "config write failure stops before any ssh",
-			setup: func(r *fakerun.Fake) {
-				r.StubExit(0, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu")
-			},
+			name:     "config write failure stops before any process work",
 			hookErr:  errors.New(`spec "3000:localhost:3009" already in set "web"`),
-			masterUp: true,
+			ours:     true,
 			newSpec:  "3000:localhost:3009",
 			wantHook: true,
 			wantNote: []string{"not declared: ", "already in set"},
 		},
 		{
-			name: "forward failure says the old one is gone",
-			setup: func(r *fakerun.Fake) {
-				r.StubExit(0, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
-					Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("bind: Address already in use")}}, "ssh", "-O", "forward", "-L", "3000:localhost:3009", "ubuntu")
+			name: "spawn failure says the old one is gone",
+			script: func(sp *fakespawn.Fake) {
+				sp.Exits("bind: Address already in use", tunnel.SpawnArgv("ubuntu", "3000:localhost:3009")...)
 			},
-			masterUp:  true,
-			newSpec:   "3000:localhost:3009",
-			wantHook:  true,
-			wantCalls: []string{"ssh -O cancel -L " + specWeb0 + " ubuntu", "ssh -O forward -L 3000:localhost:3009 ubuntu"},
-			wantNote:  []string{"cancelled " + specWeb0 + " but forward 3000:localhost:3009 failed", "Address already in use"},
+			ours:        true,
+			newSpec:     "3000:localhost:3009",
+			wantHook:    true,
+			wantKilled:  []int{41},
+			wantSpawned: []string{spawnArgv("ubuntu", "3000:localhost:3009")},
+			wantNote:    []string{"killed " + specWeb0 + " but spawn of 3000:localhost:3009 failed", "Address already in use"},
 		},
 		{
-			name: "cancel failure is reported and the forward is not attempted",
-			setup: func(r *fakerun.Fake) {
-				r.Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu")
+			name: "kill failure is reported and the spawn is not attempted",
+			script: func(sp *fakespawn.Fake) {
+				sp.KillErr = errors.New("operation not permitted")
 			},
-			masterUp:  true,
-			newSpec:   "3000:localhost:3009",
-			wantHook:  true,
-			wantCalls: []string{"ssh -O cancel -L " + specWeb0 + " ubuntu"},
-			wantNote:  []string{"cancel of " + specWeb0 + " failed: unknown port forwarding", "config updated"},
+			ours:       true,
+			newSpec:    "3000:localhost:3009",
+			wantHook:   true,
+			wantKilled: []int{41},
+			wantNote:   []string{"kill of " + specWeb0 + " failed: pid 41: operation not permitted", "config updated"},
 		},
 	}
 	for _, tt := range tests {
@@ -523,19 +536,22 @@ func TestModel_Update_EditForwardOutcomes(t *testing.T) {
 			t.Parallel()
 			var calls [][]string
 			r := fakerun.New()
-			if tt.setup != nil {
-				tt.setup(r)
-			}
 			var m ui.Model
-			if tt.masterUp {
-				m = editModel(t, r, &calls, tt.hookErr)
+			var sp *fakespawn.Fake
+			if tt.ours {
+				m, sp = editModel(t, r, &calls, tt.hookErr)
 			} else {
-				r.StubExit(255, "ssh", "-O", "check", "ubuntu")
-				m = polled(t, r, fakedial.New().Up("127.0.0.1:3000", time.Millisecond))
+				r.StubExit(0, "ssh", "-O", "check", "ubuntu")
+				d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+				sp = fakespawn.New().Dial(d)
+				m = polledSpawn(t, r, sp, d, t.TempDir())
 				m = ui.WithSaveForwardEdit(m, func(alias, set, old, new string) error {
 					calls = append(calls, []string{alias, set, old, new})
 					return tt.hookErr
 				})
+			}
+			if tt.script != nil {
+				tt.script(sp)
 			}
 			m = press(t, m, append([]string{"l"}, tt.row...)...)
 			m = press(t, m, "E")
@@ -564,8 +580,14 @@ func TestModel_Update_EditForwardOutcomes(t *testing.T) {
 			if (len(calls) == 1) != tt.wantHook {
 				t.Errorf("hook calls = %v, want called %v", calls, tt.wantHook)
 			}
-			if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, tt.wantCalls) && !(len(got) == 0 && len(tt.wantCalls) == 0) {
-				t.Errorf("ssh calls = %v, want %v", got, tt.wantCalls)
+			if got := sp.Killed(); !reflect.DeepEqual(got, tt.wantKilled) && !(len(got) == 0 && len(tt.wantKilled) == 0) {
+				t.Errorf("killed = %v, want %v", got, tt.wantKilled)
+			}
+			if got := sp.Spawned(); !reflect.DeepEqual(got, tt.wantSpawned) && !(len(got) == 0 && len(tt.wantSpawned) == 0) {
+				t.Errorf("spawned = %v, want %v", got, tt.wantSpawned)
+			}
+			if got := r.CallKeys()[before:]; len(got) != 0 {
+				t.Errorf("the edit ran %v through the runner, want nothing", got)
 			}
 			view = m.View()
 			for _, w := range tt.wantNote {
@@ -581,7 +603,7 @@ func TestModel_Update_EditForwardGuards(t *testing.T) {
 	t.Parallel()
 	var calls [][]string
 	r := fakerun.New()
-	m := editModel(t, r, &calls, nil)
+	m, _ := editModel(t, r, &calls, nil)
 	// No highlight: a hint, nothing opened.
 	m = press(t, m, "E")
 	if ui.Prompting(m) || !strings.Contains(m.View(), "l cycles") {
@@ -619,35 +641,34 @@ func TestModel_Update_EditForwardGuards(t *testing.T) {
 }
 
 // adhocRowModel is the tunnels fixture with a recorded ad-hoc forward on
-// port 9000; up says whether its port answers under a live master.
-func adhocRowModel(t *testing.T, r *fakerun.Fake, up bool, calls *[][]string) (ui.Model, string) {
+// port 9000; up says whether our pid 41 serves it and its port answers.
+func adhocRowModel(t *testing.T, r *fakerun.Fake, up bool, calls *[][]string) (ui.Model, string, *fakespawn.Fake) {
 	t.Helper()
 	r.StubExit(0, "ssh", "-O", "check", "ubuntu")
 	stateDir := t.TempDir()
 	state := `{"forwards":[{"set":"","spec":"9000:localhost:9000"}]}`
-	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
 	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
 	if up {
+		state = `{"forwards":[{"set":"","spec":"9000:localhost:9000","pid":41}]}`
 		d.Up("127.0.0.1:9000", time.Millisecond)
+		sp.LiveOn(41, "9000")
 	}
-	m := tunnelModel(t, r, d, stateDir)
+	writeState(t, stateDir, state)
+	m := tunnelModelSpawn(t, r, sp, d, stateDir)
 	m = feed(t, m, m.Init())
 	return ui.WithSaveForwardEdit(m, func(alias, set, old, new string) error {
 		*calls = append(*calls, []string{alias, set, old, new})
 		return nil
-	}), stateDir
+	}), stateDir, sp
 }
 
 func TestModel_Update_EditForwardAdhocRow(t *testing.T) {
 	t.Parallel()
 	// A live ad-hoc row is surgery only: no meta line exists to rewrite.
 	var calls [][]string
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "cancel", "-L", "9000:localhost:9000", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", "9001:localhost:9000", "ubuntu")
-	m, _ := adhocRowModel(t, r, true, &calls)
+	r := fakerun.New()
+	m, _, sp := adhocRowModel(t, r, true, &calls)
 	m = press(t, m, "l", "G", "E") // the ad-hoc row is last
 	view := m.View()
 	if !strings.Contains(view, "edit ad-hoc on ubuntu: 9000:localhost:9000") || strings.Contains(view, "sasash.conf:") {
@@ -657,25 +678,42 @@ func TestModel_Update_EditForwardAdhocRow(t *testing.T) {
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
 	}
 	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9001:localhost:9000")})
-	before := len(r.CallKeys())
 	next, cmd := m.Update(keyMsg("enter"))
-	m = update(t, next.(ui.Model), cmd())
+	next, after := next.(ui.Model).Update(cmd())
+	m = next.(ui.Model)
 	if len(calls) != 0 {
 		t.Errorf("hook called for an ad-hoc row: %v", calls)
 	}
-	want := []string{"ssh -O cancel -L 9000:localhost:9000 ubuntu", "ssh -O forward -L 9001:localhost:9000 ubuntu"}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("ssh calls = %v, want %v", got, want)
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{41}) {
+		t.Errorf("killed = %v, want [41]", got)
+	}
+	if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", "9001:localhost:9000")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("spawned = %v, want %v", got, want)
 	}
 	if view := m.View(); !strings.Contains(view, "re-plumbed 9000:localhost:9000 → 9001:localhost:9000") || strings.Contains(view, "declared") {
 		t.Errorf("View() outcome for an ad-hoc row:\n%s", view)
 	}
+	// The old spec's record is purged with the re-plumb (C1): the re-poll
+	// the edit arms shows the new spec only.
+	if after == nil {
+		t.Fatalf("Update(editFwdDone) cmd = nil, want the re-poll")
+	}
+	m = feed(t, m, after)
+	var rows []string
+	for _, l := range strings.Split(m.View(), "\n") {
+		if strings.Contains(l, "ad-hoc") {
+			rows = append(rows, l)
+		}
+	}
+	if joined := strings.Join(rows, "\n"); strings.Contains(joined, "9000:localhost:9000") || !strings.Contains(joined, "9001:localhost:9000") {
+		t.Errorf("rows after the re-poll should carry only the new spec:\n%s", m.View())
+	}
 
-	// A cancel failure on an ad-hoc row must not claim a config update:
+	// A kill failure on an ad-hoc row must not claim a config update:
 	// nothing was written.
 	var none2 [][]string
-	r2 := fakerun.New().Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, "ssh", "-O", "cancel", "-L", "9000:localhost:9000", "ubuntu")
-	m2, _ := adhocRowModel(t, r2, true, &none2)
+	m2, _, sp2 := adhocRowModel(t, fakerun.New(), true, &none2)
+	sp2.KillErr = errors.New("operation not permitted")
 	m2 = press(t, m2, "l", "G", "E")
 	for range len("9000:localhost:9000") {
 		m2 = update(t, m2, tea.KeyMsg{Type: tea.KeyBackspace})
@@ -683,13 +721,13 @@ func TestModel_Update_EditForwardAdhocRow(t *testing.T) {
 	m2 = update(t, m2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9001:localhost:9000")})
 	next, cmd = m2.Update(keyMsg("enter"))
 	m2 = update(t, next.(ui.Model), cmd())
-	if view := m2.View(); !strings.Contains(view, "cancel of 9000:localhost:9000 failed: unknown port forwarding") || strings.Contains(view, "config updated") {
-		t.Errorf("View() after a failed ad-hoc cancel:\n%s", view)
+	if view := m2.View(); !strings.Contains(view, "kill of 9000:localhost:9000 failed: pid 41: operation not permitted") || strings.Contains(view, "config updated") {
+		t.Errorf("View() after a failed ad-hoc kill:\n%s", view)
 	}
 
 	// A dead ad-hoc row has nothing to edit: x it and + a new one.
 	var none [][]string
-	dead, _ := adhocRowModel(t, fakerun.New(), false, &none)
+	dead, _, _ := adhocRowModel(t, fakerun.New(), false, &none)
 	dead = press(t, dead, "l", "G", "E")
 	if ui.Prompting(dead) || !strings.Contains(dead.View(), "not live") {
 		t.Errorf("E on a dead ad-hoc row: prompting %v:\n%s", ui.Prompting(dead), dead.View())
@@ -700,14 +738,15 @@ func TestModel_Update_EditForwardNeedsHookForDeclared(t *testing.T) {
 	t.Parallel()
 	// Without the edit hook a declared, dead row cannot be edited; a
 	// live one still can (surgery only).
-	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
-	m := polled(t, r, fakedial.New().Up("127.0.0.1:3000", time.Millisecond)) // no hook
-	m = press(t, m, "l", "j", "E")                                           // web1: down
+	var none [][]string
+	m, _ := editModel(t, fakerun.New(), &none, nil)
+	m = ui.WithSaveForwardEdit(m, nil) // no hook
+	m = press(t, m, "l", "j", "E")     // web1: down
 	if ui.Prompting(m) || !strings.Contains(m.View(), "not available") {
 		t.Errorf("E on a dead declared row without a hook: prompting %v:\n%s", ui.Prompting(m), m.View())
 	}
 	m = press(t, m, "k", "E") // web0: live
-	if !ui.Prompting(m) || strings.Contains(m.View(), "sasash.conf:") || !strings.Contains(m.View(), "ssh -O cancel") {
+	if !ui.Prompting(m) || strings.Contains(m.View(), "sasash.conf:") || !strings.Contains(m.View(), "kill -TERM 41") {
 		t.Errorf("E on a live declared row without a hook: want surgery-only plan:\n%s", m.View())
 	}
 }
@@ -720,9 +759,9 @@ func TestModel_View_EditPlanStaysOnItsRow(t *testing.T) {
 	// does the action.
 	var calls [][]string
 	r := fakerun.New()
-	m, stateDir := adhocRowModel(t, r, true, &calls)
+	m, stateDir, _ := adhocRowModel(t, r, true, &calls)
 	m = press(t, m, "l", "G", "E")
-	if !strings.Contains(m.View(), "ssh -O cancel -L 9000:localhost:9000 ubuntu") {
+	if !strings.Contains(m.View(), "kill -TERM 41") {
 		t.Fatalf("plan missing before the poll:\n%s", m.View())
 	}
 	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(`{"forwards":[]}`), 0o600); err != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/stats"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
@@ -94,9 +95,21 @@ func TestSparkline_Shapes(t *testing.T) {
 // store and the ui share one fake clock.
 func statsModel(t *testing.T, r *fakerun.Fake, d *fakedial.Fake, clock *fakeClock) (ui.Model, stats.Store) {
 	t.Helper()
+	return statsModelOurs(t, r, d, clock, false)
+}
+
+// statsModelOurs is statsModel with, when ours, web's first forward
+// recorded as our live pid 41 (its port must be up on d to read up).
+func statsModelOurs(t *testing.T, r *fakerun.Fake, d *fakedial.Fake, clock *fakeClock, ours bool) (ui.Model, stats.Store) {
+	t.Helper()
 	dir := t.TempDir()
 	store := stats.Store{Dir: dir, Clock: clock.now}
-	eng := tunnel.Engine{Runner: r, Dialer: d, StateDir: dir, Timeout: 50 * time.Millisecond, Stats: &store}
+	sp := fakespawn.New().Dial(d)
+	if ours {
+		writeState(t, dir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+		sp.Live(41)
+	}
+	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: dir, Timeout: 50 * time.Millisecond, Stats: &store}
 	m := ui.New(tunnelHosts(), probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng, Clock: clock.now})
 	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	return m, store
@@ -107,7 +120,7 @@ func TestModel_View_HeaderSummary(t *testing.T) {
 	clock := &fakeClock{t: t0}
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond).Up("127.0.0.1:3000", time.Millisecond)
-	m, _ := statsModel(t, r, d, clock)
+	m, _ := statsModelOurs(t, r, d, clock, true)
 	// Before the first round the tally is unknown.
 	if view := m.View(); !strings.Contains(view, "3 hosts · probing…") {
 		t.Errorf("View() before probing missing the pending tally:\n%s", view)
@@ -169,7 +182,7 @@ func TestModel_View_RunWords(t *testing.T) {
 	clock := &fakeClock{t: t0}
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
-	m, _ := statsModel(t, r, d, clock)
+	m, _ := statsModelOurs(t, r, d, clock, true)
 	m = feed(t, m, m.Init())
 	clock.advance(12 * time.Minute)
 	view := m.View()

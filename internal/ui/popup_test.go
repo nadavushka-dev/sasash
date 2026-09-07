@@ -15,6 +15,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
@@ -24,10 +25,10 @@ import (
 func failedForward(t *testing.T) (ui.Model, *fakerun.Fake) {
 	t.Helper()
 	stderr := "ssh: connect to host 192.0.2.10 port 22: Connection refused\nkex_exchange_identification: read: Connection reset by peer\nBanner line three"
-	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
-		Stub(fakerun.Reply{Result: run.Result{Stderr: []byte(stderr), Code: 255}}, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
-	m := polled(t, r, fakedial.New())
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d).Exits(stderr, tunnel.SpawnArgv("ubuntu", specWeb0)...)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
 	m = press(t, m, "l")
 	next, cmd := m.Update(keyMsg(" "))
 	m = update(t, next.(ui.Model), cmd())
@@ -58,7 +59,7 @@ func TestModel_Update_PopupOwnsTheKeyboard(t *testing.T) {
 	view := m.View()
 	// The whole reason, every line, plus the argv it ran; the ssh line
 	// is gone from the body and so is the tunnels pane.
-	for _, want := range []string{"! ", "failed on ubuntu", "Connection refused", "kex_exchange_identification", "Banner line three", "ssh -O forward -L " + specWeb0 + " ubuntu", "esc/enter close"} {
+	for _, want := range []string{"! ", "failed on ubuntu", "Connection refused", "kex_exchange_identification", "Banner line three", spawnArgv("ubuntu", specWeb0), "esc/enter close"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() popup missing %q:\n%s", want, view)
 		}
@@ -313,9 +314,8 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 	t.Run("edit-forward failure shows the refusal whole", func(t *testing.T) {
 		t.Parallel()
 		var calls [][]string
-		r := fakerun.New().
-			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("mux_client_forward: forwarding request failed\nControl socket connect(/x/cm/abc): No such file or directory"), Code: 255}}, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu")
-		m := editModel(t, r, &calls, nil)
+		m, sp := editModel(t, fakerun.New(), &calls, nil)
+		sp.KillErr = errors.New("mux_client_forward: forwarding request failed\nControl socket connect(/x/cm/abc): No such file or directory")
 		m = press(t, m, "l", "E")
 		for range specWeb0 {
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
@@ -325,7 +325,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		m = update(t, next.(ui.Model), cmd())
 		view := m.View()
 		if !ui.PopupOpen(m) || !strings.Contains(view, "edit forward failed on ubuntu") || !strings.Contains(view, "mux_client_forward") || !strings.Contains(view, "No such file or directory") {
-			t.Errorf("a refused cancel during E should open the popup with the whole reason:\n%s", view)
+			t.Errorf("a refused kill during E should open the popup with the whole reason:\n%s", view)
 		}
 	})
 	t.Run("routine one-liners stay on the line", func(t *testing.T) {
@@ -383,10 +383,10 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 	})
 	t.Run("control characters in stderr never reach the frame", func(t *testing.T) {
 		t.Parallel()
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
-			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("mid\rcarriage	and \x1b[2J\x1b[H wipe"), Code: 255}}, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-			StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
-		m := polled(t, r, fakedial.New())
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d).Exits("mid\rcarriage	and \x1b[2J\x1b[H wipe", tunnel.SpawnArgv("ubuntu", specWeb0)...)
+		m := polledSpawn(t, r, sp, d, t.TempDir())
 		m = press(t, m, "l")
 		next, cmd := m.Update(keyMsg(" "))
 		m = update(t, next.(ui.Model), cmd())

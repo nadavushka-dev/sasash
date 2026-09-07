@@ -113,9 +113,10 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 
 // addForwardCmd dials 127.0.0.1:<port> through the probe seam first
 // (SPEC §4: never silently remap): held means a conflict comes back with
-// the next free port offered; free means Engine.Up with the spec as an
-// ad-hoc forward. Something can still take the port between the check
-// and the add — ssh's bind failure then comes back as the action error.
+// the next free port offered; free means one spawned process for the spec
+// as an ad-hoc forward. Something can still take the port between the
+// check and the add — the engine's own refusal then comes back as the
+// action error.
 func (m Model) addForwardCmd(alias, spec, port string) tea.Cmd {
 	eng, prober := m.tunnels, m.prober
 	m.tinflight[alias] = true // the add writes the caches: no poll meanwhile
@@ -127,7 +128,7 @@ func (m Model) addForwardCmd(alias, spec, port string) tea.Cmd {
 		}
 		actx, acancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 		defer acancel()
-		return tunnelDoneMsg{host: alias, label: "add", done: "added " + spec + " on " + alias, err: eng.Up(actx, alias, "", []string{spec})}
+		return tunnelDoneMsg{host: alias, label: "add", done: "added " + spec + " on " + alias, err: eng.SpawnSet(actx, alias, "", []string{spec})}
 	}
 }
 

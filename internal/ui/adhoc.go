@@ -423,12 +423,17 @@ func (m Model) startTunnelOnly(t adhocTarget) (Model, tea.Cmd) {
 }
 
 // engineTunnel brings the ad-hoc forwards up on a saved host through the
-// engine, under the host's in-flight gate, exactly as `+` does: the
-// master first if it is down, then each spec, recorded as the ad-hoc
-// set so the tunnels pane shows it and x/X can end it.
+// engine, under the host's in-flight gate, exactly as `+` does: one
+// process per spec, recorded as the ad-hoc set so the tunnels pane shows
+// it and x/X can end it. A -N with no -L has nothing to start: tunnels
+// are per-port, and the interactive master is the next connect's.
 func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
 	if m.tunnels == nil {
 		m.notice = "tunnels are not available here — nothing started"
+		return m, nil
+	}
+	if len(specs) == 0 {
+		m.notice = "-N without -L: nothing to start — a tunnel is one process per port"
 		return m, nil
 	}
 	// One spec is `+` exactly: the local port is dialled first, and a
@@ -440,28 +445,20 @@ func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
 		}
 	}
 	eng := m.tunnels
-	done := "master up on " + alias
-	if len(specs) > 0 {
-		done = "tunnel up on " + alias + ": " + strings.Join(specs, " ") + " — ad-hoc, in the tunnels pane"
-	}
+	done := "tunnel up on " + alias + ": " + strings.Join(specs, " ") + " — ad-hoc, in the tunnels pane"
 	m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
 	return m, m.tunnelActionCmd(alias, "tunnel", done, func(ctx context.Context) error {
-		return eng.Up(ctx, alias, "", specs)
+		return eng.SpawnSet(ctx, alias, "", specs)
 	})
 }
 
 // engineTunnelPreview is the engine's flow for a -N as the prompt's
-// expansion line shows it: the master start when the last poll saw it
-// down (the pane's own gate), then each forward — the engine's own
-// argv, pinned to its calls like the tunnels pane's preview (the check
-// itself is not a step to show). Empty when nothing would run.
+// expansion line shows it: one spawn per forward — the engine's own
+// argv, like the tunnels pane's preview. Empty when nothing would run.
 func (m Model) engineTunnelPreview(alias string, specs []string) []string {
 	var steps []string
-	if ts, ok := m.tstatus[alias]; !ok || !ts.status.Master {
-		steps = append(steps, strings.Join(startArgv(alias), " "))
-	}
 	for _, s := range specs {
-		steps = append(steps, strings.Join(forwardArgv(alias, s), " "))
+		steps = append(steps, strings.Join(spawnArgv(alias, s), " "))
 	}
 	return steps
 }

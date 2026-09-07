@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,23 +15,28 @@ import (
 )
 
 // Tunneler is the slice of tunnel.Engine the tunnels section consumes
-// (CONTRACT-tunnel §3): status plus the compositions, never the raw
-// command methods except Exit. The pane never builds ssh argv for
-// execution — only for the preview line, pinned to the engine's own calls.
+// (CONTRACT-tunnel, Model B): status, the per-set and per-forward
+// spawn/kill, the host-wide kill, the interactive master's exit, and the
+// record purge a re-plumb needs. The pane never builds ssh argv for
+// execution — only for the preview line, from the engine's own builder.
 type Tunneler interface {
 	Status(ctx context.Context, host string, desired []hostmodel.ForwardSet) (tunnel.HostStatus, error)
-	Up(ctx context.Context, host, set string, specs []string) error
-	DownSet(ctx context.Context, host, set string, specs []string) error
-	Cancel(ctx context.Context, host, spec string) error
-	Forward(ctx context.Context, host, set, spec string) error
+	SpawnSet(ctx context.Context, host, set string, specs []string) error
+	KillSet(ctx context.Context, host, set string, specs []string) error
+	Spawn(ctx context.Context, host, set, spec string) error
+	Kill(ctx context.Context, host, spec string) error
+	KillAll(ctx context.Context, host string) error
 	Exit(ctx context.Context, host string) error
+	Forget(host, spec string) error
 }
 
-// tunnelStatusTimeout bounds one Status call: an `-O check` plus one local
-// dial per forward, each already bounded by the engine's own timeout.
+// tunnelStatusTimeout bounds one Status call: an `-O check` for the
+// interactive master plus one liveness check and one local dial per
+// forward, each already bounded by the engine's own timeout.
 const tunnelStatusTimeout = 10 * time.Second
 
-// tunnelActionTimeout bounds one action: `ssh -fN` may authenticate.
+// tunnelActionTimeout bounds one action: each spawned process may
+// authenticate on its own.
 const tunnelActionTimeout = 60 * time.Second
 
 // tunnelState is the last Status result for one host; err is a seam
@@ -57,15 +63,13 @@ type tunnelDoneMsg struct {
 	err               error
 }
 
-// Preview argv builders — the exact strings the engine runs (CONTRACT-
-// tunnel §2). They exist only so the bottom line can show what space will
-// do; TestTunnelArgv_MatchesEngine pins them to the engine's real calls.
-func startArgv(host string) []string { return []string{"ssh", "-fN", host} }
-func forwardArgv(host, spec string) []string {
-	return []string{"ssh", "-O", "forward", "-L", spec, host}
-}
-func cancelArgv(host, spec string) []string { return []string{"ssh", "-O", "cancel", "-L", spec, host} }
-func exitArgv(host string) []string         { return []string{"ssh", "-O", "exit", host} }
+// Preview builders — what the bottom line shows. A spawn is the engine's
+// own argv (tunnel.SpawnArgv, the one owner of the literal); a kill is
+// the SIGTERM the engine sends, written the way a shell would; the exit
+// is the interactive master's `ssh -O exit`.
+func spawnArgv(host, spec string) []string { return tunnel.SpawnArgv(host, spec) }
+func killArgv(pid int) []string            { return []string{"kill", "-TERM", strconv.Itoa(pid)} }
+func exitArgv(host string) []string        { return []string{"ssh", "-O", "exit", host} }
 
 // tunnelStatusCmd polls one host's tunnel status off the UI thread; nil
 // when the section is off or a poll for the host is already in flight —
@@ -179,7 +183,7 @@ func (m Model) highlighted(host hostmodel.Host) (tunnel.Forward, bool) {
 
 // setSpecs gathers what the engine will act on for one set: the declared
 // specs plus every row Status attributed to the set (recorded extras) —
-// exactly the union DownSet cancels — and whether every row is Up.
+// exactly the union KillSet ends — and whether every row is Up.
 func (m Model) setSpecs(host hostmodel.Host, set string) (specs []string, allUp bool) {
 	seen := make(map[string]bool)
 	add := func(s string) {
@@ -217,9 +221,9 @@ func setLabel(set string) string {
 }
 
 // actionPreview is what the bottom line shows: enter's ssh when no forward
-// row is highlighted, otherwise the first ssh command space will run and
-// how many follow it (a set is one -L per invocation). The engine's
-// `-O check` before an Up is a probe, not an action, and is not counted.
+// row is highlighted, otherwise the first command space will run and how
+// many follow it — one process per forward: a spawn per row that is not
+// up, or a kill per row when the set is fully up.
 func (m Model) actionPreview() (argv []string, more int) {
 	host, ok := m.Selected()
 	if !ok {
@@ -234,12 +238,45 @@ func (m Model) actionPreview() (argv []string, more int) {
 		return m.enterPreview(host.Alias), 0
 	}
 	if allUp {
-		return cancelArgv(host.Alias, specs[0]), len(specs) - 1
+		pids := m.setPids(host, row.Set)
+		return killArgv(pids[0]), len(pids) - 1
 	}
-	if ts, ok := m.tstatus[host.Alias]; !ok || !ts.status.Master {
-		return startArgv(host.Alias), len(specs)
+	pending := m.notUp(host, specs)
+	return spawnArgv(host.Alias, pending[0]), len(pending) - 1
+}
+
+// setPids lists the live pids of a set's up rows, in row order.
+func (m Model) setPids(host hostmodel.Host, set string) []int {
+	rows, _ := m.forwardRows(host)
+	var pids []int
+	for _, f := range rows {
+		if f.Set == set && f.State == tunnel.Up && f.Pid > 0 {
+			pids = append(pids, f.Pid)
+		}
 	}
-	return forwardArgv(host.Alias, specs[0]), len(specs) - 1
+	return pids
+}
+
+// notUp filters specs down to the ones SpawnSet will actually spawn: every
+// spec whose row is not up. Before a poll lands nothing is known to be up,
+// so every spec counts.
+func (m Model) notUp(host hostmodel.Host, specs []string) []string {
+	rows, pending := m.forwardRows(host)
+	up := make(map[string]bool)
+	if !pending {
+		for _, f := range rows {
+			if f.State == tunnel.Up {
+				up[f.Spec] = true
+			}
+		}
+	}
+	var out []string
+	for _, s := range specs {
+		if !up[s] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // enterPreview is what enter runs on the host row: the spawn plan when
@@ -256,42 +293,41 @@ func (m Model) enterPreview(alias string) []string {
 	return plan.preview()
 }
 
-// toggleCmd is space: bring the highlighted row's set up, or — when every
-// forward of the set is already up — take it down. A partially-up set goes
-// through Up; a forward that is already bound then fails with ssh's own
-// message, which the notice shows rather than hides.
+// toggleCmd is space: bring the highlighted row's set up — one process per
+// forward that is not already up, the up ones untouched — or, when every
+// forward of the set is up, kill them all. A port someone else holds
+// comes back as the engine's refusal, which the notice shows rather than
+// hides.
 func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	eng, alias, set := m.tunnels, host.Alias, row.Set
 	specs, allUp := m.setSpecs(host, set)
 	name := setLabel(set)
 	if allUp {
 		return m.tunnelActionCmd(alias, name, name+" down", func(ctx context.Context) error {
-			return eng.DownSet(ctx, alias, set, specs)
+			return eng.KillSet(ctx, alias, set, specs)
 		})
 	}
 	return m.tunnelActionCmd(alias, name, name+" up", func(ctx context.Context) error {
-		return eng.Up(ctx, alias, set, specs)
+		return eng.SpawnSet(ctx, alias, set, specs)
 	})
 }
 
-// restartCmd is r, "restart master" (SPEC §5): exit the master and start
-// a fresh one, nothing more — the forwards it carried are gone with it
-// and come back per set through space, so nothing the user did not ask
-// for gets bound. The exit's own failure is not news: a restart of a dead
-// master is just a start, and anything that would stop a fresh master
-// fails in Up.
+// restartCmd is r, "restart master" (SPEC §5): exit the interactive
+// master; ControlMaster auto starts a fresh one on the next connect, and
+// the tunnels — their own processes — are not touched. ssh's refusal is
+// the notice (a master that is not running says so), and a "No
+// ControlPath" refusal is what opens the trio offer (SASASH.4.18).
 func (m Model) restartCmd(host hostmodel.Host) tea.Cmd {
 	eng, alias := m.tunnels, host.Alias
-	return m.tunnelActionCmd(alias, "restart", "master restarted", func(ctx context.Context) error {
-		_ = eng.Exit(ctx, alias)
-		return eng.Up(ctx, alias, "", nil)
+	return m.tunnelActionCmd(alias, "restart", "master exited — a fresh one starts on the next connect", func(ctx context.Context) error {
+		return eng.Exit(ctx, alias)
 	})
 }
 
 // stateWriteOnly reports whether err is nothing but state-cache write
-// failures: the ssh side succeeded. DownSet joins cancel failures and the
-// cache failure into one error, so errors.Is alone would call a refused
-// cancel a mere warning — every leaf has to be ErrStateWrite.
+// failures: the process side succeeded. KillSet joins kill failures and
+// the cache failure into one error, so errors.Is alone would call a
+// surviving process a mere warning — every leaf has to be ErrStateWrite.
 func stateWriteOnly(err error) bool {
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		for _, e := range joined.Unwrap() {
@@ -323,29 +359,47 @@ func oneLine(err error, host string) string {
 	return strings.Join(lines, "; ")
 }
 
-// cancelCmd is x: `ssh -O cancel` for the one highlighted forward. A
-// forward that is already gone fails with ssh's own reason. The notice
-// says what OpenSSH does (4.17): the listener closes, and connections
-// already established through it stay until they close on their own —
-// a browser's keep-alive outlives the cancel.
+// cancelCmd is x: kill the one highlighted forward's process. The notice
+// says what that does: the listener AND the connections established
+// through it drop together (Model B — the clean kill). A row with no live
+// process of ours has nothing to kill; the engine still retires its
+// record (a named row) or keeps it as the ad-hoc declaration.
 func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	eng, alias, spec := m.tunnels, host.Alias, row.Spec
-	return m.tunnelActionCmd(alias, "cancel", "cancelled "+spec+" — open connections stay until they close", func(ctx context.Context) error {
-		return eng.Cancel(ctx, alias, spec)
+	done := "killed " + spec + " — its connections dropped with it"
+	if row.Pid == 0 {
+		done = spec + " has no process of ours to kill"
+	}
+	return m.tunnelActionCmd(alias, "kill", done, func(ctx context.Context) error {
+		return eng.Kill(ctx, alias, spec)
 	})
 }
 
-// exitCmd is X: `ssh -O exit`, the master and every forward with it.
+// exitCmd is X: everything off — every tunnel process of the host, then
+// the interactive master (`ssh -O exit`) when the last poll saw one. A
+// master that is not running is not asked to exit.
 func (m Model) exitCmd(host hostmodel.Host) tea.Cmd {
 	eng, alias := m.tunnels, host.Alias
-	return m.tunnelActionCmd(alias, "exit", "master exited", func(ctx context.Context) error {
-		return eng.Exit(ctx, alias)
+	ts, known := m.tstatus[alias]
+	master := known && ts.err == nil && ts.status.Master
+	done := "tunnels killed"
+	if master {
+		done += ", master exited"
+	}
+	return m.tunnelActionCmd(alias, "exit", done, func(ctx context.Context) error {
+		err := eng.KillAll(ctx, alias)
+		if master {
+			err = errors.Join(err, eng.Exit(ctx, alias))
+		}
+		return err
 	})
 }
 
-// tunnelsView renders the section under paths: the master, then one row
-// per forward with its verbatim three-state status — glyph AND word, so
-// the state survives NO_COLOR. Nothing is collapsed: listening is not up.
+// tunnelsView renders the section under paths: the interactive master
+// (an indicator for connection reuse, never a forward's verdict), then
+// one row per forward with its verbatim three-state status — glyph AND
+// word, so the state survives NO_COLOR. Nothing is collapsed: listening
+// (the port answers, but no process of ours) is not up.
 func (m Model) tunnelsView(host hostmodel.Host) string {
 	var b strings.Builder
 	b.WriteString("\n\n" + m.styles.SectionLabel.Render("tunnels"))

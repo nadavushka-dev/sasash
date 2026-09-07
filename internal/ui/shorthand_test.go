@@ -9,6 +9,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -52,20 +53,19 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 	// line shows the expansion beside the typed shorthand.
 	t.Run("+ prompt", func(t *testing.T) {
 		t.Parallel()
-		r := fakerun.New().
-			StubExit(0, "ssh", "-O", "check", "ubuntu").
-			StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:8080", "ubuntu")
-		m := polled(t, r, fakedial.New())
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d)
+		m := polledSpawn(t, r, sp, d, t.TempDir())
 		m = press(t, m, "+")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8080")})
 		if view := m.View(); !strings.Contains(view, "→ 8080:localhost:8080") {
 			t.Errorf("View() missing the expansion beside the field:\n%s", view)
 		}
-		before := len(r.CallKeys())
 		next, cmd := m.Update(keyMsg("enter"))
 		m = update(t, next.(ui.Model), cmd())
-		if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check ubuntu", "ssh -O forward -L 8080:localhost:8080 ubuntu"}) {
-			t.Errorf("calls = %v", got)
+		if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", "8080:localhost:8080")}) {
+			t.Errorf("spawned = %v", got)
 		}
 		if view := m.View(); !strings.Contains(view, "added 8080:localhost:8080 on ubuntu") {
 			t.Errorf("View() outcome:\n%s", view)
@@ -74,16 +74,13 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 	t.Run("E prompt", func(t *testing.T) {
 		t.Parallel()
 		var calls [][]string
-		r := fakerun.New().
-			StubExit(0, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
-			StubExit(0, "ssh", "-O", "forward", "-L", "3000:localhost:9000", "ubuntu")
-		m := editModel(t, r, &calls, nil)
+		m, _ := editModel(t, fakerun.New(), &calls, nil)
 		m = press(t, m, "l", "E")
 		for range specWeb0 {
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})
 		}
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3000:9000")})
-		if view := m.View(); !strings.Contains(view, "→ 3000:localhost:9000") || !strings.Contains(view, "ssh -O forward -L 3000:localhost:9000 ubuntu") {
+		if view := m.View(); !strings.Contains(view, "→ 3000:localhost:9000") || !strings.Contains(view, spawnArgv("ubuntu", "3000:localhost:9000")) {
 			t.Errorf("View() plan and expansion should show the canonical spec:\n%s", view)
 		}
 		next, cmd := m.Update(keyMsg("enter"))
@@ -147,20 +144,19 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 		// The engine's local-port rule is the + gate, as before 4.9: a
 		// remote socket target is not a shorthand and is not refused.
 		const sock = "3000:/var/run/docker.sock"
-		r := fakerun.New().
-			StubExit(0, "ssh", "-O", "check", "ubuntu").
-			StubExit(0, "ssh", "-O", "forward", "-L", sock, "ubuntu")
-		m := polled(t, r, fakedial.New())
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d)
+		m := polledSpawn(t, r, sp, d, t.TempDir())
 		m = press(t, m, "+")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(sock)})
 		if view := m.View(); strings.Contains(view, "→ ") {
 			t.Errorf("View() offers an expansion for a canonical spec:\n%s", view)
 		}
-		before := len(r.CallKeys())
 		next, cmd := m.Update(keyMsg("enter"))
 		update(t, next.(ui.Model), cmd())
-		if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check ubuntu", "ssh -O forward -L " + sock + " ubuntu"}) {
-			t.Errorf("calls = %v", got)
+		if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", sock)}) {
+			t.Errorf("spawned = %v", got)
 		}
 	})
 	t.Run("expansion too wide is cut with a visible ellipsis", func(t *testing.T) {

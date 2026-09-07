@@ -17,6 +17,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
@@ -49,15 +50,34 @@ func tunnelHosts() []hostmodel.Host {
 // the frame is 100 columns.
 func tunnelModel(t *testing.T, r *fakerun.Fake, d *fakedial.Fake, stateDir string) ui.Model {
 	t.Helper()
-	eng := tunnel.Engine{Runner: r, Dialer: d, StateDir: stateDir, Timeout: 50 * time.Millisecond}
+	return tunnelModelSpawn(t, r, fakespawn.New().Dial(d), d, stateDir)
+}
+
+// tunnelModelSpawn is tunnelModel over a spawner the test scripts and
+// inspects: a spawned process is a fake pid whose port follows it.
+func tunnelModelSpawn(t *testing.T, r *fakerun.Fake, sp *fakespawn.Fake, d *fakedial.Fake, stateDir string) ui.Model {
+	t.Helper()
+	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: stateDir, Timeout: 50 * time.Millisecond}
 	m := ui.New(tunnelHosts(), probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
 	return update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 }
 
+// writeState pre-writes the engine's cache for ubuntu as a previous
+// sasash left it; a pid in it is alive only if the spawner says so.
+func writeState(t *testing.T, stateDir, state string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// spawnArgv is the engine's exact tunnel command for ubuntu, joined.
+func spawnArgv(host, spec string) string { return strings.Join(tunnel.SpawnArgv(host, spec), " ") }
+
 // tunnelEngine is a real engine over the fakes and a fresh state dir.
 func tunnelEngine(t *testing.T, r *fakerun.Fake, d *fakedial.Fake) tunnel.Engine {
 	t.Helper()
-	return tunnel.Engine{Runner: r, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+	return tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
 }
 
 // feed executes one cmd the way the runtime would — one level deep, a
@@ -87,6 +107,13 @@ func polled(t *testing.T, r *fakerun.Fake, d *fakedial.Fake) ui.Model {
 	return feed(t, m, m.Init())
 }
 
+// polledSpawn is polled over the given spawner and state dir.
+func polledSpawn(t *testing.T, r *fakerun.Fake, sp *fakespawn.Fake, d *fakedial.Fake, stateDir string) ui.Model {
+	t.Helper()
+	m := tunnelModelSpawn(t, r, sp, d, stateDir)
+	return feed(t, m, m.Init())
+}
+
 func TestTunnelArgv_ExactStrings(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -94,9 +121,8 @@ func TestTunnelArgv_ExactStrings(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{name: "start", got: ui.StartArgv("ubuntu"), want: []string{"ssh", "-fN", "ubuntu"}},
-		{name: "forward", got: ui.ForwardArgv("ubuntu", specWeb0), want: []string{"ssh", "-O", "forward", "-L", specWeb0, "ubuntu"}},
-		{name: "cancel", got: ui.CancelArgv("ubuntu", specWeb0), want: []string{"ssh", "-O", "cancel", "-L", specWeb0, "ubuntu"}},
+		{name: "spawn", got: ui.SpawnArgv("ubuntu", specWeb0), want: []string{"ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", specWeb0, "ubuntu"}},
+		{name: "kill", got: ui.KillArgv(4242), want: []string{"kill", "-TERM", "4242"}},
 		{name: "exit", got: ui.ExitArgv("ubuntu"), want: []string{"ssh", "-O", "exit", "ubuntu"}},
 	}
 	for _, tt := range tests {
@@ -109,33 +135,35 @@ func TestTunnelArgv_ExactStrings(t *testing.T) {
 	}
 }
 
+// The preview must show what the engine really runs: the spawn line is
+// pinned to what Engine.Spawn hands the spawner, the exit line to what
+// Engine.Exit hands the runner.
 func TestTunnelArgv_MatchesEngine(t *testing.T) {
 	t.Parallel()
-	// The preview must show what the engine really runs: each builder is
-	// pinned to the argv the engine hands the runner for the same action.
-	tests := []struct {
-		name string
-		argv []string
-		act  func(context.Context, tunnel.Engine) error
-	}{
-		{name: "start", argv: ui.StartArgv("ubuntu"), act: func(ctx context.Context, e tunnel.Engine) error { return e.Start(ctx, "ubuntu") }},
-		{name: "forward", argv: ui.ForwardArgv("ubuntu", specWeb0), act: func(ctx context.Context, e tunnel.Engine) error { return e.Forward(ctx, "ubuntu", "web", specWeb0) }},
-		{name: "cancel", argv: ui.CancelArgv("ubuntu", specWeb0), act: func(ctx context.Context, e tunnel.Engine) error { return e.Cancel(ctx, "ubuntu", specWeb0) }},
-		{name: "exit", argv: ui.ExitArgv("ubuntu"), act: func(ctx context.Context, e tunnel.Engine) error { return e.Exit(ctx, "ubuntu") }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			r := fakerun.New().StubExit(0, tt.argv...)
-			eng := tunnel.Engine{Runner: r, Dialer: fakedial.New(), StateDir: t.TempDir()}
-			if err := tt.act(context.Background(), eng); err != nil {
-				t.Fatalf("engine %s = %v", tt.name, err)
-			}
-			if got, want := r.CallKeys(), []string{fakerun.Key(tt.argv...)}; !reflect.DeepEqual(got, want) {
-				t.Errorf("engine calls = %v, want %v", got, want)
-			}
-		})
-	}
+	t.Run("spawn", func(t *testing.T) {
+		t.Parallel()
+		d := fakedial.New()
+		sp := fakespawn.New().Dial(d)
+		eng := tunnel.Engine{Runner: fakerun.New(), Spawner: sp, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+		if err := eng.Spawn(context.Background(), "ubuntu", "web", specWeb0); err != nil {
+			t.Fatalf("engine Spawn = %v", err)
+		}
+		if got, want := sp.Spawned(), []string{strings.Join(ui.SpawnArgv("ubuntu", specWeb0), " ")}; !reflect.DeepEqual(got, want) {
+			t.Errorf("engine spawned = %v, want %v", got, want)
+		}
+	})
+	t.Run("exit", func(t *testing.T) {
+		t.Parallel()
+		argv := ui.ExitArgv("ubuntu")
+		r := fakerun.New().StubExit(0, argv...)
+		eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New(), Dialer: fakedial.New(), StateDir: t.TempDir()}
+		if err := eng.Exit(context.Background(), "ubuntu"); err != nil {
+			t.Fatalf("engine Exit = %v", err)
+		}
+		if got, want := r.CallKeys(), []string{fakerun.Key(argv...)}; !reflect.DeepEqual(got, want) {
+			t.Errorf("engine calls = %v, want %v", got, want)
+		}
+	})
 }
 
 func TestModel_View_TunnelStates(t *testing.T) {
@@ -145,13 +173,15 @@ func TestModel_View_TunnelStates(t *testing.T) {
 	tests := []struct {
 		name      string
 		checkExit int
+		ours      bool // a recorded process of ours is alive on the port
 		portUp    bool
 		wantGlyph string
 		wantWord  string
 	}{
-		{name: "master alive and port answers is up", checkExit: 0, portUp: true, wantGlyph: "●", wantWord: "up"},
-		{name: "port answers but master dead is listening", checkExit: 255, portUp: true, wantGlyph: "◐", wantWord: "listening"},
-		{name: "port refused is down", checkExit: 0, portUp: false, wantGlyph: "○", wantWord: "down"},
+		{name: "our process alive and port answers is up", checkExit: 0, ours: true, portUp: true, wantGlyph: "●", wantWord: "up"},
+		{name: "port answers but no process of ours is listening", checkExit: 0, portUp: true, wantGlyph: "◐", wantWord: "listening"},
+		{name: "port refused is down, whatever the master", checkExit: 255, portUp: false, wantGlyph: "○", wantWord: "down"},
+		{name: "our process alive but port dead is down", checkExit: 0, ours: true, portUp: false, wantGlyph: "○", wantWord: "down"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,7 +191,13 @@ func TestModel_View_TunnelStates(t *testing.T) {
 			if tt.portUp {
 				d.Up("127.0.0.1:3000", time.Millisecond)
 			}
-			m := tunnelModel(t, r, d, t.TempDir())
+			sp := fakespawn.New().Dial(d)
+			stateDir := t.TempDir()
+			if tt.ours {
+				writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+				sp.Live(41)
+			}
+			m := tunnelModelSpawn(t, r, sp, d, stateDir)
 			// Status runs in a cmd: the frame renders before it lands,
 			// and an unpolled forward is pending — never a guessed down.
 			cmd := m.Init()
@@ -190,12 +226,22 @@ func TestModel_View_TunnelStates(t *testing.T) {
 	}
 }
 
-// aliveWeb0 is the common fixture: master alive, only web's first port up.
+// aliveWeb0 is the common fixture: master alive, only web's first
+// forward up — served by a recorded process of ours (pid 41).
 func aliveWeb0(t *testing.T) (ui.Model, *fakerun.Fake) {
+	t.Helper()
+	m, r, _ := aliveWeb0Spawn(t)
+	return m, r
+}
+
+func aliveWeb0Spawn(t *testing.T) (ui.Model, *fakerun.Fake, *fakespawn.Fake) {
 	t.Helper()
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
-	return polled(t, r, d), r
+	sp := fakespawn.New().Dial(d).Live(41)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+	return polledSpawn(t, r, sp, d, stateDir), r, sp
 }
 
 func TestModel_Update_FocusMovesHighlightAndPreview(t *testing.T) {
@@ -208,18 +254,18 @@ func TestModel_Update_FocusMovesHighlightAndPreview(t *testing.T) {
 	}{
 		{key: "", wantPreview: "$ ssh ubuntu"},
 		// l focuses the pane on the first row. web is partially up:
-		// space goes through Up, one -L per spec.
-		{key: "l", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "j", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "j", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"},
-		{key: "j", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"}, // clamps at the last row
-		{key: "k", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "G", wantPreview: "ssh -O forward -L " + specAPI + " ubuntu"},
-		{key: "g", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
-		{key: "shift+tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"},
+		// space spawns only what is not up — web's second forward.
+		{key: "l", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		{key: "j", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		{key: "j", wantPreview: spawnArgv("ubuntu", specAPI)},
+		{key: "j", wantPreview: spawnArgv("ubuntu", specAPI)}, // clamps at the last row
+		{key: "k", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		{key: "G", wantPreview: spawnArgv("ubuntu", specAPI)},
+		{key: "g", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		{key: "tab", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		{key: "shift+tab", wantPreview: spawnArgv("ubuntu", specWeb1)},
 		{key: "h", wantPreview: "$ ssh ubuntu"},
-		{key: "tab", wantPreview: "ssh -O forward -L " + specWeb0 + " ubuntu", wantMore: "+1 more"}, // tab from the list = l
+		{key: "tab", wantPreview: spawnArgv("ubuntu", specWeb1)}, // tab from the list = l
 		{key: "esc", wantPreview: "$ ssh ubuntu"},
 	}
 	for i, st := range steps {
@@ -260,7 +306,7 @@ func TestModel_Update_CopyCmdCopiesPreview(t *testing.T) {
 	// c copies the DISPLAYED command (SPEC §5): with a forward row
 	// highlighted that is the space command, not enter's ssh.
 	m, r := aliveWeb0(t)
-	want := "ssh -O forward -L " + specAPI + " ubuntu"
+	want := spawnArgv("ubuntu", specAPI)
 	calls := yankStubs(r, want, "pbcopy")
 	m = press(t, m, "l", "G")
 	_, cmd := m.Update(keyMsg("c"))
@@ -275,17 +321,15 @@ func TestModel_Update_CopyCmdCopiesPreview(t *testing.T) {
 
 func TestModel_Update_SpaceBringsSetUp(t *testing.T) {
 	t.Parallel()
-	// Master dead, everything down: space on web starts the master and
-	// forwards each spec, in that order, then re-polls.
-	r := fakerun.New().
-		StubExit(255, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-fN", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
-	m := polled(t, r, fakedial.New())
+	// Master dead, everything down: space on web spawns one process per
+	// spec, in order, runs nothing through the runner, then re-polls.
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
 	m = press(t, m, "l")
-	if view := m.View(); !strings.Contains(view, "$ ssh -fN ubuntu") || !strings.Contains(view, "+2 more") {
-		t.Fatalf("View() with a dead master should preview the start:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ "+spawnArgv("ubuntu", specWeb0)) || !strings.Contains(view, "+1 more") {
+		t.Fatalf("View() with web down should preview the first spawn:\n%s", view)
 	}
 	before := len(r.CallKeys())
 	next, cmd := m.Update(keyMsg(" "))
@@ -295,14 +339,12 @@ func TestModel_Update_SpaceBringsSetUp(t *testing.T) {
 	}
 	next, refresh := m.Update(cmd())
 	m = next.(ui.Model)
-	want := []string{
-		"ssh -O check ubuntu",
-		"ssh -fN ubuntu",
-		"ssh -O forward -L " + specWeb0 + " ubuntu",
-		"ssh -O forward -L " + specWeb1 + " ubuntu",
+	want := []string{spawnArgv("ubuntu", specWeb0), spawnArgv("ubuntu", specWeb1)}
+	if got := sp.Spawned(); !reflect.DeepEqual(got, want) {
+		t.Errorf("space spawned = %v, want %v", got, want)
 	}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("space calls = %v, want %v", got, want)
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("space ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "web up") {
 		t.Errorf("View() missing the success notice:\n%s", view)
@@ -314,16 +356,16 @@ func TestModel_Update_SpaceBringsSetUp(t *testing.T) {
 
 func TestModel_Update_SpaceTakesSetDown(t *testing.T) {
 	t.Parallel()
-	// Every forward of web up: space cancels each spec.
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
-		StubExit(0, "ssh", "-O", "cancel", "-L", specWeb1, "ubuntu")
+	// Every forward of web up, ours: space kills each process.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond).Up("127.0.0.1:3001", time.Millisecond)
-	m := polled(t, r, d)
+	sp := fakespawn.New().Dial(d).Live(41).Live(42)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"web","spec":"`+specWeb1+`","pid":42}]}`)
+	m := polledSpawn(t, r, sp, d, stateDir)
 	m = press(t, m, "l")
-	if view := m.View(); !strings.Contains(view, "$ ssh -O cancel -L "+specWeb0+" ubuntu") || !strings.Contains(view, "+1 more") {
-		t.Fatalf("View() with web fully up should preview the cancel:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ kill -TERM 41") || !strings.Contains(view, "+1 more") {
+		t.Fatalf("View() with web fully up should preview the kill:\n%s", view)
 	}
 	before := len(r.CallKeys())
 	next, cmd := m.Update(keyMsg(" "))
@@ -332,73 +374,85 @@ func TestModel_Update_SpaceTakesSetDown(t *testing.T) {
 		t.Fatalf("Update(space) cmd = nil, want action cmd")
 	}
 	m = update(t, m, cmd())
-	want := []string{
-		"ssh -O cancel -L " + specWeb0 + " ubuntu",
-		"ssh -O cancel -L " + specWeb1 + " ubuntu",
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{41, 42}) {
+		t.Errorf("space killed = %v, want [41 42]", got)
 	}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("space calls = %v, want %v", got, want)
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("space ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "web down") {
 		t.Errorf("View() missing the success notice:\n%s", view)
 	}
 }
 
-// noStateDir returns a path where the state dir cannot be created: a
-// file. Every record then fails with ErrStateWrite while ssh succeeded.
-func noStateDir(t *testing.T) string {
+// blockedStateFile returns a state dir whose ubuntu.json is a DIRECTORY:
+// the engine can spawn (its log dir exists) and every record then fails
+// with ErrStateWrite while the process side succeeded.
+func blockedStateFile(t *testing.T) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "notadir")
-	if err := os.WriteFile(p, nil, 0o600); err != nil {
-		t.Fatalf("write: %v", err)
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "ubuntu.json"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	return p
+	return dir
+}
+
+// readOnlyState returns a state dir whose ubuntu.json records web's two
+// forwards as pids 41/42 and cannot be rewritten: every record update
+// then fails with ErrStateWrite while the process side succeeded.
+func readOnlyState(t *testing.T) string {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only file does not stop root")
+	}
+	dir := t.TempDir()
+	writeState(t, dir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"web","spec":"`+specWeb1+`","pid":42}]}`)
+	if err := os.Chmod(filepath.Join(dir, "ubuntu.json"), 0o400); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	return dir
 }
 
 func TestModel_Update_SpaceOutcomes(t *testing.T) {
 	t.Parallel()
-	refused := fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}}
 	tests := []struct {
 		name string
-		// webUp stubs every web port answering so space goes down.
+		// webUp records both web forwards as ours and answering, so
+		// space goes down.
 		webUp    bool
-		stubs    func(r *fakerun.Fake)
+		script   func(sp *fakespawn.Fake)
 		stateDir func(t *testing.T) string
 		want     []string // all present in the notice
 		wantNot  []string
 	}{
 		{
-			name: "ssh failure is reported with its message",
-			stubs: func(r *fakerun.Fake) {
-				r.Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("bind: Address already in use")}}, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu")
+			name: "a spawn failure is reported with ssh's message",
+			script: func(sp *fakespawn.Fake) {
+				sp.Exits("bind: Address already in use", tunnel.SpawnArgv("ubuntu", specWeb0)...)
 			},
 			stateDir: func(t *testing.T) string { return t.TempDir() },
 			want:     []string{"web: ", "Address already in use"},
 			wantNot:  []string{"web up"},
 		},
 		{
-			name: "state write failures warn on one line and the tunnel is real",
-			stubs: func(r *fakerun.Fake) {
-				r.StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-					StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
-			},
-			stateDir: noStateDir,
-			// Two specs => Up joins two state errors: both must stay on
-			// the notice line, not push the frame off the terminal.
+			name:     "state write failures warn on one line and the tunnels are real",
+			script:   func(*fakespawn.Fake) {},
+			stateDir: blockedStateFile,
+			// Two specs => SpawnSet joins two state errors: both must stay
+			// on the notice line, not push the frame off the terminal.
 			want:    []string{"warning: ", "not recorded"},
 			wantNot: []string{"web: "},
 		},
 		{
-			name:  "a refused cancel joined with a state failure is a failure",
+			name:  "a refused kill joined with a state failure is a failure",
 			webUp: true,
-			stubs: func(r *fakerun.Fake) {
-				r.Stub(refused, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu").
-					StubExit(0, "ssh", "-O", "cancel", "-L", specWeb1, "ubuntu")
+			script: func(sp *fakespawn.Fake) {
+				sp.KillErr = errors.New("operation not permitted")
 			},
-			stateDir: noStateDir,
-			// DownSet joins the cancel failure and the cache failure:
-			// ssh's message must win the label, never "warning".
-			want:    []string{"web: ", "No such file"},
+			stateDir: readOnlyState,
+			// KillSet joins the kill failure and the cache failure: the
+			// kill's reason must win the label, never "warning".
+			want:    []string{"web: ", "operation not permitted"},
 			wantNot: []string{"warning: "},
 		},
 	}
@@ -406,14 +460,17 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
-			tt.stubs(r)
 			d := fakedial.New()
+			sp := fakespawn.New().Dial(d)
+			tt.script(sp)
+			stateDir := tt.stateDir(t)
 			if tt.webUp {
 				d.Up("127.0.0.1:3000", time.Millisecond).Up("127.0.0.1:3001", time.Millisecond)
+				sp.LiveOn(41, "3000").LiveOn(42, "3001")
 			}
-			m := tunnelModel(t, r, d, tt.stateDir(t))
+			m := tunnelModelSpawn(t, r, sp, d, stateDir)
 			m = feed(t, m, m.Init())
-			// An unreadable state dir opens the cache popup once at the
+			// An unreadable state file opens the cache popup once at the
 			// first poll (SASASH.4.11): dismissed, the keys are the
 			// pane's again.
 			if ui.PopupOpen(m) {
@@ -474,6 +531,7 @@ func TestModel_Update_SpaceNeedsHighlight(t *testing.T) {
 
 func TestModel_Update_RestartAndExit(t *testing.T) {
 	t.Parallel()
+	refused := fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}}
 	tests := []struct {
 		name       string
 		key        string
@@ -482,32 +540,33 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 		wantNotice string
 	}{
 		{
-			// SPEC §5 "restart master": exit, then a fresh master and
-			// nothing else — no set the user did not ask for gets bound.
-			name:       "r exits then starts a fresh master only",
+			// SPEC §5 "restart master": exit the interactive master; the
+			// next connect starts a fresh one. Tunnels are not touched.
+			name:       "r exits the interactive master",
 			key:        "r",
 			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
-			wantCalls:  []string{"ssh -O exit ubuntu", "ssh -O check ubuntu", "ssh -fN ubuntu"},
-			wantNotice: "master restarted",
+			wantCalls:  []string{"ssh -O exit ubuntu"},
+			wantNotice: "master exited — a fresh one starts on the next connect",
 		},
 		{
-			name:       "r on a dead master is just a start",
+			name:       "r on a dead master says so",
 			key:        "r",
-			exitReply:  fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}},
-			wantCalls:  []string{"ssh -O exit ubuntu", "ssh -O check ubuntu", "ssh -fN ubuntu"},
-			wantNotice: "master restarted",
+			exitReply:  refused,
+			wantCalls:  []string{"ssh -O exit ubuntu"},
+			wantNotice: "restart: ",
 		},
 		{
-			name:       "X exits the master",
+			// X: every tunnel process, then the master the poll saw up.
+			name:       "X kills the tunnels and exits the master",
 			key:        "X",
 			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
 			wantCalls:  []string{"ssh -O exit ubuntu"},
-			wantNotice: "master exited",
+			wantNotice: "tunnels killed, master exited",
 		},
 		{
 			name:       "X failure shows ssh's message",
 			key:        "X",
-			exitReply:  fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}},
+			exitReply:  refused,
 			wantCalls:  []string{"ssh -O exit ubuntu"},
 			wantNotice: "exit: ",
 		},
@@ -517,12 +576,12 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().
 				Stub(tt.exitReply, "ssh", "-O", "exit", "ubuntu").
-				StubExit(0, "ssh", "-fN", "ubuntu")
-			// The poll sees a live master; after the exit the restart's
-			// own check finds none and starts one.
-			r.StubExit(0, "ssh", "-O", "check", "ubuntu")
-			m := polled(t, r, fakedial.New())
-			r.StubExit(255, "ssh", "-O", "check", "ubuntu")
+				StubExit(0, "ssh", "-O", "check", "ubuntu")
+			d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+			sp := fakespawn.New().Dial(d).Live(41)
+			stateDir := t.TempDir()
+			writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+			m := polledSpawn(t, r, sp, d, stateDir)
 			before := len(r.CallKeys())
 			next, cmd := m.Update(keyMsg(tt.key))
 			m = next.(ui.Model)
@@ -533,11 +592,19 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 			if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, tt.wantCalls) {
 				t.Errorf("%s calls = %v, want %v", tt.key, got, tt.wantCalls)
 			}
+			// Only X ends the tunnel process; r leaves it alone.
+			wantKilled := []int(nil)
+			if tt.key == "X" {
+				wantKilled = []int{41}
+			}
+			if got := sp.Killed(); !reflect.DeepEqual(got, wantKilled) {
+				t.Errorf("%s killed = %v, want %v", tt.key, got, wantKilled)
+			}
 			view := m.View()
 			if !strings.Contains(view, tt.wantNotice) {
 				t.Errorf("View() missing %q:\n%s", tt.wantNotice, view)
 			}
-			if tt.wantNotice == "exit: " && !strings.Contains(view, "No such file") {
+			if strings.HasSuffix(tt.wantNotice, ": ") && !strings.Contains(view, "No such file") {
 				t.Errorf("View() hides ssh's message:\n%s", view)
 			}
 		})
@@ -724,11 +791,10 @@ func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
 	if !strings.Contains(row, "ad-hoc") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
 		t.Errorf("recorded ad-hoc row = %q, want an ad-hoc row marked down", row)
 	}
-	// It is the last row: l then G reaches it, and with the master
-	// alive space would re-forward it.
+	// It is the last row: l then G reaches it, and space would spawn it.
 	m = press(t, m, "l", "G")
-	if view := m.View(); !strings.Contains(view, "$ ssh -O forward -L 5000:localhost:5000 ubuntu") {
-		t.Errorf("View() after shift+tab should preview the ad-hoc row's forward:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ "+spawnArgv("ubuntu", "5000:localhost:5000")) {
+		t.Errorf("View() after shift+tab should preview the ad-hoc row's spawn:\n%s", view)
 	}
 }
 

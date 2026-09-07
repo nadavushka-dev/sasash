@@ -2,8 +2,6 @@ package ui_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -16,8 +14,8 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
-	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
@@ -40,7 +38,8 @@ func TestLocalPort_MatchesEngine(t *testing.T) {
 		t.Run(strconv.Quote(spec), func(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
-			eng := tunnel.Engine{Runner: r, Dialer: fakedial.New(), StateDir: t.TempDir(), Timeout: time.Millisecond}
+			d := fakedial.New()
+			eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: time.Millisecond}
 			st, err := eng.Status(context.Background(), "ubuntu", []hostmodel.ForwardSet{{Name: "s", Specs: []string{spec}}})
 			if err != nil {
 				t.Fatalf("Status() = %v", err)
@@ -98,20 +97,22 @@ func typeSpec(t *testing.T, m ui.Model, spec string) (ui.Model, tea.Cmd) {
 
 func TestModel_Update_AddForwardFree(t *testing.T) {
 	t.Parallel()
-	// Port free: the spec goes in as an ad-hoc forward through Up.
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu")
-	m := polled(t, r, fakedial.New())
+	// Port free: the spec goes in as an ad-hoc forward, one spawned process.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
 	m, cmd := typeSpec(t, m, "8080:localhost:80")
 	if cmd == nil || ui.Prompting(m) {
 		t.Fatalf("enter: cmd %v, prompting %v; want the add cmd and the prompt closed", cmd != nil, ui.Prompting(m))
 	}
 	before := len(r.CallKeys())
 	m = update(t, m, cmd())
-	want := []string{"ssh -O check ubuntu", "ssh -O forward -L 8080:localhost:80 ubuntu"}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("add calls = %v, want %v", got, want)
+	if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", "8080:localhost:80")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("add spawned = %v, want %v", got, want)
+	}
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("add ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "added 8080:localhost:80") {
 		t.Errorf("View() missing the added notice:\n%s", view)
@@ -132,14 +133,13 @@ func TestModel_Update_AddForwardConflictOffersNext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := fakerun.New().
-				StubExit(0, "ssh", "-O", "check", "ubuntu").
-				StubExit(0, "ssh", "-O", "forward", "-L", tt.wantSpec, "ubuntu")
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 			d := fakedial.New()
 			for p := 8080; p <= tt.heldUpTo; p++ {
 				d.Up("127.0.0.1:"+strconv.Itoa(p), time.Millisecond)
 			}
-			m := polled(t, r, d)
+			sp := fakespawn.New().Dial(d)
+			m := polledSpawn(t, r, sp, d, t.TempDir())
 			m, cmd := typeSpec(t, m, "8080:localhost:80")
 			before := len(r.CallKeys())
 			next, focus := m.Update(cmd()) // the conflict lands
@@ -148,8 +148,8 @@ func TestModel_Update_AddForwardConflictOffersNext(t *testing.T) {
 				focus() // cursor focus, no msgs of interest
 			}
 			// Nothing ran: the remap is on screen, not applied.
-			if got := r.CallKeys()[before:]; len(got) != 0 {
-				t.Fatalf("calls after a conflict = %v, want none", got)
+			if got := r.CallKeys()[before:]; len(got) != 0 || len(sp.Spawned()) != 0 {
+				t.Fatalf("calls after a conflict = %v, spawned %v, want none", got, sp.Spawned())
 			}
 			if !ui.Prompting(m) {
 				t.Fatalf("Prompting() = false after a conflict, want the prompt reopened")
@@ -174,9 +174,8 @@ func TestModel_Update_AddForwardConflictOffersNext(t *testing.T) {
 				t.Fatalf("enter on the offered spec cmd = nil, want the add cmd")
 			}
 			m = update(t, m, cmd())
-			want := []string{"ssh -O check ubuntu", "ssh -O forward -L " + tt.wantSpec + " ubuntu"}
-			if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-				t.Errorf("add calls = %v, want %v", got, want)
+			if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", tt.wantSpec)}; !reflect.DeepEqual(got, want) {
+				t.Errorf("add spawned = %v, want %v", got, want)
 			}
 			if view := m.View(); !strings.Contains(view, "added "+tt.wantSpec) {
 				t.Errorf("View() missing the added notice:\n%s", view)
@@ -189,11 +188,10 @@ func TestModel_Update_AddForwardRaceReported(t *testing.T) {
 	t.Parallel()
 	// Free at the check, taken by the add: ssh's bind failure is the
 	// notice, never swallowed into "added".
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		Stub(fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("bind [127.0.0.1]:8080: Address already in use")}},
-			"ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu")
-	m := polled(t, r, fakedial.New())
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d).Exits("bind [127.0.0.1]:8080: Address already in use", tunnel.SpawnArgv("ubuntu", "8080:localhost:80")...)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
 	m, cmd := typeSpec(t, m, "8080:localhost:80")
 	m = update(t, m, cmd())
 	view := m.View()
@@ -239,40 +237,45 @@ func TestModel_Update_CancelHighlighted(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name       string
-		reply      fakerun.Reply
+		ours       bool // web0 served by our pid 41, port answering
+		wantKilled []int
 		wantNotice string
 	}{
-		// The notice says what OpenSSH does (4.17): the listener is gone,
-		// connections already established through it are not.
-		{name: "cancel runs for the one row", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNotice: "cancelled " + specWeb0 + " — open connections stay until they close"},
-		{name: "already gone reports ssh's reason", reply: fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, wantNotice: "cancel: unknown port forwarding"},
+		{name: "x kills the one row's process", ours: true, wantKilled: []int{41}, wantNotice: "killed " + specWeb0 + " — its connections dropped with it"},
+		{name: "a row without a process of ours has nothing to kill", wantNotice: specWeb0 + " has no process of ours to kill"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			// web has two specs and the cache records its second: x on
-			// the first row must cancel that one only — never the set
-			// (DownSet would also cancel the recorded spec, unstubbed).
-			r := fakerun.New().
-				StubExit(0, "ssh", "-O", "check", "ubuntu").
-				Stub(tt.reply, "ssh", "-O", "cancel", "-L", specWeb0, "ubuntu")
+			// the first row must end that one only — never the set
+			// (KillSet would also end the recorded spec's process).
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+			d := fakedial.New()
+			sp := fakespawn.New().Dial(d).Live(42)
 			stateDir := t.TempDir()
-			state := `{"forwards":[{"set":"web","spec":"` + specWeb1 + `"}]}`
-			if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
-				t.Fatalf("write: %v", err)
+			state := `{"forwards":[{"set":"web","spec":"` + specWeb1 + `","pid":42}]}`
+			if tt.ours {
+				d.Up("127.0.0.1:3000", time.Millisecond)
+				sp.Live(41)
+				state = `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41},{"set":"web","spec":"` + specWeb1 + `","pid":42}]}`
 			}
-			m := tunnelModel(t, r, fakedial.New(), stateDir)
+			writeState(t, stateDir, state)
+			m := tunnelModelSpawn(t, r, sp, d, stateDir)
 			m = feed(t, m, m.Init())
 			m = press(t, m, "l") // web0
 			before := len(r.CallKeys())
 			next, cmd := m.Update(keyMsg("x"))
 			m = next.(ui.Model)
 			if cmd == nil {
-				t.Fatalf("Update(x) cmd = nil, want cancel cmd")
+				t.Fatalf("Update(x) cmd = nil, want kill cmd")
 			}
 			m = update(t, m, cmd())
-			if got, want := r.CallKeys()[before:], []string{"ssh -O cancel -L " + specWeb0 + " ubuntu"}; !reflect.DeepEqual(got, want) {
-				t.Errorf("x calls = %v, want %v", got, want)
+			if got := sp.Killed(); !reflect.DeepEqual(got, tt.wantKilled) {
+				t.Errorf("x killed = %v, want %v", got, tt.wantKilled)
+			}
+			if got := r.CallKeys()[before:]; len(got) != 0 {
+				t.Errorf("x ran %v through the runner, want nothing", got)
 			}
 			if view := m.View(); !strings.Contains(view, tt.wantNotice) {
 				t.Errorf("View() missing %q:\n%s", tt.wantNotice, view)
@@ -297,17 +300,15 @@ func TestModel_Update_CancelNeedsHighlight(t *testing.T) {
 
 func TestModel_View_SharedPortDemoted(t *testing.T) {
 	t.Parallel()
-	// A stale recorded spec on web's local port: the port answers and the
-	// master is alive, so the engine calls both up. Only the first
-	// claimant can be the one answering — the later one is capped at
-	// listening and says whose port it shares.
+	// A stale recorded spec on web's local port: the port answers for
+	// web's own process, so the stale twin reads listening — the port
+	// answers but no process of ours serves THAT spec — and says whose
+	// port it shares.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	stateDir := t.TempDir()
-	state := `{"forwards":[{"set":"","spec":"3000:localhost:9999"},{"set":"","spec":"4011:localhost:1"}]}`
-	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu.json"), []byte(state), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	m := tunnelModel(t, r, fakedial.New().Up("127.0.0.1:3000", time.Millisecond), stateDir)
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"","spec":"3000:localhost:9999"},{"set":"","spec":"4011:localhost:1"}]}`)
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	m := tunnelModelSpawn(t, r, fakespawn.New().Dial(d).Live(41), d, stateDir)
 	m = feed(t, m, m.Init())
 	var webRow, staleRow string
 	for _, line := range strings.Split(m.View(), "\n") {
@@ -331,11 +332,11 @@ func TestModel_View_SharedPortDemoted(t *testing.T) {
 			t.Errorf("dead row carries a shared-port note: %q", line)
 		}
 	}
-	// The demotion reaches actions too: the ad-hoc set is not "all up",
-	// so space previews a re-forward, not a cancel.
+	// The ad-hoc set is not "all up", so space previews a spawn, not a
+	// kill.
 	m = press(t, m, "l", "G")
-	if view := m.View(); !strings.Contains(view, "$ ssh -O forward -L 3000:localhost:9999 ubuntu") {
-		t.Errorf("View() preview on the demoted row should be a forward:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ "+spawnArgv("ubuntu", "3000:localhost:9999")) {
+		t.Errorf("View() preview on the listening row should be a spawn:\n%s", view)
 	}
 }
 
@@ -346,9 +347,10 @@ func TestModel_Update_ConflictBindsToItsHost(t *testing.T) {
 	// add must go there, never to whatever is under the cursor now.
 	r := fakerun.New().
 		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-O", "check", "spare").
-		StubExit(0, "ssh", "-O", "forward", "-L", "8081:localhost:80", "ubuntu")
-	m := polled(t, r, fakedial.New().Up("127.0.0.1:8080", time.Millisecond))
+		StubExit(0, "ssh", "-O", "check", "spare")
+	d := fakedial.New().Up("127.0.0.1:8080", time.Millisecond)
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
 	m, check := typeSpec(t, m, "8080:localhost:80")
 	m = press(t, m, "G") // spare
 	next, _ := m.Update(check())
@@ -364,9 +366,11 @@ func TestModel_Update_ConflictBindsToItsHost(t *testing.T) {
 		t.Fatalf("enter cmd = nil, want the add")
 	}
 	m = update(t, m, add())
-	want := []string{"ssh -O check ubuntu", "ssh -O forward -L 8081:localhost:80 ubuntu"}
-	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, want) {
-		t.Errorf("add calls = %v, want %v (never spare)", got, want)
+	if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", "8081:localhost:80")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("add spawned = %v, want %v (never spare)", got, want)
+	}
+	if got := r.CallKeys()[before:]; len(got) != 0 {
+		t.Errorf("add ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "added 8081:localhost:80 on ubuntu") {
 		t.Errorf("View() notice should name the host:\n%s", view)
@@ -540,7 +544,7 @@ func TestModel_View_HelpListsForwardKeys(t *testing.T) {
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = press(t, m, "?")
 	view := m.View()
-	for _, want := range []string{"add forward", "cancel forward"} {
+	for _, want := range []string{"add forward", "kill forward"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}

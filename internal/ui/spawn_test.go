@@ -14,6 +14,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
@@ -124,7 +125,7 @@ func spawnModel(t *testing.T, r *fakerun.Fake, cfg ui.SpawnConfig, rec func(stri
 		{Alias: "db", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.30"}}},
 	}
 	d := fakedial.New().Up("192.0.2.10:22", 5*time.Millisecond).Up("192.0.2.30:22", 5*time.Millisecond)
-	eng := tunnel.Engine{Runner: r, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+	eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Spawn: cfg, Tunnels: eng, RecordHandoff: rec})
 	m = update(t, m, tea.WindowSizeMsg{Width: 140, Height: 24})
 	return feed(t, m, m.Init())

@@ -15,30 +15,37 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
-// The ControlMaster trio offer (SASASH.4.18): a tunnel action failing
-// with ssh's "No ControlPath specified" on a managed host opens a
-// question that writes exactly the missing lines; an unmanaged host
-// gets the e hint.
+// The ControlMaster trio offer (SASASH.4.18, hybrid): an interactive-
+// master action (r) failing with ssh's "No ControlPath specified" on a
+// managed host opens a question that writes exactly the missing lines;
+// an unmanaged host gets the e hint. Tunnels are their own processes and
+// never raise it.
 
 const noControlPath = "No ControlPath specified for \"-O\" command\r\n"
 
 // controlModel is a polled model whose ubuntu is managed (HasMeta) and
-// whose + on 8080:localhost:80 fails with the No-ControlPath reason.
+// whose r (ssh -O exit) fails with the No-ControlPath reason.
 func controlModel(t *testing.T, managed bool, inspect func(string) (ui.ControlStatus, error), enable func(string) ([]string, error)) (ui.Model, *fakerun.Fake) {
 	t.Helper()
 	hosts := tunnelHosts()
 	hosts[0].HasMeta = managed
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
-		Stub(fakerun.Reply{Result: run.Result{Stderr: []byte(noControlPath), Code: 255}}, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu")
+		Stub(fakerun.Reply{Result: run.Result{Stderr: []byte(noControlPath), Code: 255}}, "ssh", "-O", "exit", "ubuntu")
 	d := fakedial.New()
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d), InspectControl: inspect, EnableControl: enable})
 	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	m = feed(t, m, m.Init())
 	m = ui.StaticCursor(m)
-	m, cmd := typeSpec(t, m, "8080:localhost:80")
+	next, cmd := m.Update(keyMsg("r"))
+	m = next.(ui.Model)
+	if cmd == nil {
+		t.Fatalf("Update(r) cmd = nil, want the exit")
+	}
 	return update(t, m, cmd()), r
 }
 
@@ -52,7 +59,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		m, r := controlModel(t, true, all,
 			func(alias string) ([]string, error) { enabled = append(enabled, alias); return trio, nil })
 		view := m.View()
-		for _, want := range []string{"enable tunnels on ubuntu? enter writes · esc closes", "No ControlPath specified", "enable tunnels for ubuntu", "  ControlMaster auto", "  ControlPath ~/.ssh/cm/%C", "  ControlPersist 30m", "nothing else is touched"} {
+		for _, want := range []string{"enable master reuse on ubuntu? enter writes · esc closes", "No ControlPath specified", "enable master reuse for ubuntu", "  ControlMaster auto", "  ControlPath ~/.ssh/cm/%C", "  ControlPersist 30m", "nothing else is touched"} {
 			if !strings.Contains(view, want) {
 				t.Errorf("View() missing %q:\n%s", want, view)
 			}
@@ -68,7 +75,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		// enter writes, and the outcome says what was written.
 		next, cmd := m.Update(keyMsg("enter"))
 		m = next.(ui.Model)
-		if cmd == nil || ui.PopupOpen(m) || !strings.Contains(m.View(), "enabling tunnels on ubuntu") {
+		if cmd == nil || ui.PopupOpen(m) || !strings.Contains(m.View(), "enabling master reuse on ubuntu") {
 			t.Fatalf("enter should start the write (cmd %v, popup %v):\n%s", cmd != nil, ui.PopupOpen(m), m.View())
 		}
 		before := len(r.CallKeys())
@@ -76,7 +83,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		if len(enabled) != 1 || enabled[0] != "ubuntu" || len(r.CallKeys()) != before {
 			t.Errorf("enter should call the writer once for ubuntu and run no ssh (enabled %v)", enabled)
 		}
-		if view := m.View(); !strings.Contains(view, "tunnels enabled on ubuntu — space or + again (ControlMaster auto, ControlPath ~/.ssh/cm/%C, ControlPersist 30m written)") {
+		if view := m.View(); !strings.Contains(view, "reuse enabled on ubuntu — connect, then r (ControlMaster auto, ControlPath ~/.ssh/cm/%C, ControlPersist 30m written)") {
 			t.Errorf("View() after the write should lead with the instruction and name the lines:\n%s", view)
 		}
 	})
@@ -84,16 +91,16 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		t.Parallel()
 		m, _ := controlModel(t, true, all, func(string) ([]string, error) { return trio, nil })
 		m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-		if inner := strings.Join(boxLines(m.View()), "\n"); !strings.Contains(inner, "enable tunnels on ubuntu? enter writes · esc closes") {
+		if inner := strings.Join(boxLines(m.View()), "\n"); !strings.Contains(inner, "enable master reuse on ubuntu? enter writes · esc closes") {
 			t.Errorf("title cut at 80 columns:\n%s", m.View())
 		}
 		next, cmd := m.Update(keyMsg("enter"))
 		m = update(t, next.(ui.Model), cmd())
-		if !strings.Contains(m.View(), "tunnels enabled on ubuntu — space or + again") {
+		if !strings.Contains(m.View(), "reuse enabled on ubuntu — connect, then r") {
 			t.Errorf("the instruction should survive 80 columns:\n%s", m.View())
 		}
 	})
-	t.Run("a pinned variant is refused: tunnels ride the parent", func(t *testing.T) {
+	t.Run("a pinned variant is refused: the master rides the parent", func(t *testing.T) {
 		t.Parallel()
 		// The hook decides from the file (alias form + the parent's path
 		// names); the UI says so and writes nothing — enter only closes.
@@ -105,7 +112,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 			func(string) ([]string, error) { writes++; return trio, nil })
 		view := m.View()
 		text := boxText(view)
-		if !ui.PopupOpen(m) || !strings.Contains(text, "ubuntu's pinned variant for path lan") || !strings.Contains(text, "tunnels ride the parent — use ubuntu") || strings.Contains(view, "enter writes") {
+		if !ui.PopupOpen(m) || !strings.Contains(text, "ubuntu's pinned variant for path lan") || !strings.Contains(text, "the master rides the parent — use ubuntu") || strings.Contains(view, "enter writes") {
 			t.Errorf("a variant should be refused and pointed at its parent:\n%s", view)
 		}
 		if c := press(t, m, "enter"); ui.PopupOpen(c) || writes != 0 {
@@ -186,7 +193,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 			func(string) ([]string, error) { return nil, errors.New("disk full") })
 		next, cmd := m.Update(keyMsg("enter"))
 		m = update(t, next.(ui.Model), cmd())
-		if !strings.Contains(m.View(), "tunnels not enabled on ubuntu: disk full") {
+		if !strings.Contains(m.View(), "master reuse not enabled on ubuntu: disk full") {
 			t.Errorf("View() should report the failed write:\n%s", m.View())
 		}
 	})
@@ -215,14 +222,15 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		t.Parallel()
 		hosts := tunnelHosts()
 		hosts[0].HasMeta = true
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
-			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("bind: Address already in use\n"), Code: 255}}, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu")
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 		d := fakedial.New()
-		m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d), InspectControl: all})
+		sp := fakespawn.New().Dial(d).Exits("bind: Address already in use\n", tunnel.SpawnArgv("ubuntu", "8080:localhost:80")...)
+		eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+		m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng, InspectControl: all})
 		m = ui.StaticCursor(feed(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), m.Init()))
 		m, cmd := typeSpec(t, m, "8080:localhost:80")
 		m = update(t, m, cmd())
-		if !ui.PopupOpen(m) || strings.Contains(m.View(), "enable tunnels") || !strings.Contains(m.View(), "add failed on ubuntu") {
+		if !ui.PopupOpen(m) || strings.Contains(m.View(), "enable master reuse") || !strings.Contains(m.View(), "add failed on ubuntu") {
 			t.Errorf("an unrelated failure should not offer the trio:\n%s", m.View())
 		}
 	})

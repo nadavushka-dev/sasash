@@ -186,13 +186,15 @@ func (e Engine) exec(ctx context.Context, argv ...string) error {
 	return nil
 }
 
-// spawnArgv is the one tunnel command (CONTRACT-tunnel §3). BatchMode: no
-// tty exists to prompt on, so auth that needs one fails at once with ssh's
-// reason instead of hanging. ExitOnForwardFailure: a -L that cannot bind
-// ends the process with "Address already in use" on its stderr instead of
-// leaving a live process that serves nothing. No -f: sasash detaches the
-// process itself, so the pid it records is the tunnel's own.
-func spawnArgv(host, spec string) []string {
+// SpawnArgv is the one tunnel command (CONTRACT-tunnel §3), exported so a
+// preview shows exactly what Spawn runs — one owner of the literal.
+// BatchMode: no tty exists to prompt on, so auth that needs one fails at
+// once with ssh's reason instead of hanging. ExitOnForwardFailure: a -L
+// that cannot bind ends the process with "Address already in use" on its
+// stderr instead of leaving a live process that serves nothing. No -f:
+// sasash detaches the process itself, so the pid it records is the
+// tunnel's own.
+func SpawnArgv(host, spec string) []string {
 	return []string{"ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", spec, host}
 }
 
@@ -229,7 +231,7 @@ func (e Engine) Spawn(ctx context.Context, host, set, spec string) error {
 	if err := os.MkdirAll(e.StateDir, 0o700); err != nil {
 		return err
 	}
-	argv := spawnArgv(host, spec)
+	argv := SpawnArgv(host, spec)
 	sp := e.spawner()
 	pid, err := sp.Spawn(argv, logPath)
 	if err != nil {

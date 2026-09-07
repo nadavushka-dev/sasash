@@ -13,14 +13,14 @@ import (
 )
 
 func init() {
-	register("up", "start the control master and apply forward sets", cmdUp)
+	register("up", "bring forward sets up: one ssh -N process per port", cmdUp)
 }
 
-// tunneler is the slice of tunnel.Engine the CLI consumes
-// (CONTRACT-tunnel §3): the compositions, never the raw command methods.
+// tunneler is the slice of tunnel.Engine the CLI consumes (CONTRACT-
+// tunnel, Model B): the set composition and the host-wide kill.
 type tunneler interface {
-	Up(ctx context.Context, host, set string, specs []string) error
-	Exit(ctx context.Context, host string) error
+	SpawnSet(ctx context.Context, host, set string, specs []string) error
+	KillAll(ctx context.Context, host string) error
 }
 
 var _ tunneler = tunnel.Engine{} // the wiring funcs are uncovered; pin this at compile time
@@ -42,13 +42,13 @@ func cmdUp(args []string, stdout, stderr io.Writer) int {
 	return runUp(args, stdout, stderr, sshConfigPath(home), home, eng)
 }
 
-// runUp starts the host's control master and applies forward sets: the named
-// one, or every declared set (meta order) when none is named. A host with no
-// declared sets still gets its master ensured. Exit codes follow the
-// addr/status contract: 0 = success (an already-running master is success,
-// Engine.Up only starts what is missing), 1 = the action failed (ssh's own
+// runUp brings forward sets up, one process per port: the named set, or
+// every declared set (meta order) when none is named. A host with no
+// declared sets has nothing to bring up and says so. Exit codes follow the
+// addr/status contract: 0 = success (a forward already up is success,
+// SpawnSet only starts what is missing), 1 = the action failed (ssh's own
 // message on stderr), 2 = usage, 3 = config problem (unknown host, unknown
-// set, unreadable config).
+// set, no sets, unreadable config).
 //
 // A mid-sequence failure aborts the remaining sets but leaves the earlier
 // ones up — the cache is never truth, and the next status re-derives what is
@@ -84,10 +84,11 @@ func runUp(args []string, stdout, stderr io.Writer, root, home string, eng tunne
 
 	ctx := context.Background()
 	if len(sets) == 0 {
-		sets = []hostmodel.ForwardSet{{}} // no declared sets: master only
+		fmt.Fprintf(stderr, "sasash up: no forward sets declared for %q — nothing to start\n", alias)
+		return 3
 	}
 	for _, s := range sets {
-		err := eng.Up(ctx, alias, s.Name, s.Specs)
+		err := eng.SpawnSet(ctx, alias, s.Name, s.Specs)
 		switch {
 		case err == nil:
 		case errors.Is(err, tunnel.ErrStateWrite):

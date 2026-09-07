@@ -10,8 +10,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
@@ -19,18 +22,18 @@ import (
 // name — the CLI's decisions are argv parsing and exit codes, so the fake
 // needs no argv or state-file machinery.
 type fakeTunnel struct {
-	upCalls   []string // "<host>/<set>=<spec,spec>"
-	exitCalls []string
-	upErr     map[string]error // by set name; "" is the master-only call
+	upCalls   []string         // "<host>/<set>=<spec,spec>"
+	exitCalls []string         // KillAll targets
+	upErr     map[string]error // by set name
 	exitErr   error
 }
 
-func (f *fakeTunnel) Up(_ context.Context, host, set string, specs []string) error {
+func (f *fakeTunnel) SpawnSet(_ context.Context, host, set string, specs []string) error {
 	f.upCalls = append(f.upCalls, host+"/"+set+"="+strings.Join(specs, ","))
 	return f.upErr[set]
 }
 
-func (f *fakeTunnel) Exit(_ context.Context, host string) error {
+func (f *fakeTunnel) KillAll(_ context.Context, host string) error {
 	f.exitCalls = append(f.exitCalls, host)
 	return f.exitErr
 }
@@ -95,10 +98,10 @@ func TestRunUp(t *testing.T) {
 			wantStderr: []string{"declared: none"},
 		},
 		{
-			name:        "host without sets still ensures the master",
-			args:        []string{"plain"},
-			wantCode:    0,
-			wantUpCalls: []string{"plain/="},
+			name:       "host without sets has nothing to start",
+			args:       []string{"plain"},
+			wantCode:   3,
+			wantStderr: []string{`no forward sets declared for "plain"`},
 		},
 		{
 			name:        "first failing set aborts the rest",
@@ -120,14 +123,6 @@ func TestRunUp(t *testing.T) {
 				"ubuntu/api=4011:localhost:4011",
 			},
 			wantStderr: []string{"warning: forward added but state not recorded"},
-		},
-		{
-			name:        "master-only failure omits the set name",
-			args:        []string{"plain"},
-			upErr:       map[string]error{"": errors.New("ssh: connect refused")},
-			wantCode:    1,
-			wantUpCalls: []string{"plain/="},
-			wantStderr:  []string{"sasash up: ssh: connect refused"},
 		},
 		{
 			name:       "unknown host",
@@ -212,32 +207,31 @@ Host ubuntu
 }
 
 // One end-to-end pin through the REAL engine: runUp's set iteration composed
-// with Engine.Up must produce exactly the SPEC §4 argv sequence. The fake
-// runner's stubs double as the argv assertion — an unstubbed call fails loud.
+// with Engine.SpawnSet must spawn exactly the SPEC §4 process per forward,
+// in meta order, and run nothing else — the runner sees no call at all.
 func TestRunUp_DrivesRealEngineArgv(t *testing.T) {
 	t.Parallel()
 
 	root, home := writeUpDownConfig(t)
-	runner := fakerun.New().
-		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", "3000:localhost:3000", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", "3001:localhost:3001", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", "4011:localhost:4011", "ubuntu")
-	eng := tunnel.Engine{Runner: runner, StateDir: t.TempDir()}
+	runner := fakerun.New()
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	eng := tunnel.Engine{Runner: runner, Spawner: sp, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
 
 	var stdout, stderr bytes.Buffer
 	if got := runUp([]string{"ubuntu"}, &stdout, &stderr, root, home, eng); got != 0 {
 		t.Fatalf("runUp() = %v, want 0 (stderr: %q)", got, stderr.String())
 	}
 	want := []string{
-		"ssh -O check ubuntu",
-		"ssh -O forward -L 3000:localhost:3000 ubuntu",
-		"ssh -O forward -L 3001:localhost:3001 ubuntu",
-		"ssh -O check ubuntu",
-		"ssh -O forward -L 4011:localhost:4011 ubuntu",
+		"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3000:localhost:3000 ubuntu",
+		"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3001:localhost:3001 ubuntu",
+		"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4011:localhost:4011 ubuntu",
 	}
-	if got := runner.CallKeys(); !reflect.DeepEqual(got, want) {
-		t.Errorf("runUp() argv = %v, want %v", got, want)
+	if got := sp.Spawned(); !reflect.DeepEqual(got, want) {
+		t.Errorf("runUp() spawned = %v, want %v", got, want)
+	}
+	if got := runner.CallKeys(); len(got) != 0 {
+		t.Errorf("runUp() ran %v through the runner, want nothing", got)
 	}
 }
 
@@ -271,28 +265,28 @@ func TestRunDown(t *testing.T) {
 		wantStderr    []string // substrings; nil means stderr must be EMPTY
 	}{
 		{
-			name:          "tears down the master",
+			name:          "kills every tunnel process of the host",
 			args:          []string{"ubuntu"},
 			wantCode:      0,
 			wantExitCalls: []string{"ubuntu"},
 		},
 		{
-			// CONTRACT-tunnel §4: the master really went down; only the
+			// CONTRACT-tunnel: the processes really went down; only the
 			// cache clear failed. Mirrors up's handling.
 			name:          "state write failure warns but is success",
 			args:          []string{"ubuntu"},
-			exitErr:       fmt.Errorf("master exit requested but state not recorded: %w", tunnel.ErrStateWrite),
+			exitErr:       fmt.Errorf("kill attempted but state not recorded: %w", tunnel.ErrStateWrite),
 			wantCode:      0,
 			wantExitCalls: []string{"ubuntu"},
-			wantStderr:    []string{"warning: master exit requested but state not recorded"},
+			wantStderr:    []string{"warning: kill attempted but state not recorded"},
 		},
 		{
-			name:          "ssh refusal is exit 1 with ssh's message",
+			name:          "a process that survives is exit 1 with the reason",
 			args:          []string{"ubuntu"},
-			exitErr:       errors.New(`ssh -O exit: Control socket connect: No such file or directory`),
+			exitErr:       errors.New("pid 4242 still running after SIGTERM: context deadline exceeded"),
 			wantCode:      1,
 			wantExitCalls: []string{"ubuntu"},
-			wantStderr:    []string{"Control socket connect"},
+			wantStderr:    []string{"pid 4242 still running"},
 		},
 		{
 			name:       "unknown host",
