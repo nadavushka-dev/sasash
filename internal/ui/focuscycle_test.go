@@ -149,7 +149,9 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 		m = feed(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), m.Init())
 		m = ui.WithSwitcher(m,
 			func(alias, name string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
-			func(alias string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true }, nil)
+			func(alias string) ([]probe.Path, string, bool) {
+				return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true
+			}, nil)
 		m = press(t, m, "G", "l")
 		if !ui.TunnelsFocused(m) || ui.PathsFocused(m) {
 			t.Errorf("l should pass a pane with one rendered path by (paths %v, tunnels %v):\n%s", ui.PathsFocused(m), ui.TunnelsFocused(m), m.View())
