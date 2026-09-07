@@ -131,45 +131,65 @@ every other ssh-aware tool on the machine follows immediately.
 ### Model
 - **Desired state** → `# @sasash forwards <name> ...` in `sasash.conf`. Durable, named sets.
 - **Actual state** → `~/.local/state/sasash/`. A **cache, never truth.**
+- **A forward IS a process** (Model B, SASASH.7): one detached `ssh -N -L` per local port,
+  grouped into named sets. No shared master on the tunnel path, no `-O`, no ControlPath
+  required. Stopping a forward kills its process, and that drops its listener *and* its
+  established connections together, touching nothing else.
 
 ### Commands (the entire tunnel engine)
 
 | action | command |
 |---|---|
-| start master + declared forwards | `ssh -fN <host>` |
-| is it alive | `ssh -O check <host>` |
-| add a forward, live | `ssh -O forward -L 4014:localhost:4014 <host>` |
-| remove a forward, live | `ssh -O cancel -L 4014:localhost:4014 <host>` — closes the listener only: connections already established through it stay until they close on their own (a browser's keep-alive outlives the cancel), and the `x` notice says so (SASASH.4.17) |
-| tear down | `ssh -O exit <host>` |
+| start a forward | `ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 <host>` — sasash detaches it itself (own session, stdin/stdout from/to `/dev/null`, stderr to `~/.local/state/sasash/<host>.<port>.log`) and records the pid. Success is the local port answering; the process exiting first is failure, with its stderr as the reason |
+| add a port to a running set | the same, once more — the other processes are not touched, nothing restarts |
+| remove a forward | SIGTERM to that one process — the listener and the connections through it drop together; the other processes are untouched |
+| set down | SIGTERM to each of the set's processes |
+| everything off | SIGTERM to every recorded process of the host |
+| interactive master alive? | `ssh -O check <host>` — an indicator for enter/spawn/scp reuse only; never a forward's verdict |
+| interactive master down | `ssh -O exit <host>` — tunnels are their own connections and survive it |
 
-This is why "add port 4014 without killing the other five" is cheap: OpenSSH already does it.
+Why the flags: `BatchMode=yes` because no tty exists to prompt on — a key that needs a
+passphrase or a host that needs a password fails at once with ssh's reason instead of
+hanging (keys + agent make the per-process auth invisible; a password-only host means
+connecting once interactively, which the hybrid's `ControlMaster auto` then reuses).
+`ExitOnForwardFailure=yes` because a `-L` that cannot bind would otherwise leave a live
+process serving nothing; with it the process dies and its stderr says
+`Address already in use` — the honest answer to a held port. No `-f` because `ssh -f`
+forks after auth and the pid we would hold is the one that exits; sasash is the
+backgrounder, so the pid it records is the tunnel's own.
+
+Hybrid: the ControlMaster trio stays in every managed entry for interactive reuse (auth
+once for shells and file copies). The one thing the master alone could do — graft a `-L`
+onto a live interactive shell — is not carried over.
+
 Every tunnel sasash starts goes through this engine — the ad-hoc `-N` included (SASASH.4.17):
-a raw `ssh -fN` outside it has no ControlMaster and no state record, so Status cannot show
-it and `x`/`X` cannot end it. The one raw run left is the one the user chooses with that
-said up front (the `a` row).
-(Note: the `~C` escape does the same thing interactively, but requires a pty — it is inert
-under `ssh -N`, which is why it appeared broken.)
+it is a forward under the ad-hoc set, recorded like any other, so Status shows it and
+`x`/`X` end it. The one raw run left is the one the user chooses with that said up front
+(the `a` row).
 
 ### The thing that will bite you
-**OpenSSH cannot list active forwards.** `-O check` only reports that the master is alive.
-So sasash tracks what it injected — and that record *will* drift the moment anything dies
-outside the TUI.
+**A recorded pid is a promise, not a fact.** The process can die outside the TUI, the
+machine can reboot and hand the number to something else, and the state file will not
+notice.
 
-Therefore, on **every** render:
-1. `ssh -O check <host>` → master alive?
-2. `net.DialTimeout` to `127.0.0.1:<localport>` for each forward → listener present?
+Therefore, on **every** render, per forward:
+1. is the recorded pid alive? (`wait4`/`kill 0` — a syscall, never a guess)
+2. `net.DialTimeout` to `127.0.0.1:<localport>` → listener present?
 
 Reality wins over the state file, always. Report three distinct states, don't collapse them:
 
-- `● up` — master alive *and* local port accepting
-- `◐ listening` — port accepting but not verified end-to-end
-- `○ down` — anything else
+- `● up` — the recorded process is alive *and* the local port accepts
+- `◐ listening` — the port accepts but no live sasash process owns it (someone else runs it,
+  or the record was lost)
+- `○ down` — anything else, including a process that runs but serves nothing
 
 A tunnel manager that lies about what's up is worse than no tunnel manager.
 
 ### Port conflicts
 Before adding a forward, dial `127.0.0.1:<port>`. If something already holds it, say so and
-offer the next free port. Never silently remap.
+offer the next free port. Never silently remap — the engine's spawn dials first too and
+refuses a port that already answers (a foreign listener would make its own readiness dial
+lie), and `ExitOnForwardFailure` catches the one that appears in between.
 
 ---
 

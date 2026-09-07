@@ -1,13 +1,19 @@
-// Package tunnel is the M3 engine (SPEC §4, SASASH.3.2): OpenSSH
-// control-master lifecycle, live forward add/cancel, and the honest
+// Package tunnel is the M3 engine (SPEC §4, SASASH.7 Model B): one detached
+// `ssh -N -L` process per forward, grouped into named sets, and the honest
 // three-state status model. No UI — the TUI pane and the CLI both consume
 // this package. Contract: .squad/CONTRACT-tunnel.md (ratified).
 //
-// The argv strings ARE the product: a typo in "-O cancel" silently does
-// nothing, so every command is table-tested to its exact string. State under
-// StateDir is a cache, never truth — on every Status call, `ssh -O check`
-// plus a local dial per forward decide up/listening/down, and the state file
-// can attribute or remember a forward but never upgrade one.
+// A forward IS a process: Spawn starts it and records its pid, Kill sends
+// it SIGTERM (its listener and its established connections die together,
+// nothing else is touched), a set is N independent processes. Nothing on
+// the tunnel path uses -O; the interactive control master survives only as
+// CheckMaster/Exit, an indicator that never decides a forward's verdict.
+//
+// The argv strings ARE the product, so every command is table-tested to its
+// exact string. State under StateDir is a cache, never truth — on every
+// Status call a pid liveness check plus a local dial per forward decide
+// up/listening/down, and the state file can attribute or remember a forward
+// but never upgrade one.
 package tunnel
 
 import (
@@ -28,21 +34,28 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/stats"
 )
 
-// ErrStateWrite marks an action whose ssh side SUCCEEDED but whose state
-// cache update failed: the tunnel change is real, the record of it is not.
-// Callers may surface the message and carry on; errors.Is picks it out.
+// ErrStateWrite marks an action whose process side SUCCEEDED but whose
+// state cache update failed: the tunnel change is real, the record of it
+// is not. Callers may surface the message and carry on; errors.Is picks it
+// out.
 var ErrStateWrite = errors.New("state not recorded")
+
+// pollInterval paces the Spawn handshake and the post-Kill wait. Every
+// fake path in the unit tier resolves on the first iteration, so tests
+// never sleep on it.
+const pollInterval = 50 * time.Millisecond
 
 // Status is the honest three-state model (SPEC §4). Never collapsed.
 type Status int
 
 const (
-	// Down is anything else: no listener, or an unverifiable spec.
+	// Down is anything else: no listener, an unverifiable spec, or a
+	// process that runs but serves nothing.
 	Down Status = iota
-	// Listening means the local port accepts but the master is not
-	// verified — the forward is not known to work end-to-end.
+	// Listening means the local port answers but no live sasash process
+	// owns it — someone else runs it, or the record was lost.
 	Listening
-	// Up means the master is alive AND the local port accepts.
+	// Up means the recorded process is alive AND the local port answers.
 	Up
 )
 
@@ -65,6 +78,7 @@ type Forward struct {
 	Set   string // owning set name; "" = ad-hoc
 	Spec  string // verbatim, e.g. "3000:localhost:3000"
 	Port  string // parsed local port; "" when unparseable (then State is Down)
+	Pid   int    // the live sasash process serving this forward; 0 when none is alive
 	State Status
 	// Since and DownSince are observed times from the stats store (contract
 	// CONTRACT-stats.md): start of the current accepting run, and the first
@@ -76,8 +90,11 @@ type Forward struct {
 
 // HostStatus is one render's truth for a host.
 type HostStatus struct {
-	Host   string
-	Master bool // ssh -O check succeeded
+	Host string
+	// Master reports the INTERACTIVE control master (`ssh -O check`). It is
+	// an indicator for enter/spawn/scp reuse and never part of a forward's
+	// verdict (hybrid model).
+	Master bool
 	// Forwards holds desired sets first (meta order), then state-file
 	// extras, deduplicated by spec with desired-set attribution winning.
 	Forwards []Forward
@@ -99,10 +116,11 @@ type HostStatus struct {
 	CorruptStats bool
 }
 
-// Engine shells out through the run seam and dials through the probe seam.
-// The zero values of Runner, Dialer and Timeout mean run.OS{}, probe.Net{}
-// and probe.DefaultTimeout. StateDir is required: the cmd layer passes
-// ~/.local/state/sasash, tests pass a t.TempDir().
+// Engine runs the interactive-master commands through the run seam, every
+// tunnel process through the spawn seam, and dials through the probe seam.
+// The zero values of Runner, Spawner, Dialer and Timeout mean run.OS{},
+// run.OSSpawner{}, probe.Net{} and probe.DefaultTimeout. StateDir is
+// required: the cmd layer passes ~/.local/state/sasash, tests a t.TempDir().
 //
 // Concurrency: state updates are unlocked read-modify-write over a plain
 // file — callers must serialize mutating calls per host (the TUI's render
@@ -111,13 +129,14 @@ type HostStatus struct {
 // honestly (reality still decides every status), but don't do it.
 type Engine struct {
 	Runner   run.Runner
+	Spawner  run.Spawner
 	Dialer   probe.Dialer
 	StateDir string
 	Timeout  time.Duration
 	// Stats, when non-nil, records observed timestamps (master/forward
-	// up-down transitions on Status and Exit, sasash-started masters on
-	// Start) and enriches HostStatus/Forward with them. nil means no
-	// observing and every observed field stays zero.
+	// up-down transitions on Status and Exit) and enriches HostStatus/
+	// Forward with them. nil means no observing and every observed field
+	// stays zero.
 	Stats *stats.Store
 }
 
@@ -126,6 +145,13 @@ func (e Engine) runner() run.Runner {
 		return e.Runner
 	}
 	return run.OS{}
+}
+
+func (e Engine) spawner() run.Spawner {
+	if e.Spawner != nil {
+		return e.Spawner
+	}
+	return run.OSSpawner{}
 }
 
 func (e Engine) dialer() probe.Dialer {
@@ -159,24 +185,160 @@ func (e Engine) exec(ctx context.Context, argv ...string) error {
 	return nil
 }
 
-// Start launches the background master: `ssh -fN <host>`. Managed hosts
-// carry ControlMaster auto + ControlPath from sasash.conf, so no -M here.
-// On success the alive-run is recorded as sasash-started; a record failure
-// follows the ErrStateWrite convention (the master IS running).
-func (e Engine) Start(ctx context.Context, host string) error {
-	if err := e.exec(ctx, "ssh", "-fN", host); err != nil {
-		return err
-	}
-	if e.Stats != nil {
-		if err := e.Stats.RecordMasterStart(host); err != nil {
-			return fmt.Errorf("master started but %w: %v", ErrStateWrite, err)
-		}
-	}
-	return nil
+// spawnArgv is the one tunnel command (CONTRACT-tunnel §3). BatchMode: no
+// tty exists to prompt on, so auth that needs one fails at once with ssh's
+// reason instead of hanging. ExitOnForwardFailure: a -L that cannot bind
+// ends the process with "Address already in use" on its stderr instead of
+// leaving a live process that serves nothing. No -f: sasash detaches the
+// process itself, so the pid it records is the tunnel's own.
+func spawnArgv(host, spec string) []string {
+	return []string{"ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", spec, host}
 }
 
-// CheckMaster asks `ssh -O check <host>`. A non-zero exit is data — the
-// master is down — not an error; error means the run seam itself failed.
+// Spawn starts one detached tunnel process for spec and waits for reality
+// to say it works: the local port answers (success, pid recorded under set;
+// "" = ad-hoc), the process exits (failure carrying its stderr), or ctx
+// ends (the process is killed — a tunnel that never came up is not left
+// dangling). Two refusals come before anything starts: a spec whose local
+// port cannot be parsed (what cannot be verified must not be claimed), and
+// a local port that already answers (a foreign listener would make the
+// handshake's dial lie — SPEC §4: say so, never silently remap). A success
+// whose record write fails returns an ErrStateWrite-wrapped error — the
+// tunnel IS running.
+//
+// Residual window: a foreign listener that appears between the pre-check
+// and ssh's bind ends our process (ExitOnForwardFailure) and can beat the
+// handshake by one poll; the next Status reconciles it (pid dead + port
+// answering = Listening).
+func (e Engine) Spawn(ctx context.Context, host, set, spec string) error {
+	port := localPort(spec)
+	if port == "" {
+		return fmt.Errorf("spec %q: no local port to verify; refusing to start what cannot be checked", spec)
+	}
+	logPath, err := e.hostFile(host, "."+port+".log")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if e.dialOK(ctx, port) {
+		return fmt.Errorf("spec %q: local port %s already answers; refusing to start a tunnel that could not bind it", spec, port)
+	}
+	if err := os.MkdirAll(e.StateDir, 0o700); err != nil {
+		return err
+	}
+	argv := spawnArgv(host, spec)
+	sp := e.spawner()
+	pid, err := sp.Spawn(argv, logPath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
+	}
+	for {
+		accepting := e.dialOK(ctx, port)
+		alive := sp.Alive(pid)
+		if accepting && alive {
+			return e.record(host, set, spec, pid)
+		}
+		if !alive {
+			return fmt.Errorf("%s: %s", strings.Join(argv, " "), e.lastWords(logPath))
+		}
+		select {
+		case <-ctx.Done():
+			_ = sp.Kill(pid)
+			return fmt.Errorf("%s: not listening on %s: %w", strings.Join(argv, " "), port, ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// lastWords is a dead process's stderr, trimmed, or a stand-in when it
+// said nothing.
+func (Engine) lastWords(logPath string) string {
+	data, _ := os.ReadFile(logPath)
+	if msg := strings.TrimSpace(string(data)); msg != "" {
+		return msg
+	}
+	return "exited before listening"
+}
+
+// Kill ends the process serving spec: SIGTERM to every recorded pid of the
+// spec (one port has one process, whatever set recorded it), then a wait
+// until it is gone or ctx ends. A named set's record of the spec is
+// removed; an ad-hoc record stays with its pid cleared — for the ad-hoc
+// set the record IS the declaration, so the row survives a down and
+// SpawnSet brings it back; only Forget or KillAll purges it. No recorded pid, or a
+// pid already dead, means nothing to signal: the state is updated and nil
+// returned. A state failure wraps ErrStateWrite; a process that outlives
+// the wait is an error and its record is kept (reality will say).
+func (e Engine) Kill(ctx context.Context, host, spec string) error {
+	st, _ := e.loadState(host)
+	err := e.killPids(ctx, st.pids(spec))
+	if serr := e.mutateState(host, "kill attempted", func(st *hostState) {
+		st.retire(spec)
+	}); serr != nil {
+		err = errors.Join(err, serr)
+	}
+	return err
+}
+
+// KillAll ends every recorded process of the host and clears every record,
+// ad-hoc included — the explicit "everything off". The interactive master
+// is not touched; that is Exit's, and a consumer wanting both calls both.
+func (e Engine) KillAll(ctx context.Context, host string) error {
+	st, _ := e.loadState(host)
+	var pids []int
+	for _, f := range st.Forwards {
+		if f.Pid > 0 {
+			pids = append(pids, f.Pid)
+		}
+	}
+	err := e.killPids(ctx, pids)
+	if serr := e.mutateState(host, "kill attempted", func(st *hostState) {
+		st.Forwards = nil
+	}); serr != nil {
+		err = errors.Join(err, serr)
+	}
+	return err
+}
+
+// killPids signals each live pid and waits for it to die, joining errors.
+func (e Engine) killPids(ctx context.Context, pids []int) error {
+	sp := e.spawner()
+	var errs []error
+	for _, pid := range pids {
+		if !sp.Alive(pid) {
+			continue
+		}
+		if err := sp.Kill(pid); err != nil {
+			errs = append(errs, fmt.Errorf("pid %d: %w", pid, err))
+			continue
+		}
+		for sp.Alive(pid) {
+			select {
+			case <-ctx.Done():
+				errs = append(errs, fmt.Errorf("pid %d still running after SIGTERM: %w", pid, ctx.Err()))
+				return errors.Join(errs...)
+			case <-time.After(pollInterval):
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Forget drops every record of spec from the cache without signalling
+// anything: the explicit purge of a remembered ad-hoc forward, and a
+// lifecycle delete's last step. A live forward is the caller's to Kill
+// first. Errors wrap ErrStateWrite.
+func (e Engine) Forget(host, spec string) error {
+	return e.mutateState(host, "forget requested", func(st *hostState) {
+		st.remove(func(f stateForward) bool { return f.Spec == spec })
+	})
+}
+
+// CheckMaster asks `ssh -O check <host>` about the INTERACTIVE control
+// master. A non-zero exit is data — no master — not an error; error means
+// the run seam itself failed. Never part of a forward's verdict.
 func (e Engine) CheckMaster(ctx context.Context, host string) (bool, error) {
 	res, err := e.runner().Run(ctx, "ssh", "-O", "check", host)
 	if err != nil {
@@ -185,91 +347,39 @@ func (e Engine) CheckMaster(ctx context.Context, host string) (bool, error) {
 	return res.OK(), nil
 }
 
-// Forward injects one forward into the live master:
-// `ssh -O forward -L <spec> <host>`, recording it under set on success
-// ("" = ad-hoc). A failed state write returns ErrStateWrite-wrapped — the
-// ssh side already succeeded.
-func (e Engine) Forward(ctx context.Context, host, set, spec string) error {
-	if err := e.exec(ctx, "ssh", "-O", "forward", "-L", spec, host); err != nil {
-		return err
-	}
-	return e.record(host, set, spec)
-}
-
-// Cancel removes one forward: `ssh -O cancel -L <spec> <host>`. A named
-// set's state entry is removed even when ssh refuses (the attempt expresses
-// intent, and the cache is never truth). An ad-hoc record stays: for the
-// ad-hoc set the record IS the declaration (contract amendment C1), so a
-// down keeps the row and Up brings it back; only Forget or Exit purges it.
-// The state is rewritten even when the predicate drops nothing (an ad-hoc
-// only spec): the write is a no-op and an unwritable state dir then reads
-// as a spurious ErrStateWrite — accepted over teaching mutateState to
-// report "changed". A caller re-plumbing a forward (Cancel old, Forward
-// new) Forgets the old spec afterwards, or its record lingers as a row.
-func (e Engine) Cancel(ctx context.Context, host, spec string) error {
-	err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host)
-	if serr := e.mutateState(host, "cancel attempted", func(st *hostState) {
-		st.remove(func(f stateForward) bool { return f.Spec == spec && f.Set != "" })
-	}); serr != nil && err == nil {
-		err = serr
-	}
-	return err
-}
-
-// Forget drops every record of spec from the cache without touching ssh:
-// the explicit purge of a remembered ad-hoc forward (contract amendment
-// C1). A live forward is the caller's to Cancel first. Errors wrap
-// ErrStateWrite.
-func (e Engine) Forget(host, spec string) error {
-	return e.mutateState(host, "forget requested", func(st *hostState) {
-		st.remove(func(f stateForward) bool { return f.Spec == spec })
-	})
-}
-
-// Exit tears the master down: `ssh -O exit <host>`. Every recorded forward
-// for the host is cleared regardless of the exit result — a dead master has
-// no forwards either way.
+// Exit tears the INTERACTIVE control master down: `ssh -O exit <host>`.
+// Tunnel processes are their own connections and are not affected; a
+// consumer wanting everything off calls KillAll too. On success the master
+// is observed dead in the stats store; a record failure follows the
+// ErrStateWrite convention.
 func (e Engine) Exit(ctx context.Context, host string) error {
-	execErr := e.exec(ctx, "ssh", "-O", "exit", host)
-	err := execErr
-	if serr := e.mutateState(host, "master exit requested", func(st *hostState) {
-		st.Forwards = nil
-	}); serr != nil && err == nil {
-		err = serr
-	}
-	// The ssh side succeeded: the master is observably dead now.
-	if execErr == nil && e.Stats != nil {
-		if _, _, oerr := e.Stats.ObserveHost(host, false, nil); oerr != nil && err == nil {
-			err = fmt.Errorf("master exited but %w: %v", ErrStateWrite, oerr)
-		}
-	}
-	return err
-}
-
-// Up ensures the master (Start only when CheckMaster says down), then
-// Forwards every spec in order, recording each success. A genuine ssh
-// failure aborts and is returned; an ErrStateWrite does not — the tunnel
-// is real and only its record failed, so Up keeps going and returns the
-// joined state-write errors at the end (contract amendment B1: the cache
-// is never truth, so a cache failure must never stop real tunnels).
-func (e Engine) Up(ctx context.Context, host, set string, specs []string) error {
-	alive, err := e.CheckMaster(ctx, host)
-	if err != nil {
+	if err := e.exec(ctx, "ssh", "-O", "exit", host); err != nil {
 		return err
 	}
-	var stateErrs []error
-	if !alive {
-		if err := e.Start(ctx, host); err != nil {
-			// B1 applies to Start's stats record too: the master is real,
-			// only its record failed — keep forwarding.
-			if !errors.Is(err, ErrStateWrite) {
-				return err
-			}
-			stateErrs = append(stateErrs, err)
+	if e.Stats != nil {
+		if _, _, oerr := e.Stats.ObserveHost(host, false, nil); oerr != nil {
+			return fmt.Errorf("master exited but %w: %v", ErrStateWrite, oerr)
 		}
 	}
+	return nil
+}
+
+// SpawnSet brings a set up one process per spec, disturbing nothing that
+// already works: a spec whose recorded process is alive AND whose port
+// answers is skipped (no kill, no respawn — this IS "add a port without
+// touching the others"); every other spec is Spawned in order. A genuine
+// spawn failure aborts and is returned (the earlier processes stay — they
+// are real); an ErrStateWrite does not abort — the tunnel is real and only
+// its record failed, so SpawnSet keeps going and returns the joined
+// state-write errors at the end.
+func (e Engine) SpawnSet(ctx context.Context, host, set string, specs []string) error {
+	st, _ := e.loadState(host)
+	var stateErrs []error
 	for _, spec := range specs {
-		if err := e.Forward(ctx, host, set, spec); err != nil {
+		if e.serving(ctx, st, spec) {
+			continue
+		}
+		if err := e.Spawn(ctx, host, set, spec); err != nil {
 			if errors.Is(err, ErrStateWrite) {
 				stateErrs = append(stateErrs, err)
 				continue
@@ -280,13 +390,28 @@ func (e Engine) Up(ctx context.Context, host, set string, specs []string) error 
 	return errors.Join(stateErrs...)
 }
 
-// DownSet cancels every spec of the set — the given (desired) specs plus any
-// recorded under the set — joining errors. A named set's state entries are
-// cleared regardless: the cache is never truth, and the next Status
-// re-derives reality. The ad-hoc set's records stay (contract amendment
-// C1): they are its declaration, so the rows survive a down and Up brings
-// them back; only Forget or Exit purges them.
-func (e Engine) DownSet(ctx context.Context, host, set string, specs []string) error {
+// serving reports whether a recorded process for spec is alive and its
+// port answers — the one case SpawnSet leaves alone.
+func (e Engine) serving(ctx context.Context, st hostState, spec string) bool {
+	port := localPort(spec)
+	if port == "" {
+		return false
+	}
+	sp := e.spawner()
+	for _, pid := range st.pids(spec) {
+		if sp.Alive(pid) && e.dialOK(ctx, port) {
+			return true
+		}
+	}
+	return false
+}
+
+// KillSet kills every spec of the set — the given (desired) specs plus any
+// recorded under the set — joining errors, then updates the records under
+// Kill's rule: a named set's records go, ad-hoc records stay with their
+// pid cleared (they are the ad-hoc set's declaration, so the rows survive
+// a down and SpawnSet brings them back; only Forget or KillAll purges them).
+func (e Engine) KillSet(ctx context.Context, host, set string, specs []string) error {
 	st, _ := e.loadState(host)
 	seen := make(map[string]bool)
 	all := make([]string, 0, len(specs))
@@ -305,29 +430,26 @@ func (e Engine) DownSet(ctx context.Context, host, set string, specs []string) e
 
 	var errs []error
 	for _, spec := range all {
-		if err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host); err != nil {
+		if err := e.killPids(ctx, st.pids(spec)); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	// The ad-hoc set's records are its declaration (contract amendment
-	// C1): a down keeps them, so nothing changes in the cache and no
-	// write is attempted.
-	if set == "" {
-		return errors.Join(errs...)
-	}
-	if serr := e.mutateState(host, "set cancelled", func(st *hostState) {
-		st.remove(func(f stateForward) bool { return f.Set == set })
+	if serr := e.mutateState(host, "set killed", func(st *hostState) {
+		for _, spec := range all {
+			st.retire(spec)
+		}
 	}); serr != nil {
 		errs = append(errs, serr)
 	}
 	return errors.Join(errs...)
 }
 
-// Status reconciles one host: `ssh -O check`, then a local dial per forward.
-// Reality always wins over the state file, in both directions — a recorded
-// forward whose port is dead is Down even with the master alive, and a
-// desired forward someone else runs still shows Up. The error return is
-// reserved for run-seam failure; everything observable degrades to a state.
+// Status reconciles one host: the interactive master check (indicator
+// only), then per forward a liveness check of its recorded pid and a local
+// dial. Reality always wins over the state file, in both directions — a
+// recorded process that died is Down, and a desired forward someone else
+// runs shows Listening. The error return is reserved for run-seam failure;
+// everything observable degrades to a state.
 func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.ForwardSet) (HostStatus, error) {
 	master, err := e.CheckMaster(ctx, host)
 	if err != nil {
@@ -343,7 +465,7 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 		}
 		seen[spec] = true
 		f := Forward{Set: set, Spec: spec, Port: localPort(spec)}
-		f.State = e.verdict(ctx, master, f.Port)
+		f.Pid, f.State = e.verdict(ctx, st.pids(spec), f.Port)
 		out.Forwards = append(out.Forwards, f)
 	}
 	for _, ds := range desired {
@@ -363,7 +485,7 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 		}
 		// Best-effort persistence: the returned view is correct for this
 		// render even when the write failed, and a render must not break
-		// over a stale cache (ratified contract §2).
+		// over a stale cache (CONTRACT-stats §2).
 		obs, statsCorrupt, _ := e.Stats.ObserveHost(host, master, accepting)
 		out.MasterSince = obs.MasterSince
 		out.MasterDownSince = obs.MasterDownSince
@@ -381,36 +503,51 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 	return out, nil
 }
 
-// verdict is the whole reconciliation matrix: port accepting AND master
-// alive => Up; port accepting alone => Listening; anything else => Down.
+// verdict is the whole reconciliation matrix (CONTRACT-tunnel §6): a
+// recorded pid alive AND the port answering => Up (that pid returned);
+// the port answering alone => Listening; anything else => Down.
 //
-// Known limits (ratified contract §5; revisit with 3.4's port-conflict
-// work): the dial is always to 127.0.0.1, so a spec bound to a specific
-// non-loopback interface is judged by whoever holds the loopback port; and
-// two different specs sharing a local port are each judged by that one
-// port, so a stale recorded spec can ride a live desired one's listener.
-func (e Engine) verdict(ctx context.Context, master bool, port string) Status {
+// Known limits: the dial is always to 127.0.0.1, so a spec bound to a
+// specific non-loopback interface is judged by whoever holds the loopback
+// port; and two different specs sharing a local port are each judged by
+// that one port.
+func (e Engine) verdict(ctx context.Context, pids []int, port string) (int, Status) {
 	if port == "" {
-		return Down
+		return 0, Down
 	}
+	alive := 0
+	sp := e.spawner()
+	for _, pid := range pids {
+		if sp.Alive(pid) {
+			alive = pid
+			break
+		}
+	}
+	if !e.dialOK(ctx, port) {
+		return 0, Down
+	}
+	if alive > 0 {
+		return alive, Up
+	}
+	return 0, Listening
+}
+
+// dialOK reports whether 127.0.0.1:port accepts within the engine timeout.
+func (e Engine) dialOK(ctx context.Context, port string) bool {
 	dctx, cancel := context.WithTimeout(ctx, e.timeout())
 	defer cancel()
-	if _, err := e.dialer().Dial(dctx, net.JoinHostPort("127.0.0.1", port)); err != nil {
-		return Down
-	}
-	if master {
-		return Up
-	}
-	return Listening
+	_, err := e.dialer().Dial(dctx, net.JoinHostPort("127.0.0.1", port))
+	return err == nil
 }
 
 // localPort extracts the local port to dial: the first all-digit ':'-field
 // among the spec's first two fields ("3000:localhost:3000" -> 3000,
 // "127.0.0.1:3000:localhost:3000" -> 3000). No match means the forward
-// cannot be verified, so it must not be claimed: Port "" reads as Down.
-// Bracketed or bare IPv6 bind addresses therefore always read as Down
-// (fail-safe under-claim), and spec validation itself is M3's, not ours —
-// a malformed spec ssh would reject can still yield a dialable port here.
+// cannot be verified, so it must not be claimed: Port "" reads as Down and
+// Spawn refuses it. Bracketed or bare IPv6 bind addresses therefore always
+// read as Down (fail-safe under-claim), and spec validation itself is
+// M3's, not ours — a malformed spec ssh would reject can still yield a
+// dialable port here.
 func localPort(spec string) string {
 	fields := strings.SplitN(spec, ":", 3)
 	for i, f := range fields {
@@ -438,6 +575,7 @@ func allDigits(s string) bool {
 type stateForward struct {
 	Set  string `json:"set"`
 	Spec string `json:"spec"`
+	Pid  int    `json:"pid,omitempty"` // 0 = remembered, not running
 }
 
 type hostState struct {
@@ -454,20 +592,44 @@ func (st *hostState) remove(drop func(stateForward) bool) {
 	st.Forwards = kept
 }
 
-// statePath refuses a host alias that is not a plain file name — an alias
-// like "../x" must not walk out of StateDir.
-func (e Engine) statePath(host string) (string, error) {
+// pids lists every recorded (non-zero) pid of spec, whatever set recorded
+// it: one port has one process, so any of them is the one to check or end.
+func (st hostState) pids(spec string) []int {
+	var out []int
+	for _, f := range st.Forwards {
+		if f.Spec == spec && f.Pid > 0 {
+			out = append(out, f.Pid)
+		}
+	}
+	return out
+}
+
+// retire applies the after-kill rule to spec: a named set's record goes
+// (its desire lives in config), an ad-hoc record stays with pid cleared
+// (the record is its declaration).
+func (st *hostState) retire(spec string) {
+	st.remove(func(f stateForward) bool { return f.Spec == spec && f.Set != "" })
+	for i := range st.Forwards {
+		if st.Forwards[i].Spec == spec {
+			st.Forwards[i].Pid = 0
+		}
+	}
+}
+
+// hostFile refuses a host alias that is not a plain file name — an alias
+// like "../x" must not walk out of StateDir — and returns StateDir/host+suffix.
+func (e Engine) hostFile(host, suffix string) (string, error) {
 	if host == "" || host == "." || host == ".." || host != filepath.Base(host) {
 		return "", fmt.Errorf("host %q is not a valid state file name", host)
 	}
-	return filepath.Join(e.StateDir, host+".json"), nil
+	return filepath.Join(e.StateDir, host+suffix), nil
 }
 
 // loadState reads the cache. Missing means empty; a file that exists but
 // cannot be read or parsed also means empty, with corrupt reported so the
 // caller can say so (reality decides the statuses either way).
 func (e Engine) loadState(host string) (st hostState, corrupt bool) {
-	path, err := e.statePath(host)
+	path, err := e.hostFile(host, ".json")
 	if err != nil {
 		return hostState{}, false
 	}
@@ -481,26 +643,28 @@ func (e Engine) loadState(host string) (st hostState, corrupt bool) {
 	return st, false
 }
 
-// record adds one injected forward to the cache (idempotent per set+spec).
-func (e Engine) record(host, set, spec string) error {
-	return e.mutateState(host, "forward added", func(st *hostState) {
-		for _, f := range st.Forwards {
+// record adds one spawned forward to the cache (one entry per set+spec;
+// the pid is overwritten by a fresh spawn).
+func (e Engine) record(host, set, spec string, pid int) error {
+	return e.mutateState(host, "tunnel started", func(st *hostState) {
+		for i, f := range st.Forwards {
 			if f.Set == set && f.Spec == spec {
+				st.Forwards[i].Pid = pid
 				return
 			}
 		}
-		st.Forwards = append(st.Forwards, stateForward{Set: set, Spec: spec})
+		st.Forwards = append(st.Forwards, stateForward{Set: set, Spec: spec, Pid: pid})
 	})
 }
 
 // mutateState is load-modify-save; any failure wraps ErrStateWrite, prefixed
-// with what the ssh side already accomplished — by the time state changes,
-// the action is real and the caller deserves to know that.
+// with what the process side already accomplished — by the time state
+// changes, the action is real and the caller deserves to know that.
 func (e Engine) mutateState(host, action string, mutate func(*hostState)) error {
 	fail := func(err error) error {
 		return fmt.Errorf("%s but %w: %v", action, ErrStateWrite, err)
 	}
-	path, err := e.statePath(host)
+	path, err := e.hostFile(host, ".json")
 	if err != nil {
 		return fail(err)
 	}
