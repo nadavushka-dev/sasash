@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -266,5 +267,53 @@ func TestEngine_Spawn_RefusesHeldPort(t *testing.T) {
 	}
 	if f := forward(t, eng, spec); f.Pid != 0 {
 		t.Errorf("a refused spawn left a pid: %+v", f)
+	}
+}
+
+// TestEngine_KillAll_SurvivorStaysRecorded: a process that does not die on
+// SIGTERM within the caller's budget (here: stopped with SIGSTOP, so the
+// signal cannot land) keeps its record, pid and all, and the next KillAll
+// still reaches it once it can die. Nothing sasash started is ever left
+// alive and unrecorded.
+func TestEngine_KillAll_SurvivorStaysRecorded(t *testing.T) {
+	eng := modelBEngine(t)
+	echo := startEcho(t)
+	port := freePort(t)
+	spec := port + ":127.0.0.1:" + echo
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := eng.Spawn(ctx, alias, "web", spec); err != nil {
+		t.Fatalf("Spawn() err = %v", err)
+	}
+	pid := forward(t, eng, spec).Pid
+	if pid <= 0 {
+		t.Fatal("no pid after Spawn")
+	}
+	if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+		t.Fatalf("SIGSTOP %d: %v", pid, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGCONT) })
+
+	short, cancelShort := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancelShort()
+	err := eng.KillAll(short, alias)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("pid %d still running", pid)) {
+		t.Fatalf("KillAll() on a stopped process err = %v, want the survivor named", err)
+	}
+	if f := forward(t, eng, spec); f.Pid != pid {
+		t.Fatalf("after the failed KillAll: %+v, want the survivor still recorded as pid %d", f, pid)
+	}
+
+	// Let the pending SIGTERM land; the record is what makes the retry possible.
+	if err := syscall.Kill(pid, syscall.SIGCONT); err != nil {
+		t.Fatalf("SIGCONT %d: %v", pid, err)
+	}
+	if err := eng.KillAll(ctx, alias); err != nil {
+		t.Fatalf("second KillAll() err = %v", err)
+	}
+	waitFor(t, "listener on "+port+" to close", 5*time.Second, func() bool { return !listening(port) })
+	if f := forward(t, eng, spec); f.State != tunnel.Down || f.Pid != 0 {
+		t.Errorf("after the second KillAll: %+v, want down, no pid", f)
 	}
 }
