@@ -213,7 +213,7 @@ func TestModel_View_EveryThemeEveryState(t *testing.T) {
 		{name: "filtering", keys: []string{"/", "a"}, want: "apply filter"},
 		{name: "filter applied", keys: []string{"/", "a", "l", "p", "enter"}, want: "/alp"},
 		{name: "no match", keys: []string{"/", "z", "z"}, want: "no hosts match"},
-		{name: "full help", keys: []string{"?"}, want: "clear filter / back"},
+		{name: "full help", keys: []string{"?"}, want: "? keys — ? q esc closes"},
 		{name: "notice", keys: []string{"t"}, want: "theme:"},
 	}
 	for _, th := range ui.Themes {

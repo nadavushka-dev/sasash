@@ -28,6 +28,17 @@ Sleep 1s
 Screenshot demo/out/frame-b.png
 Type "k"
 Sleep 500ms
+Type "o"
+Sleep 1s
+Screenshot demo/out/frame-settings.png
+Type "/"
+Type "th"
+Sleep 1s
+Screenshot demo/out/frame-search.png
+Escape
+Sleep 300ms
+Escape
+Sleep 500ms
 Type "?"
 Sleep 1.5s
 Screenshot demo/out/frame-keys.png

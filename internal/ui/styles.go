@@ -41,6 +41,7 @@ type Styles struct {
 
 	Empty lipgloss.Style // empty-state sentence
 	Clamp lipgloss.Style // colorless layout style for width truncation
+	Popup lipgloss.Style // the centered popup's box: a border, no fill
 }
 
 // NewStyles materializes the widget styles for one theme.
@@ -76,5 +77,6 @@ func NewStyles(p Palette) Styles {
 
 		Empty: lipgloss.NewStyle().Foreground(p.FgDim),
 		Clamp: lipgloss.NewStyle(),
+		Popup: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.FgDim).PaddingRight(1),
 	}
 }

@@ -209,13 +209,13 @@ func TestModel_Update_EscClosesHelpBeforeClearingFilter(t *testing.T) {
 	// open, the first esc closes the help, the second clears the filter.
 	m := taggedModel(t, fakerun.New())
 	m = press(t, m, "/", "a", "l", "p", "enter", "?")
-	if view := m.View(); !strings.Contains(view, "clear filter / back") {
-		t.Fatalf("View() after ? missing the full help:\n%s", view)
+	if !ui.HelpOpen(m) {
+		t.Fatalf("HelpOpen() = false after ?, want the panel:\n%s", m.View())
 	}
 
 	m = press(t, m, "esc")
-	if view := m.View(); strings.Contains(view, "clear filter / back") {
-		t.Errorf("View() after first esc still shows the help view:\n%s", view)
+	if ui.HelpOpen(m) {
+		t.Errorf("HelpOpen() = true after the first esc, want closed:\n%s", m.View())
 	}
 	if got := ui.FilterState(m); got != list.FilterApplied {
 		t.Errorf("FilterState() after first esc = %v, want the filter kept", got)
@@ -279,7 +279,8 @@ func TestModel_View_NoFilterMatch(t *testing.T) {
 
 func TestModel_Update_HelpToggle(t *testing.T) {
 	t.Parallel()
-	m := taggedModel(t, fakerun.New())
+	// Tall enough for the host-list group's last rows to be in view.
+	m := update(t, taggedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 30})
 
 	// The full-help-only entry proves the view is generated from FullHelp.
 	if view := m.View(); strings.Contains(view, "clear filter / back") {
@@ -298,7 +299,7 @@ func TestModel_Update_HelpToggle(t *testing.T) {
 
 	// At width 40 bubbles keeps only the first help column: it must be
 	// the one documenting filter/esc/help/quit (column order matters).
-	narrow := update(t, m, tea.WindowSizeMsg{Width: 40, Height: 24})
+	narrow := update(t, m, tea.WindowSizeMsg{Width: 40, Height: 30})
 	if v := narrow.View(); !strings.Contains(v, "clear filter / back") {
 		t.Errorf("View() at width 40 dropped the escape-keys help column:\n%s", v)
 	}

@@ -34,6 +34,21 @@ func failedForward(t *testing.T) (ui.Model, *fakerun.Fake) {
 	return m, r
 }
 
+// boxLines is the popup box's inner lines — what sits between its side
+// borders, trailing padding dropped: the title row, the blank, the rows
+// with their three-space indent, the bottom line.
+func boxLines(view string) []string {
+	var out []string
+	for _, l := range strings.Split(view, "\n") {
+		i, j := strings.Index(l, "│"), strings.LastIndex(l, "│")
+		if i < 0 || j <= i {
+			continue
+		}
+		out = append(out, strings.TrimRight(l[i+len("│"):j], " "))
+	}
+	return out
+}
+
 func TestModel_Update_PopupOwnsTheKeyboard(t *testing.T) {
 	t.Parallel()
 	m, r := failedForward(t)
@@ -53,7 +68,7 @@ func TestModel_Update_PopupOwnsTheKeyboard(t *testing.T) {
 	}
 	// Action keys are inert while it is open.
 	before := len(r.CallKeys())
-	for _, k := range []string{"S", "H", "o", "/", "q", "a", "+", "x", "l", "t", "v", "p", "y", "c", " "} {
+	for _, k := range []string{"S", "H", "o", "q", "a", "+", "x", "l", "t", "v", "p", "y", "c", " "} {
 		next, cmd := m.Update(keyMsg(k))
 		if cmd != nil || !ui.PopupOpen(next.(ui.Model)) {
 			t.Errorf("key %q under the popup: cmd %v, open %v", k, cmd != nil, ui.PopupOpen(next.(ui.Model)))
@@ -124,44 +139,45 @@ func TestModel_View_PopupScrolls(t *testing.T) {
 		t.Errorf("View() is %d lines with the popup open, want the frame's 30", h)
 	}
 	// Exactly room rows of content are shown: the frame is 30 tall, the
-	// help one line, so the body has 26 rows and the popup 23 of content.
+	// help one line, so the body has 26 rows; the box's border, title,
+	// blank and bottom line take five, leaving 21 of content.
 	rows := 0
 	for _, l := range strings.Split(view, "\n") {
 		if strings.Contains(l, "   warning line") {
 			rows++
 		}
 	}
-	if rows != 23 || !strings.Contains(view, "lines 1–23 of 40 · j/k scroll") {
-		t.Errorf("View() should show 23 content rows with the exact hint (got %d):\n%s", rows, view)
+	if rows != 21 || !strings.Contains(view, "lines 1–21 of 40 · j/k scroll") {
+		t.Errorf("View() should show 21 content rows with the exact hint (got %d):\n%s", rows, view)
 	}
 	m = press(t, m, "G")
-	if view := m.View(); !strings.Contains(view, "   warning line 40") || !strings.Contains(view, "   warning line 18") || strings.Contains(view, "   warning line 17") || !strings.Contains(view, "lines 18–40 of 40") {
-		t.Errorf("View() after G should show exactly the last 23 rows:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "   warning line 40") || !strings.Contains(view, "   warning line 20") || strings.Contains(view, "   warning line 19") || !strings.Contains(view, "lines 20–40 of 40") {
+		t.Errorf("View() after G should show exactly the last 21 rows:\n%s", view)
 	}
 	// One k after G moves one row: the offset is clamped when written,
 	// never parked past the end.
-	if view := press(t, m, "G", "k").View(); !strings.Contains(view, "   warning line 17") || strings.Contains(view, "   warning line 40") {
+	if view := press(t, m, "G", "k").View(); !strings.Contains(view, "   warning line 19") || strings.Contains(view, "   warning line 40") {
 		t.Errorf("View() after G k should move up one row:\n%s", view)
 	}
-	if view := press(t, m, "G", "j", "j", "j", "k").View(); !strings.Contains(view, "   warning line 17") {
+	if view := press(t, m, "G", "j", "j", "j", "k").View(); !strings.Contains(view, "   warning line 19") {
 		t.Errorf("View() after over-scrolling down, k should still move:\n%s", view)
 	}
 	// A frame that grows after G: the offset is re-clamped on the resize,
 	// so the window shows a full screen and the very next k moves.
 	small := press(t, update(t, m, tea.WindowSizeMsg{Width: 100, Height: 14}), "G")
-	if view := small.View(); !strings.Contains(view, "lines 34–40 of 40") {
+	if view := small.View(); !strings.Contains(view, "lines 36–40 of 40") {
 		t.Fatalf("View() at height 14 after G:\n%s", view)
 	}
 	grown := update(t, small, tea.WindowSizeMsg{Width: 100, Height: 30})
-	if view := grown.View(); !strings.Contains(view, "lines 18–40 of 40") {
+	if view := grown.View(); !strings.Contains(view, "lines 20–40 of 40") {
 		t.Errorf("View() after growing the frame should re-clamp to a full screen:\n%s", view)
 	}
-	if view := press(t, grown, "k").View(); !strings.Contains(view, "lines 17–39 of 40") {
+	if view := press(t, grown, "k").View(); !strings.Contains(view, "lines 19–39 of 40") {
 		t.Errorf("View() one k after the resize should move one row:\n%s", view)
 	}
 	// The mirrored edge: half pages above the top park nothing; the next
 	// j moves one row.
-	if view := press(t, m, "g", "ctrl+u", "ctrl+u", "ctrl+u", "j").View(); !strings.Contains(view, "lines 2–24 of 40") {
+	if view := press(t, m, "g", "ctrl+u", "ctrl+u", "ctrl+u", "j").View(); !strings.Contains(view, "lines 2–22 of 40") {
 		t.Errorf("View() j after over-scrolling up should move one row:\n%s", view)
 	}
 	m = press(t, m, "g", "j", "j")
@@ -407,10 +423,11 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		next, reload := m.Update(ui.EditorExit(nil))
 		next, _ = next.(ui.Model).Update(reload())
 		view := next.(ui.Model).View()
-		// Count in the popup's rows only (three-space indent): the
-		// bottom-line notice repeats the head of the first warning.
+		// Count in the popup's rows only (three-space indent inside the
+		// box): the bottom-line notice repeats the head of the first
+		// warning.
 		as := 0
-		for _, l := range strings.Split(view, "\n") {
+		for _, l := range boxLines(view) {
 			if strings.HasPrefix(l, "   ") {
 				as += strings.Count(l, "A")
 			}

@@ -10,7 +10,8 @@ import (
 // The ? panel (SASASH.4.13): every named binding, grouped by the surface
 // it belongs to, generated from the bindings themselves — never hand-
 // maintained — and shown in the 4.11 popup (so it scrolls, owns the
-// keyboard, and closes on esc; ? closes it too). The group for the
+// keyboard, closes on esc — ? closes it too — and / narrows its rows to
+// the ones naming a key or a verb, 4.14). The group for the
 // surface that holds the keys right now comes first. The inline
 // expanding help is retired: the main view's footer is a whisper and
 // this panel is where every key is advertised.
@@ -82,10 +83,11 @@ func promptGroupKeys() []key.Binding {
 	}
 }
 
-// helpLines renders the groups as the popup's lines: a heading, then
+// helpLines renders the groups as the popup's rows: a heading, then
 // one `key  description` row per binding, keys padded to a column
-// (measured in cells: ↑/k is three wide, not five).
-func (m Model) helpLines() []string {
+// (measured in cells: ↑/k is three wide, not five). A row's plain
+// words are the key and the description, so / finds either.
+func (m Model) helpLines() []popupLine {
 	groups := m.helpGroups()
 	width := 0
 	for _, g := range groups {
@@ -93,19 +95,20 @@ func (m Model) helpLines() []string {
 			width = max(width, lipgloss.Width(b.Help().Key))
 		}
 	}
-	var out []string
+	var out []popupLine
 	for i, g := range groups {
 		if i > 0 {
-			out = append(out, "")
+			out = append(out, popupLine{})
 		}
-		out = append(out, m.styles.SectionLabel.Render(g.name))
+		out = append(out, popupLine{text: m.styles.SectionLabel.Render(g.name), plain: g.name, heading: true})
 		for _, b := range g.keys {
 			h := b.Help()
-			out = append(out, m.styles.HelpKey.Render(padRight(h.Key, width))+"  "+m.styles.HelpDesc.Render(h.Desc))
+			out = append(out, popupLine{text: m.styles.HelpKey.Render(padRight(h.Key, width)) + "  " + m.styles.HelpDesc.Render(h.Desc), plain: h.Key + "  " + h.Desc})
 		}
 	}
 	if line := actionsLine(m.actions); line != "" {
-		out = append(out, "", m.styles.SectionLabel.Render("actions.toml"), strings.TrimSpace(line))
+		line = strings.TrimSpace(line)
+		out = append(out, popupLine{}, popupLine{text: m.styles.SectionLabel.Render("actions.toml"), plain: "actions.toml", heading: true}, popupLine{text: line, plain: line})
 	}
 	return out
 }
@@ -124,7 +127,7 @@ const helpTitle = "keys — ? q esc closes"
 // openHelp shows the panel. (While it is open the popup owns the keys,
 // and ? closes it there — see popupKey.)
 func (m Model) openHelp() Model {
-	m = m.show(helpTitle, m.helpLines()...)
+	m = m.showRows(helpTitle, m.helpLines())
 	m.popup.glyph = "?"
 	return m
 }

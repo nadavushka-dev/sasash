@@ -3,6 +3,7 @@ package ui
 import (
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -48,7 +49,8 @@ var entryLabels = [entryCount]string{
 // save). It never holds logic of its own.
 type settingsState struct {
 	pane   settingsPane
-	cursor int // menu entry, or theme index in the picker
+	cursor int    // menu entry, or theme index in the picker
+	find   finder // the / search over the menu entries (4.14)
 
 	// create config: the last setup.Check, nil until it lands.
 	status   *setup.Status
@@ -89,10 +91,19 @@ func (m Model) openSettings() Model {
 }
 
 // settingsKey routes a key while the panel owns the keyboard: vim
-// navigation, enter selects, esc backs out one level. Every action key
-// is inert here, as while filtering.
+// navigation, enter selects, esc backs out one level, / searches the
+// menu. Every action key is inert here, as while filtering.
 func (m Model) settingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	s := &m.settings
+	if s.pane == settingsMenu {
+		if s.find.typing {
+			return m.settingsFindKey(msg)
+		}
+		if key.Matches(msg, m.keys.Filter) {
+			s.find = finder{typing: true}
+			return m, nil
+		}
+	}
 	switch {
 	case key.Matches(msg, m.keys.ClearFilter):
 		if s.pane == settingsMenu {
@@ -120,6 +131,49 @@ func (m Model) settingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.settingsEnter()
 	}
 	return m, nil
+}
+
+// settingsFindKey is a key while the menu search is being typed: text
+// narrows the entries and the highlight lands on the first match, the
+// arrows move it among the matches (j/k are text here), enter activates
+// the highlighted entry and drops the search, esc drops it and leaves
+// the full menu with the highlight where it was.
+func (m Model) settingsFindKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	s := &m.settings
+	if msg.Type == tea.KeyEnter {
+		if !slices.Contains(m.settingsMatches(), s.cursor) {
+			return m, nil // nothing highlighted: nothing to activate
+		}
+		s.find = finder{}
+		return m.settingsEnter()
+	}
+	if s.find.key(msg) {
+		if hits := m.settingsMatches(); len(hits) > 0 && s.find.typing {
+			s.cursor = hits[0]
+		}
+		return m, nil
+	}
+	hits := m.settingsMatches()
+	at := slices.Index(hits, s.cursor)
+	switch {
+	case key.Matches(msg, m.keys.Down) && at >= 0:
+		s.cursor = hits[min(at+1, len(hits)-1)]
+	case key.Matches(msg, m.keys.Up) && at >= 0:
+		s.cursor = hits[max(at-1, 0)]
+	}
+	return m, nil
+}
+
+// settingsMatches is the menu entries the search leaves, in menu order;
+// all of them without a query.
+func (m Model) settingsMatches() []int {
+	var hits []int
+	for i, label := range entryLabels {
+		if m.settings.find.matches(label) {
+			hits = append(hits, i)
+		}
+	}
+	return hits
 }
 
 // settingsRows is how many rows the current pane's cursor ranges over.
@@ -239,10 +293,26 @@ func (m Model) setTheme(idx int) (tea.Model, tea.Cmd) {
 // process: always sasash.conf, whatever host is selected.
 func settingsEditExec(m Model) *exec.Cmd { return editorExecOn(m.editor, m.confPath) }
 
-// settingsView renders the panel that replaces the panes while open.
+// settingsView renders the panel in the popup box (4.14): the pane's
+// title, its rows with the highlighted one kept in view, and a bottom
+// line — the search while it is typed, else the pane's own footer.
 func (m Model) settingsView() string {
+	title, rows, cursor, foot := m.settingsContent()
+	room := m.popupRoom()
+	offset := max(cursor-room+1, 0)
+	end := min(offset+room, len(rows))
+	if h := m.settings.find.hint(); h != "" {
+		foot = m.styles.CmdPreview.Render(h)
+	}
+	return m.box(m.styles.SectionLabel.Render(title), rows[offset:end], foot)
+}
+
+// settingsContent is the open pane as the box shows it: title, rows,
+// the row index to keep in view (-1 when none is highlighted) and the
+// footer line.
+func (m Model) settingsContent() (title string, rows []string, cursor int, foot string) {
 	s := m.settings
-	var b strings.Builder
+	cursor = -1
 	mark := func(i, cur int) string {
 		if i == cur {
 			return m.styles.RowMark.Render("› ")
@@ -251,20 +321,28 @@ func (m Model) settingsView() string {
 	}
 	switch s.pane {
 	case settingsMenu:
-		b.WriteString(" " + m.styles.SectionLabel.Render("settings"))
+		title = "settings"
 		detail := [entryCount]string{
 			entryEdit:  m.confPath,
 			entryTheme: Themes[m.themeIdx].Name,
 			entrySpawn: m.spawnTarget() + " (" + m.spawn.where(m.spawnTarget()) + ")",
 		}
-		for i, label := range entryLabels {
-			b.WriteString("\n " + mark(i, s.cursor) + m.styles.PathName.Render(label))
-			if detail[i] != "" {
-				b.WriteString("  " + m.styles.PathExtra.Render(detail[i]))
+		hits := m.settingsMatches()
+		if len(hits) == 0 {
+			return title, []string{m.styles.Empty.Render(noMatch(s.find.query))}, -1, ""
+		}
+		for at, i := range hits {
+			if i == s.cursor {
+				cursor = at
 			}
+			row := mark(i, s.cursor) + m.styles.PathName.Render(entryLabels[i])
+			if detail[i] != "" {
+				row += "  " + m.styles.PathExtra.Render(detail[i])
+			}
+			rows = append(rows, row)
 		}
 	case settingsSetup:
-		b.WriteString(" " + m.styles.SectionLabel.Render("create config file — sasash writes exactly:"))
+		title = "create config file — sasash writes exactly:"
 		type piece struct {
 			text    string
 			present func(setup.Status) bool
@@ -284,39 +362,41 @@ func (m Model) settingsView() string {
 					glyph, word = m.styles.StatusUp.Render("●"), "present"
 				}
 			}
-			b.WriteString("\n   " + glyph + " " + m.styles.PathAddr.Render(p.text) + " " + m.styles.PathExtra.Render(word))
+			rows = append(rows, glyph+" "+m.styles.PathAddr.Render(p.text)+" "+m.styles.PathExtra.Render(word))
 		}
 		switch {
 		case s.checkErr != nil:
-			b.WriteString("\n   " + m.styles.Notice.Render("! "+s.checkErr.Error()))
+			rows = append(rows, m.styles.Notice.Render("! "+s.checkErr.Error()))
 		case s.status != nil && s.status.Done():
-			b.WriteString("\n\n " + m.styles.Empty.Render("already set up — nothing to write; esc back"))
+			foot = m.styles.Empty.Render("already set up — nothing to write; esc back")
 		case s.status != nil:
-			b.WriteString("\n\n " + m.styles.Empty.Render("enter writes the missing pieces (atomically, nothing else touched) · esc back"))
+			foot = m.styles.Empty.Render("enter writes the missing pieces (atomically, nothing else touched) · esc back")
 		}
 	case settingsSpawn:
-		b.WriteString(" " + m.styles.SectionLabel.Render("spawn target — where enter opens the connection; enter applies and persists"))
+		title = "spawn target — where enter opens the connection; enter applies and persists"
+		cursor = s.cursor
 		for i, t := range SpawnTargets {
 			glyph := m.styles.StatusDown.Render("○")
 			if t == m.spawnTarget() {
 				glyph = m.styles.StatusUp.Render("●")
 			}
-			b.WriteString("\n " + mark(i, s.cursor) + glyph + " " + m.styles.PathName.Render(t) + "  " + m.styles.PathExtra.Render("herdr "+t+" · tmux "+tmuxWord(t)))
+			rows = append(rows, mark(i, s.cursor)+glyph+" "+m.styles.PathName.Render(t)+"  "+m.styles.PathExtra.Render("herdr "+t+" · tmux "+tmuxWord(t)))
 		}
 		if m.spawn.mux == MuxNone {
-			b.WriteString("\n\n " + m.styles.Empty.Render("no herdr or tmux around this terminal: enter uses the OS-window template, or hands off"))
+			foot = m.styles.Empty.Render("no herdr or tmux around this terminal: enter uses the OS-window template, or hands off")
 		}
 	case settingsTheme:
-		b.WriteString(" " + m.styles.SectionLabel.Render("theme — enter applies and persists"))
+		title = "theme — enter applies and persists"
+		cursor = s.cursor
 		for i, t := range Themes {
 			glyph := m.styles.StatusDown.Render("○")
 			if i == m.themeIdx {
 				glyph = m.styles.StatusUp.Render("●")
 			}
-			b.WriteString("\n " + mark(i, s.cursor) + glyph + " " + m.styles.PathName.Render(t.Name))
+			rows = append(rows, mark(i, s.cursor)+glyph+" "+m.styles.PathName.Render(t.Name))
 		}
 	}
-	return b.String()
+	return title, rows, cursor, foot
 }
 
 // tildePath spells a path under ~/.ssh the way the Include line does.
@@ -332,6 +412,7 @@ func (settingsKeys) ShortHelp() []key.Binding {
 		moveKeys,
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back / close")),
+		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 	}
 }
 

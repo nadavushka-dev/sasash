@@ -1382,13 +1382,14 @@ func (m Model) View() string {
 
 	var body string
 	if m.popup.open() {
+		// The box floats centered over the body's place (4.14).
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.popupView())
-		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, panel)
 	} else if m.settings.pane != settingsOff {
 		header += "   " + m.styles.CmdPreview.Render("settings")
 		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
-		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, panel)
 	} else if len(m.hosts) == 0 {
 		empty := m.styles.Empty.Render("no hosts found — add a Host block to ~/.ssh/config")
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, empty)

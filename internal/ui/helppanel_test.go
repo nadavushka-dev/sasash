@@ -32,8 +32,9 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 	}
 	// A row is the key, padding, then the description on ONE line: a
 	// key and a description found apart do not count.
+	inner := boxLines(view)
 	row := func(h key.Help) bool {
-		for _, l := range strings.Split(view, "\n") {
+		for _, l := range inner {
 			if rest, ok := strings.CutPrefix(l, "   "+h.Key+" "); ok && strings.Contains(rest, " "+h.Desc) {
 				return true
 			}
@@ -72,7 +73,7 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 		}
 	}
 	// Grouped by surface, in the base order when nothing holds the keys.
-	if !order(view, "   host list", "   paths (p)", "   tunnels (l)", "   prompts", "   settings (o)", "   popups") {
+	if !order(strings.Join(inner, "\n"), "   host list", "   paths (p)", "   tunnels (l)", "   prompts", "   settings (o)", "   popups") {
 		t.Errorf("panel groups out of order:\n%s", view)
 	}
 	// The prompts row is honest about enter meaning different things.
@@ -82,7 +83,7 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 	// Cells, not bytes: the arrow rows' descriptions start in the same
 	// column as everyone else's.
 	col := -1
-	for _, l := range strings.Split(view, "\n") {
+	for _, l := range inner {
 		for _, k := range []string{"↑/k ", "ctrl+d ", "g "} {
 			if strings.HasPrefix(l, "   "+k) {
 				rest := strings.TrimLeft(l[3+len(k):], " ")
@@ -107,7 +108,7 @@ func TestModel_Update_HelpPanelKeys(t *testing.T) {
 			t.Errorf("%s should close the panel", k)
 		}
 	}
-	for _, k := range []string{"S", "o", "/", "a", "+", "l", "p", "t", "v"} {
+	for _, k := range []string{"S", "o", "a", "+", "l", "p", "t", "v"} {
 		next, cmd := m.Update(keyMsg(k))
 		if cmd != nil || !ui.HelpOpen(next.(ui.Model)) {
 			t.Errorf("key %q under the panel: cmd %v, open %v", k, cmd != nil, ui.HelpOpen(next.(ui.Model)))
@@ -131,9 +132,9 @@ func TestModel_Update_HelpPanelKeys(t *testing.T) {
 
 func TestModel_View_HelpPanelContextGroupFirst(t *testing.T) {
 	t.Parallel()
+	// The first group heads the box's rows: title, blank, then it.
 	group := func(m ui.Model) string {
-		lines := strings.Split(m.View(), "\n")
-		return strings.TrimSpace(lines[4])
+		return strings.TrimSpace(boxLines(m.View())[2])
 	}
 	// Tunnels focus: the tunnels group leads.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")

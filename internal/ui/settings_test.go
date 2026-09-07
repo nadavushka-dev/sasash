@@ -41,7 +41,7 @@ func TestModel_Update_SettingsOpensAndCloses(t *testing.T) {
 	}
 	// Action keys are inert while the panel is open: nothing runs.
 	before := len(r.CallKeys())
-	for _, k := range []string{"y", "c", "e", "H", "a", "+", "t", "q", "/"} {
+	for _, k := range []string{"y", "c", "e", "H", "a", "+", "t", "q"} {
 		next, cmd := m.Update(keyMsg(k))
 		m = next.(ui.Model)
 		if cmd != nil || !ui.SettingsOpen(m) || ui.Prompting(m) {
@@ -447,7 +447,7 @@ func TestModel_Update_SettingsHelpToggle(t *testing.T) {
 	// group first; esc closes it and settings is still there with its
 	// own footer.
 	m := press(t, probedModel(t, fakerun.New()), "o", "?")
-	if view := m.View(); !ui.HelpOpen(m) || !strings.HasPrefix(strings.TrimSpace(strings.Split(view, "\n")[4]), "settings (o)") {
+	if view := m.View(); !ui.HelpOpen(m) || !strings.HasPrefix(strings.TrimSpace(boxLines(view)[2]), "settings (o)") {
 		t.Errorf("View() after ? in settings should open the keys panel on the settings group:\n%s", view)
 	}
 	m = press(t, m, "esc")
