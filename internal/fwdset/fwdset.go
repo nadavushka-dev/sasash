@@ -136,6 +136,39 @@ func Update(confPath, alias, name, old, new string) error {
 	return out.WriteAtomic(confPath)
 }
 
+// Remove deletes the one meta line declaring the set (CONTRACT-fwdset
+// A2): the line goes whole, terminator included; every other byte of
+// the file survives verbatim. Config only: a live set is the caller's to
+// bring down first. A second line declaring the same set stays, so the
+// reader then sees that line's specs — what the file said all along.
+func Remove(confPath, alias, name string) error {
+	f, err := sshconf.ParseFile(confPath)
+	if err != nil {
+		return err
+	}
+	h, ok := f.Host(alias)
+	if !ok {
+		return fmt.Errorf("host %q not managed by sasash", alias)
+	}
+	line, ambiguous := declaringLine(h.OwnMetaVerb("forwards"), name)
+	if ambiguous {
+		return fmt.Errorf("forward set %q on %q is ambiguous: several lines declare it under different casing", name, alias)
+	}
+	if line == nil {
+		return fmt.Errorf("forward set %q not declared for %q", name, alias)
+	}
+	rawLines := make([]string, 0, f.Len())
+	for i := 0; i < f.Len(); i++ {
+		if i == line.Index {
+			continue
+		}
+		rawLines = append(rawLines, f.Line(i).Raw)
+	}
+	out := sshconf.Parse(confPath, []byte(strings.Join(rawLines, "")))
+	out.Perm = f.Perm
+	return out.WriteAtomic(confPath)
+}
+
 // declaringLine is the FIRST line declaring the set (first-value-wins,
 // as the reader). The reader keys sets on the exact name, so "WEB" and
 // "web" are two sets: the exact match wins; a case-insensitive match is

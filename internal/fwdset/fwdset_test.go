@@ -464,3 +464,234 @@ func TestUpdate_MissingFile(t *testing.T) {
 		t.Errorf("Update() on a missing file = %v, want a not-exist error", err)
 	}
 }
+
+func TestRemove_ExactBytes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "only line of the own run, host first in file",
+			in:   "# @sasash forwards web 3000:localhost:3000\nHost web\n  HostName 192.0.2.10\n",
+			want: "Host web\n  HostName 192.0.2.10\n",
+		},
+		{
+			name: "middle of an own run, neighbours and spacing kept",
+			in:   "# managed\n\n# @sasash path lan 192.0.2.10\n#@sasash  Forwards   web  3000:localhost:3000   3001:localhost:3001\n# @sasash tags dev\nHost web\n  HostName 192.0.2.10\n",
+			want: "# managed\n\n# @sasash path lan 192.0.2.10\n# @sasash tags dev\nHost web\n  HostName 192.0.2.10\n",
+		},
+		{
+			name: "host after another block, odd indent and unknown lines kept",
+			in:   "Host a\n\tHostName 192.0.2.1\n  UnknownDirective kept\n# @sasash forwards web 3000:localhost:3000\nHost web\n  HostName 192.0.2.10\nHost c\n  HostName 192.0.2.3\n",
+			want: "Host a\n\tHostName 192.0.2.1\n  UnknownDirective kept\nHost web\n  HostName 192.0.2.10\nHost c\n  HostName 192.0.2.3\n",
+		},
+		{
+			name: "CRLF file loses exactly one CRLF line",
+			in:   "# managed\r\n# @sasash forwards web 3000:localhost:3000\r\n# @sasash forwards api 3001:localhost:3001\r\nHost web\r\n  HostName 192.0.2.10\r\n",
+			want: "# managed\r\n# @sasash forwards api 3001:localhost:3001\r\nHost web\r\n  HostName 192.0.2.10\r\n",
+		},
+		{
+			// In-block meta followed by a directive (a run leading straight
+			// into the next Host line would belong to that host).
+			name: "meta inside the block, indented",
+			in:   "Host web\n  # @sasash forwards web 3000:localhost:3000\n  HostName 192.0.2.10\nHost other\n  HostName 192.0.2.11\n",
+			want: "Host web\n  HostName 192.0.2.10\nHost other\n  HostName 192.0.2.11\n",
+		},
+		{
+			name: "in-block meta as the last line without a terminator",
+			in:   "Host web\n  HostName 192.0.2.10\n  # @sasash forwards web 3000:localhost:3000",
+			want: "Host web\n  HostName 192.0.2.10\n",
+		},
+		{
+			name: "first pattern names the host",
+			in:   "# @sasash forwards web 3000:localhost:3000\nHost web web.example\n  HostName 192.0.2.10\n",
+			want: "Host web web.example\n  HostName 192.0.2.10\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConf(t, tt.in)
+			if err := fwdset.Remove(path, "web", "web"); err != nil {
+				t.Fatalf("Remove() = %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("file = %q, want %q", got, tt.want)
+			}
+			if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o640 {
+				t.Errorf("perm = %v, %v; want 0640 preserved", fi.Mode().Perm(), err)
+			}
+		})
+	}
+}
+
+func TestRemove_AttachmentIsExclusive(t *testing.T) {
+	t.Parallel()
+	// The neighbours keep their meta: the previous block's OwnMeta is the
+	// same before and after, and a run leading into the NEXT Host line
+	// belongs to that host — it is never the removed line even when it
+	// declares a set of the same name.
+	in := "# @sasash tags a\nHost a\n  HostName 192.0.2.1\n# @sasash forwards db 5432:localhost:5432\nHost b\n  HostName 192.0.2.2\n# @sasash forwards db 5433:localhost:5432\nHost c\n  HostName 192.0.2.3\n"
+	path := writeConf(t, in)
+	before, err := sshconf.ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ha, _ := before.Host("a")
+	wantA := ha.OwnMeta()
+	if err := fwdset.Remove(path, "b", "db"); err != nil {
+		t.Fatalf("Remove() = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	want := "# @sasash tags a\nHost a\n  HostName 192.0.2.1\nHost b\n  HostName 192.0.2.2\n# @sasash forwards db 5433:localhost:5432\nHost c\n  HostName 192.0.2.3\n"
+	if string(got) != want {
+		t.Errorf("file = %q, want %q", got, want)
+	}
+	after, err := sshconf.ParseFile(path)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	ha2, _ := after.Host("a")
+	if got := ha2.OwnMeta(); !reflect.DeepEqual(metaText(got), metaText(wantA)) {
+		t.Errorf("host a OwnMeta after = %v, want unchanged %v", metaText(got), metaText(wantA))
+	}
+	hb, _ := after.Host("b")
+	if got := hb.OwnMetaVerb("forwards"); got != nil {
+		t.Errorf("host b forwards meta after = %+v, want none", got)
+	}
+	hc, _ := after.Host("c")
+	if got := hc.OwnMetaVerb("forwards"); len(got) != 1 || !reflect.DeepEqual(got[0].Args, []string{"db", "5433:localhost:5432"}) {
+		t.Errorf("host c forwards meta after = %+v, want its own db set untouched", got)
+	}
+}
+
+func TestRemove_RoundTripsThroughHostmodel(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(filepath.Join(sshDir, "config.d"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	root := filepath.Join(sshDir, "config")
+	conf := filepath.Join(sshDir, "config.d", "sasash.conf")
+	if err := os.WriteFile(root, []byte("Include ~/.ssh/config.d/sasash.conf\n"), 0o600); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	if err := os.WriteFile(conf, []byte("# managed\n\n# @sasash forwards web 3000:localhost:3000\n# @sasash forwards api 4011:localhost:4011\nHost web\n  HostName 192.0.2.10\n"), 0o600); err != nil {
+		t.Fatalf("write conf: %v", err)
+	}
+	if err := fwdset.Remove(conf, "web", "web"); err != nil {
+		t.Fatalf("Remove() = %v", err)
+	}
+	hosts, warnings, err := hostmodel.Load(root, home)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("Load() = %v, warnings %v", err, warnings)
+	}
+	want := []hostmodel.ForwardSet{{Name: "api", Specs: []string{"4011:localhost:4011"}}}
+	if len(hosts) != 1 || !reflect.DeepEqual(hosts[0].Forwards, want) {
+		t.Errorf("Load() forwards = %+v, want %+v", hosts, want)
+	}
+}
+
+func TestRemove_Errors(t *testing.T) {
+	t.Parallel()
+	const in = "# @sasash forwards web 3000:localhost:3000\nHost web\n  HostName 192.0.2.10\n"
+	tests := []struct {
+		name       string
+		alias, set string
+		wantErr    string
+	}{
+		{name: "unknown host", alias: "nope", set: "web", wantErr: `host "nope" not managed by sasash`},
+		{name: "unknown set", alias: "web", set: "api", wantErr: `forward set "api" not declared for "web"`},
+		{name: "empty name", alias: "web", set: "", wantErr: `forward set "" not declared for "web"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConf(t, in)
+			err := fwdset.Remove(path, tt.alias, tt.set)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Remove() = %v, want error containing %q", err, tt.wantErr)
+			}
+			if got, rerr := os.ReadFile(path); rerr != nil || string(got) != in {
+				t.Errorf("file after a rejected Remove = %q, want untouched", got)
+			}
+		})
+	}
+}
+
+func TestRemove_PicksTheExactSet(t *testing.T) {
+	t.Parallel()
+	// Same resolution as Update: the exact name wins; a case-insensitive
+	// match is taken only when it is the single candidate; only the FIRST
+	// line declaring a set counts (first-value-wins, as the reader), so a
+	// shadowed second declaration stays and becomes the set's value.
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "exact wins over a folded twin",
+			in:   "# @sasash forwards WEB 3000:localhost:3000\n# @sasash forwards web 3001:localhost:3001\nHost web\n",
+			want: "# @sasash forwards WEB 3000:localhost:3000\nHost web\n",
+		},
+		{
+			name: "single folded candidate is taken",
+			in:   "# @sasash forwards WEB 3000:localhost:3000\nHost web\n",
+			want: "Host web\n",
+		},
+		{
+			name: "first declaring line goes, the shadowed one stays",
+			in:   "# @sasash forwards web 3000:localhost:3000\n# @sasash forwards web 3001:localhost:3001\nHost web\n",
+			want: "# @sasash forwards web 3001:localhost:3001\nHost web\n",
+		},
+		{
+			name: "a spec equal to the name is not the name",
+			in:   "# @sasash forwards api web\n# @sasash forwards web 3000:localhost:3000\nHost web\n",
+			want: "# @sasash forwards api web\nHost web\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeConf(t, tt.in)
+			if err := fwdset.Remove(path, "web", "web"); err != nil {
+				t.Fatalf("Remove() = %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("file = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	// Two folded candidates and no exact one: ambiguous, refused as such.
+	in := "# @sasash forwards WEB 3000:localhost:3000\n# @sasash forwards Web 3000:localhost:3000\nHost web\n"
+	path := writeConf(t, in)
+	if err := fwdset.Remove(path, "web", "web"); err == nil || !strings.Contains(err.Error(), `forward set "web" on "web" is ambiguous`) {
+		t.Errorf("Remove() with two folded candidates = %v, want the ambiguity refusal", err)
+	}
+	if got, rerr := os.ReadFile(path); rerr != nil || string(got) != in {
+		t.Errorf("file after a refused Remove = %q, want untouched", got)
+	}
+}
+
+func TestRemove_MissingFile(t *testing.T) {
+	t.Parallel()
+	err := fwdset.Remove(filepath.Join(t.TempDir(), "sasash.conf"), "web", "web")
+	if err == nil || !os.IsNotExist(err) {
+		t.Errorf("Remove() on a missing file = %v, want a not-exist error", err)
+	}
+}
