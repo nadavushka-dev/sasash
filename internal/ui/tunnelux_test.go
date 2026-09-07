@@ -244,7 +244,7 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 						t.Errorf("calls = %v, want the engine's, never the raw ssh -fN", got)
 					}
 				case "refused":
-					if cmd != nil || !ui.Prompting(m) || ui.PromptingSave(m) || len(r.CallKeys()) != before || !strings.Contains(m.View(), "ubuntu is a saved host") {
+					if cmd != nil || !ui.Prompting(m) || ui.PromptingSave(m) || len(r.CallKeys()) != before || !strings.Contains(m.View(), "ubuntu is saved: -N ubuntu alone, or its address") {
 						t.Errorf("enter should refuse in the prompt with the reason (cmd %v, prompting %v, calls %v):\n%s", cmd != nil, ui.Prompting(m), r.CallKeys()[before:], m.View())
 					}
 				case "save":
@@ -253,6 +253,26 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 					}
 				}
 			})
+		}
+	})
+	t.Run("the refusal fits beside the input at 80 columns, and the line says it before enter", func(t *testing.T) {
+		t.Parallel()
+		m := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New()))
+		m = press(t, m, "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -p 2222 -L 8080:localhost:80")}) // the selection plus a port
+		if view := m.View(); !strings.Contains(view, "→ ubuntu is saved: -N ubuntu alone, or its address") || strings.Contains(view, "BatchMode") {
+			t.Errorf("View() before enter should say the refusal, not promise a command:\n%s", view)
+		}
+		// At 80 columns, beside a short input, the whole reason is on the line.
+		m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+		m.Update(keyMsg("esc"))
+		m = press(t, m, "esc", "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -p 2222")})
+		m = press(t, m, "enter")
+		for _, l := range strings.Split(m.View(), "\n") {
+			if strings.Contains(l, "connect:") && !strings.Contains(l, "ubuntu is saved: -N ubuntu alone, or its address") {
+				t.Errorf("the whole refusal should fit the 80-column line: %q", l)
+			}
 		}
 	})
 	t.Run("a held port comes back as the remap offer, as with +", func(t *testing.T) {
@@ -276,7 +296,8 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 	t.Run("the save carries its own target: a later prompt cannot change what starts", func(t *testing.T) {
 		t.Parallel()
 		const spec = "8080:localhost:80"
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", spec, "edge")
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", "9999:localhost:99", "ubuntu").
+			StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", spec, "edge")
 		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
 		m = press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec + " root@192.0.2.99")})
@@ -284,9 +305,12 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
 		next, save := m.Update(keyMsg("enter"))
 		m = next.(ui.Model)
-		// Before the save lands, another -N is typed for another host.
+		// Before the save lands, another -N is typed AND submitted for
+		// another host: the pending slot has moved on.
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N ubuntu -L 9999:localhost:99")})
+		next, second := m.Update(keyMsg("enter"))
+		m = feed(t, next.(ui.Model), second)
 		next, start := m.Update(save())
 		m = next.(ui.Model)
 		if start == nil {
@@ -297,6 +321,36 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		got := strings.Join(r.CallKeys()[before:], " | ")
 		if !strings.Contains(got, "ssh -fN edge") || !strings.Contains(got, "ssh -O forward -L "+spec+" edge") || strings.Contains(got, "9999") {
 			t.Errorf("calls = %q, want the first -N's spec on edge and nothing of the later prompt", got)
+		}
+	})
+	t.Run("a plain connect saved after a save-first -N starts nothing", func(t *testing.T) {
+		t.Parallel()
+		// The tunnel flag is spent by the save it belonged to.
+		r := fakerun.New().StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "edge")
+		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
+		m = press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 8080:localhost:80 root@192.0.2.99")})
+		m = press(t, m, "enter")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
+		next, save := m.Update(keyMsg("enter"))
+		next, start := next.(ui.Model).Update(save())
+		m = feed(t, next.(ui.Model), start)
+		// Now an ordinary connect, returned from, and saved.
+		m = press(t, m, "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("root@192.0.2.50")})
+		next, _ = m.Update(keyMsg("enter"))
+		next, _ = next.(ui.Model).Update(ui.AdhocExit(nil))
+		m = next.(ui.Model)
+		if !ui.PromptingSave(m) {
+			t.Fatalf("the connect should offer the save:\n%s", m.View())
+		}
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("other")})
+		next, save = m.Update(keyMsg("enter"))
+		before := len(r.CallKeys())
+		next, after := next.(ui.Model).Update(save())
+		m = next.(ui.Model)
+		if after != nil || len(r.CallKeys()) != before || strings.Contains(m.View(), "starting") || !strings.Contains(m.View(), "saved other") {
+			t.Errorf("a plain save should start no tunnel (cmd %v, calls %v):\n%s", after != nil, r.CallKeys()[before:], m.View())
 		}
 	})
 	t.Run("a failed save keeps the choice: the question follows", func(t *testing.T) {

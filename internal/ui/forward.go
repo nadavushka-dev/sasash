@@ -108,7 +108,7 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 		m.notice = "host " + m.fwdHost + " is gone — nothing added"
 		return m, nil
 	}
-	return m, m.addForwardCmd(host, spec, port)
+	return m, m.addForwardCmd(host.Alias, spec, port)
 }
 
 // addForwardCmd dials 127.0.0.1:<port> through the probe seam first
@@ -116,8 +116,8 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 // the next free port offered; free means Engine.Up with the spec as an
 // ad-hoc forward. Something can still take the port between the check
 // and the add — ssh's bind failure then comes back as the action error.
-func (m Model) addForwardCmd(host hostmodel.Host, spec, port string) tea.Cmd {
-	eng, prober, alias := m.tunnels, m.prober, host.Alias
+func (m Model) addForwardCmd(alias, spec, port string) tea.Cmd {
+	eng, prober := m.tunnels, m.prober
 	m.tinflight[alias] = true // the add writes the caches: no poll meanwhile
 	return func() tea.Msg {
 		cctx, ccancel := context.WithTimeout(context.Background(), forwardCheckTimeout)

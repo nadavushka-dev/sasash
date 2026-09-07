@@ -401,7 +401,7 @@ func (m Model) tunnelRefusal(t adhocTarget) string {
 	if _, ok := m.hostByAlias(t.Host); !ok {
 		return ""
 	}
-	return t.Host + " is a saved host — a user or port beside it is another destination: give its address, or -N " + t.Host + " alone"
+	return t.Host + " is saved: -N " + t.Host + " alone, or its address"
 }
 
 // startTunnelOnly is enter on a -N input: the engine for a saved host,
@@ -431,17 +431,12 @@ func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
 		m.notice = "tunnels are not available here — nothing started"
 		return m, nil
 	}
-	host, ok := m.hostByAlias(alias)
-	if !ok {
-		m.notice = "host " + alias + " is gone — nothing started"
-		return m, nil
-	}
 	// One spec is `+` exactly: the local port is dialled first, and a
 	// held port comes back as the remap offer, never a silent failure.
 	if len(specs) == 1 {
 		if port, _ := localPort(specs[0]); port != "" {
 			m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
-			return m, m.addForwardCmd(host, specs[0], port)
+			return m, m.addForwardCmd(alias, specs[0], port)
 		}
 	}
 	eng := m.tunnels

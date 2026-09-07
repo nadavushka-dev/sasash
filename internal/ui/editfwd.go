@@ -171,6 +171,10 @@ func (m Model) promptExpansion() string {
 			// was typed.
 			saved := ""
 			if t.TunnelOnly && m.mode == promptConnect {
+				// What enter will refuse is said here, not promised.
+				if why := m.tunnelRefusal(t); why != "" {
+					return why
+				}
 				saved, _ = m.savedTunnelTarget(t)
 			}
 			if saved == "" && !anyForwardShorthand(v) && !t.FromSelection {

@@ -928,9 +928,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.tunnel {
 			// Save-first tunnel (4.17): the block is on disk, so ssh
 			// resolves the alias now; the engine brings the tunnel up
-			// through it while the list reloads. The host is not loaded
-			// yet, so the engine takes the entry as the pane will see it.
-			m.hosts = append(m.hosts, hostmodel.Host{Alias: msg.alias})
+			// through it while the list reloads.
 			next, start := m.engineTunnel(msg.alias, msg.target.Forwards)
 			return next, tea.Batch(reload, start)
 		}
