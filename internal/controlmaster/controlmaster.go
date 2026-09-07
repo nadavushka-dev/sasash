@@ -33,13 +33,9 @@ var Trio = [3]Directive{
 // either the `Keyword value` or `Keyword=value` form; a commented-out
 // line is a comment, not a directive, and does not count.
 func Missing(confPath, alias string) ([]Directive, error) {
-	f, err := sshconf.ParseFile(confPath)
+	h, _, err := managedHost(confPath, alias)
 	if err != nil {
 		return nil, err
-	}
-	h, ok := f.Host(alias)
-	if !ok {
-		return nil, fmt.Errorf("host %q not managed by sasash", alias)
 	}
 	return missing(h), nil
 }
@@ -51,13 +47,9 @@ func Missing(confPath, alias string) ([]Directive, error) {
 // the block reads in Trio order. Nil, nil and no write when nothing is
 // missing — a second call is a no-op.
 func Enable(confPath, alias string) ([]Directive, error) {
-	f, err := sshconf.ParseFile(confPath)
+	h, f, err := managedHost(confPath, alias)
 	if err != nil {
 		return nil, err
-	}
-	h, ok := f.Host(alias)
-	if !ok {
-		return nil, fmt.Errorf("host %q not managed by sasash", alias)
 	}
 	add := missing(h)
 	if add == nil {
@@ -73,6 +65,21 @@ func Enable(confPath, alias string) ([]Directive, error) {
 		return nil, err
 	}
 	return add, nil
+}
+
+// managedHost re-reads confPath and finds the block whose FIRST pattern
+// is alias. A pattern-less `Host` line has an empty name and is nobody's
+// block: an empty alias must not land in it.
+func managedHost(confPath, alias string) (*sshconf.Host, *sshconf.File, error) {
+	f, err := sshconf.ParseFile(confPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	h, ok := f.Host(alias)
+	if !ok || len(h.Patterns) == 0 {
+		return nil, nil, fmt.Errorf("host %q not managed by sasash", alias)
+	}
+	return h, f, nil
 }
 
 func missing(h *sshconf.Host) []Directive {

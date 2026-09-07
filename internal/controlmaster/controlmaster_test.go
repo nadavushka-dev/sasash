@@ -101,6 +101,13 @@ func TestEnable_ExactBytes(t *testing.T) {
 			added: []controlmaster.Directive{controlmaster.Trio[1], controlmaster.Trio[2]},
 		},
 		{
+			name:  "a valueless directive is present: the user's line to fix, not sasash's to replace",
+			in:    "Host web\n  ControlPath\n  HostName 192.0.2.10\n",
+			alias: "web",
+			want:  "Host web\n  ControlMaster auto\n  ControlPersist 30m\n  ControlPath\n  HostName 192.0.2.10\n",
+			added: []controlmaster.Directive{controlmaster.Trio[0], controlmaster.Trio[2]},
+		},
+		{
 			name: "host between foreign blocks, meta run and variants untouched",
 			in: "Host a\n\tHostName 192.0.2.1\n  UnknownDirective kept\n\n" +
 				"# @sasash path lan 192.0.2.10\n# @sasash forwards adhoc 3000:localhost:3000\nHost web web.example\n  HostName 192.0.2.10\n\n" +
@@ -197,7 +204,7 @@ func TestEnable_CompleteBlockDoesNotWrite(t *testing.T) {
 
 func TestEnable_Errors(t *testing.T) {
 	t.Parallel()
-	const in = "Host web web.example\n  HostName 192.0.2.10\nHost web.lan\n  HostName 192.0.2.10\n"
+	const in = "Host web web.example\n  HostName 192.0.2.10\nHost web.lan\n  HostName 192.0.2.10\nHost\n  HostName 192.0.2.11\n"
 	tests := []struct {
 		name  string
 		alias string
@@ -205,7 +212,8 @@ func TestEnable_Errors(t *testing.T) {
 	}{
 		{name: "unknown alias", alias: "db", want: `host "db" not managed by sasash`},
 		{name: "second pattern is not the alias", alias: "web.example", want: `host "web.example" not managed by sasash`},
-		{name: "empty alias", alias: "", want: `host "" not managed by sasash`},
+		// A pattern-less Host line has an empty Name(); it is nobody's block.
+		{name: "empty alias never matches a bare Host line", alias: "", want: `host "" not managed by sasash`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
