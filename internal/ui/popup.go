@@ -269,7 +269,7 @@ func (m Model) popupView() string {
 		hint = append(hint, m.styles.CmdPreview.Render(h))
 	}
 	if len(body) > room {
-		hint = append(hint, m.styles.PathExtra.Render(scrollHint(offset, end, len(body))))
+		hint = append(hint, m.styles.PathExtra.Render(scrollHint(offset, end, len(body), p.find.typing)))
 	}
 	return m.box(title.Render(glyph+" "+p.title), body[offset:end], strings.Join(hint, helpSeparator))
 }
@@ -307,8 +307,14 @@ func (m Model) box(title string, rows []string, bottom string) string {
 	return style.Render(b.String())
 }
 
-func scrollHint(from, to, total int) string {
-	return fmt.Sprintf("lines %d–%d of %d · j/k scroll", from+1, to, total)
+// scrollHint is the box's bottom-line scroll state; the movers named
+// are j/k, or the arrows while a search is being typed and j/k are text.
+func scrollHint(from, to, total int, typing bool) string {
+	keys := "j/k"
+	if typing {
+		keys = "↑/↓"
+	}
+	return fmt.Sprintf("lines %d–%d of %d · %s scroll", from+1, to, total, keys)
 }
 
 // popupKeys is the help shown while the popup owns the keyboard.

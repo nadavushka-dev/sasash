@@ -206,9 +206,10 @@ func TestModel_Update_SettingsSearch(t *testing.T) {
 	t.Run("a paste drops control characters", func(t *testing.T) {
 		t.Parallel()
 		m := press(t, wide(t), "o", "/")
-		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ad\nnew\x1b[2Jx")})
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ad new\n\x1b[2Jx")})
 		view := m.View()
-		if strings.ContainsAny(view, "\x1b\r") || !strings.Contains(view, "/adnew[2Jx▏") || len(strings.Split(view, "\n")) != 24 {
+		// The control characters go; the pasted space stays.
+		if strings.ContainsAny(view, "\x1b\r") || !strings.Contains(view, "/ad new[2Jx▏") || len(strings.Split(view, "\n")) != 24 {
 			t.Errorf("View() after a hostile paste should show the query cleaned in a whole frame:\n%s", view)
 		}
 	})
@@ -376,6 +377,19 @@ func TestModel_Update_HelpPanelSearch(t *testing.T) {
 		m := press(t, wide(t), "?", "/", "q", "?")
 		if inner := strings.Join(boxLines(m.View()), "\n"); !ui.HelpOpen(m) || !strings.Contains(inner, "/q?▏") {
 			t.Errorf("View() after /q? should still be the panel with the query typed:\n%s", m.View())
+		}
+	})
+	t.Run("the scroll hint names the arrows while typing", func(t *testing.T) {
+		t.Parallel()
+		// Many rows match a single letter, so the narrowed panel still
+		// scrolls; j/k are text now, and the line says what moves.
+		m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 100, Height: 16}), "?", "/", "e")
+		inner := strings.Join(boxLines(m.View()), "\n")
+		if !strings.Contains(inner, "↑/↓ scroll") || strings.Contains(inner, "j/k scroll") || !strings.Contains(inner, "/e▏") {
+			t.Errorf("box bottom line while typing should name the arrows:\n%s", inner)
+		}
+		if inner := strings.Join(boxLines(press(t, m, "enter").View()), "\n"); !strings.Contains(inner, "j/k scroll") {
+			t.Errorf("box bottom line after enter should name j/k again:\n%s", inner)
 		}
 	})
 	t.Run("no match is said", func(t *testing.T) {

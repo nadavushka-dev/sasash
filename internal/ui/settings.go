@@ -309,7 +309,7 @@ func (m Model) settingsView() string {
 	// hidden is never silent (the footer's tail yields on a narrow frame).
 	var bottom []string
 	if len(rows) > room {
-		bottom = append(bottom, m.styles.PathExtra.Render(scrollHint(offset, end, len(rows))))
+		bottom = append(bottom, m.styles.PathExtra.Render(scrollHint(offset, end, len(rows), m.settings.find.typing)))
 	}
 	switch h := m.settings.find.hint(); {
 	case h != "":
