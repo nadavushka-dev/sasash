@@ -265,7 +265,6 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		}
 		// At 80 columns, beside a short input, the whole reason is on the line.
 		m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-		m.Update(keyMsg("esc"))
 		m = press(t, m, "esc", "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -p 2222")})
 		m = press(t, m, "enter")
