@@ -14,6 +14,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
+	"github.com/nadavushka-dev/sasash/internal/run/fakespawn"
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
@@ -259,7 +260,7 @@ func TestAdd_LocalPortRuleMatchesEngine(t *testing.T) {
 		t.Run(strconv.Quote(spec), func(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web")
-			eng := tunnel.Engine{Runner: r, Dialer: fakedial.New(), StateDir: t.TempDir(), Timeout: time.Millisecond}
+			eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New(), Dialer: fakedial.New(), StateDir: t.TempDir(), Timeout: time.Millisecond}
 			st, err := eng.Status(context.Background(), "web", []hostmodel.ForwardSet{{Name: "s", Specs: []string{spec}}})
 			if err != nil {
 				t.Fatalf("Status() = %v", err)

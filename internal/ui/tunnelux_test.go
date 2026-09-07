@@ -337,7 +337,7 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 	t.Run("a plain connect saved after a save-first -N starts nothing", func(t *testing.T) {
 		t.Parallel()
 		// The tunnel flag is spent by the save it belonged to.
-		r := fakerun.New().StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "edge")
+		r := fakerun.New().StubExit(1, "ssh", "-O", "check", "edge")
 		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
 		m = press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 8080:localhost:80 root@192.0.2.99")})

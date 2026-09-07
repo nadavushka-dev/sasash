@@ -1383,6 +1383,30 @@ func TestEngine_Status_CorruptStats(t *testing.T) {
 	}
 }
 
+func TestStateWriteOnly(t *testing.T) {
+	t.Parallel()
+	cache := fmt.Errorf("kill attempted but %w: permission denied", tunnel.ErrStateWrite)
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "a cache failure alone", err: cache, want: true},
+		{name: "two cache failures joined", err: errors.Join(cache, cache), want: true},
+		{name: "a survivor joined with a cache failure", err: errors.Join(errors.New("pid 41 still running after SIGTERM"), cache), want: false},
+		{name: "a plain failure", err: errors.New("nope"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tunnel.StateWriteOnly(tt.err); got != tt.want {
+				t.Errorf("StateWriteOnly(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStatus_String(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

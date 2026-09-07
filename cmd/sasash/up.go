@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -91,9 +90,9 @@ func runUp(args []string, stdout, stderr io.Writer, root, home string, eng tunne
 		err := eng.SpawnSet(ctx, alias, s.Name, s.Specs)
 		switch {
 		case err == nil:
-		case errors.Is(err, tunnel.ErrStateWrite):
-			// The ssh side succeeded; only the cache write failed. Warn and
-			// keep going — the next Status re-derives reality anyway.
+		case tunnel.StateWriteOnly(err):
+			// The process side succeeded; only the cache write failed. Warn
+			// and keep going — the next Status re-derives reality anyway.
 			fmt.Fprintf(stderr, "sasash up: warning: %v\n", err)
 		default:
 			if s.Name != "" {

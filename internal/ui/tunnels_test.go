@@ -535,10 +535,21 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 	tests := []struct {
 		name       string
 		key        string
+		checkExit  int // the poll's -O check: 0 = a master is up
 		exitReply  fakerun.Reply
 		wantCalls  []string
 		wantNotice string
 	}{
+		{
+			// M2: Exit only when the last poll saw a master. With none, X
+			// kills the tunnels and asks ssh nothing.
+			name:       "X with no master kills the tunnels only",
+			key:        "X",
+			checkExit:  255,
+			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
+			wantCalls:  []string{},
+			wantNotice: "tunnels killed",
+		},
 		{
 			// SPEC §5 "restart master": exit the interactive master; the
 			// next connect starts a fresh one. Tunnels are not touched.
@@ -576,7 +587,7 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().
 				Stub(tt.exitReply, "ssh", "-O", "exit", "ubuntu").
-				StubExit(0, "ssh", "-O", "check", "ubuntu")
+				StubExit(tt.checkExit, "ssh", "-O", "check", "ubuntu")
 			d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
 			sp := fakespawn.New().Dial(d).Live(41)
 			stateDir := t.TempDir()
@@ -606,6 +617,9 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 			}
 			if strings.HasSuffix(tt.wantNotice, ": ") && !strings.Contains(view, "No such file") {
 				t.Errorf("View() hides ssh's message:\n%s", view)
+			}
+			if tt.checkExit != 0 && strings.Contains(view, "master exited") {
+				t.Errorf("View() claims a master exited with none seen:\n%s", view)
 			}
 		})
 	}

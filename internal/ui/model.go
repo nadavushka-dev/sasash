@@ -27,6 +27,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/stats"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 // refreshEvery is how often paths are re-probed. One refresh dials every
@@ -778,7 +779,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.err == nil:
 			m.notice = msg.done
-		case stateWriteOnly(msg.err):
+		case tunnel.StateWriteOnly(msg.err):
 			// The ssh side succeeded; only the cache write failed.
 			m.notice = "warning: " + oneLine(msg.err, msg.host)
 		case noControlPath(msg.err):

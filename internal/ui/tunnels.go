@@ -324,22 +324,6 @@ func (m Model) restartCmd(host hostmodel.Host) tea.Cmd {
 	})
 }
 
-// stateWriteOnly reports whether err is nothing but state-cache write
-// failures: the process side succeeded. KillSet joins kill failures and
-// the cache failure into one error, so errors.Is alone would call a
-// surviving process a mere warning — every leaf has to be ErrStateWrite.
-func stateWriteOnly(err error) bool {
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, e := range joined.Unwrap() {
-			if !stateWriteOnly(e) {
-				return false
-			}
-		}
-		return true
-	}
-	return errors.Is(err, tunnel.ErrStateWrite)
-}
-
 // oneLine folds a joined error onto the notice line: errors.Join
 // separates with newlines, and a second line would push the frame off
 // the terminal and truncate the message that matters. The engine echoes

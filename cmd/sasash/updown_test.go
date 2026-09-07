@@ -289,6 +289,17 @@ func TestRunDown(t *testing.T) {
 			wantStderr:    []string{"pid 4242 still running"},
 		},
 		{
+			// A survivor joined with a cache failure is still a survivor:
+			// exit 0 here would be the exit-code lie SPEC §4 forbids.
+			name: "a survivor joined with a state failure is still exit 1",
+			args: []string{"ubuntu"},
+			exitErr: errors.Join(errors.New("pid 4242 still running after SIGTERM: context deadline exceeded"),
+				fmt.Errorf("kill attempted but %w: permission denied", tunnel.ErrStateWrite)),
+			wantCode:      1,
+			wantExitCalls: []string{"ubuntu"},
+			wantStderr:    []string{"pid 4242 still running"},
+		},
+		{
 			name:       "unknown host",
 			args:       []string{"bogus"},
 			wantCode:   3,

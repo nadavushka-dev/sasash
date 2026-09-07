@@ -330,9 +330,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 	})
 	t.Run("routine one-liners stay on the line", func(t *testing.T) {
 		t.Parallel()
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").
-			StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-			StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 		m := polled(t, r, fakedial.New())
 		if m = press(t, m, "t"); ui.PopupOpen(m) || !strings.Contains(m.View(), "theme: ") {
 			t.Errorf("a theme change is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
@@ -350,7 +348,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 			t.Errorf("a successful tunnel action is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
 		}
 		// A successful -N through the engine on the selected host too.
-		a := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu"), fakedial.New()))
+		a := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu"), fakedial.New()))
 		a = press(t, a, "a")
 		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 8080:localhost:80")})
 		next, cmd = a.Update(keyMsg("enter"))

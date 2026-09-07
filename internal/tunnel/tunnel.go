@@ -40,6 +40,23 @@ import (
 // out.
 var ErrStateWrite = errors.New("state not recorded")
 
+// StateWriteOnly reports whether err is nothing but state-cache write
+// failures — the process side succeeded and only the record failed.
+// KillSet and KillAll join process failures and cache failures into one
+// error, so errors.Is alone would call a surviving process a mere
+// warning: every leaf has to be ErrStateWrite.
+func StateWriteOnly(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !StateWriteOnly(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return errors.Is(err, ErrStateWrite)
+}
+
 // pollInterval paces the Spawn handshake and the post-Kill wait. Every
 // fake path in the unit tier resolves on the first iteration — except the
 // grace wait after an aborted Spawn, which is wall-clock by nature and

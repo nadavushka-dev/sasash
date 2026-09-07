@@ -188,10 +188,7 @@ func TestModel_Update_FocusKeepsActionKeys(t *testing.T) {
 	// Under tunnels focus enter is still ssh to the host, q still quits,
 	// space acts on the highlighted row, and t still cycles the theme
 	// without dropping the focus.
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	m := polled(t, r, fakedial.New())
 	m = press(t, m, "l")
 	if _, cmd := m.Update(keyMsg("enter")); cmd == nil {

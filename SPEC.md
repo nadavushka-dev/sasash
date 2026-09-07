@@ -221,7 +221,7 @@ it, as with a folded variant.
                     ○ api   4011, 4012, 4013        down
                     ● ad-hoc 4014                   up 2m
 
-                   $ ssh -fN ubuntu
+                   $ ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 ubuntu
 ```
 
 The command line at the bottom always shows what the highlighted action will run, except

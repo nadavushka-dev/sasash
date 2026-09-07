@@ -577,10 +577,7 @@ func TestModel_Update_ActionHoldsThePollGate(t *testing.T) {
 	// While an action runs (it writes the state and stats caches), the
 	// tick must not poll the same host: one writer per host. The done
 	// arm releases the gate and re-polls.
-	r := fakerun.New().
-		StubExit(0, "ssh", "-O", "check", "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb0, "ubuntu").
-		StubExit(0, "ssh", "-O", "forward", "-L", specWeb1, "ubuntu")
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	m := polled(t, r, fakedial.New())
 	m = press(t, m, "l")
 	next, action := m.Update(keyMsg(" ")) // out, not delivered

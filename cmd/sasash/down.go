@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,10 +43,11 @@ func runDown(args []string, stdout, stderr io.Writer, root, home string, eng tun
 
 	switch err := eng.KillAll(context.Background(), h.Alias); {
 	case err == nil:
-	case errors.Is(err, tunnel.ErrStateWrite):
+	case tunnel.StateWriteOnly(err):
 		// The processes really went down; only the cache clear failed
 		// (CONTRACT-tunnel: a state write failure must not fail the
-		// action that succeeded).
+		// action that succeeded). Every leaf must say so: a survivor
+		// joined with a cache failure is still a survivor.
 		fmt.Fprintf(stderr, "sasash down: warning: %v\n", err)
 	default:
 		fmt.Fprintf(stderr, "sasash down: %v\n", err)
