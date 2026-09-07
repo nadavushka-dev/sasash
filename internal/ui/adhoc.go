@@ -476,12 +476,11 @@ const unmanagedCleanup = "to stop it later: pgrep -fl 'ssh -fN' and kill that pi
 func (m Model) offerUnmanagedTunnel() Model {
 	argv := strings.Join(adhocTunnelArgv(m.pending), " ")
 	m.notice = "unmanaged tunnel: enter starts it anyway, esc cancels"
-	m = m.show("run an unmanaged tunnel? enter starts it · esc cancels",
+	return m.ask("run an unmanaged tunnel? enter starts it · esc cancels", []string{
 		argv,
 		"not saved, so its ssh has no sasash.conf block and no ControlMaster from it: it will not appear in the tunnels pane and x/X cannot stop it",
-		unmanagedCleanup)
-	m.popup.confirm, m.popup.verb, m.popup.declined = Model.runUnmanagedTunnel, "run it", "nothing started"
-	return m
+		unmanagedCleanup,
+	}, "run it", "nothing started", Model.runUnmanagedTunnel)
 }
 
 // runUnmanagedTunnel is enter in that popup: the raw path, kept for this

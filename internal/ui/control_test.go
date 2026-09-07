@@ -11,12 +11,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
-	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -29,7 +27,7 @@ const noControlPath = "No ControlPath specified for \"-O\" command\r\n"
 
 // controlModel is a polled model whose ubuntu is managed (HasMeta) and
 // whose + on 8080:localhost:80 fails with the No-ControlPath reason.
-func controlModel(t *testing.T, managed bool, inspect func(string) (setup.Control, error), enable func(string) ([]string, error)) (ui.Model, *fakerun.Fake) {
+func controlModel(t *testing.T, managed bool, inspect func(string) (ui.ControlStatus, error), enable func(string) ([]string, error)) (ui.Model, *fakerun.Fake) {
 	t.Helper()
 	hosts := tunnelHosts()
 	hosts[0].HasMeta = managed
@@ -47,7 +45,7 @@ func controlModel(t *testing.T, managed bool, inspect func(string) (setup.Contro
 func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 	t.Parallel()
 	trio := []string{"ControlMaster auto", "ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}
-	all := func(string) (setup.Control, error) { return setup.Control{Missing: trio}, nil }
+	all := func(string) (ui.ControlStatus, error) { return ui.ControlStatus{Missing: trio}, nil }
 	t.Run("managed host: the missing lines, enter writes them", func(t *testing.T) {
 		t.Parallel()
 		var enabled []string
@@ -97,35 +95,17 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 	})
 	t.Run("a pinned variant is refused: tunnels ride the parent", func(t *testing.T) {
 		t.Parallel()
-		// ubuntu.lan is a generated variant of ubuntu (one path named lan
-		// with the same address); the fold classifies it as such.
-		hosts := tunnelHosts()
-		hosts[0].HasMeta = true
-		hosts[0].Paths = []probe.Path{{Name: "lan", Host: "192.0.2.10"}}
-		variant := hostmodel.Host{Alias: "ubuntu.lan", Paths: []probe.Path{{Host: "192.0.2.10"}}, File: hosts[0].File, HasMeta: false}
-		hosts = append(hosts, variant)
+		// The hook decides from the file (alias form + the parent's path
+		// names); the UI says so and writes nothing — enter only closes.
 		var writes int
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu.lan").
-			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte(noControlPath), Code: 255}}, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu.lan")
-		d := fakedial.New()
-		m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d), ConfPath: "/home/u/.ssh/config.d/sasash.conf",
-			InspectControl: all, EnableControl: func(string) ([]string, error) { writes++; return trio, nil }})
-		m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
-		m = feed(t, m, m.Init())
-		m = press(t, m, "v", "G") // show variants, select ubuntu.lan
-		m = ui.StaticCursor(m)
-		if h, ok := m.Selected(); !ok || h.Alias != "ubuntu.lan" {
-			t.Fatalf("Selected() = %v, %v; want ubuntu.lan", h.Alias, ok)
-		}
-		m = press(t, m, "+")
-		if !ui.Prompting(m) || !strings.Contains(m.View(), "forward ubuntu.lan:") {
-			t.Fatalf("+ on the variant should open its forward prompt:\n%s", m.View())
-		}
-		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8080:localhost:80")})
-		next, cmd := m.Update(keyMsg("enter"))
-		m = update(t, next.(ui.Model), cmd())
+		m, _ := controlModel(t, true,
+			func(string) (ui.ControlStatus, error) {
+				return ui.ControlStatus{}, &ui.VariantError{Parent: "ubuntu", Path: "lan"}
+			},
+			func(string) ([]string, error) { writes++; return trio, nil })
 		view := m.View()
-		if !ui.PopupOpen(m) || !strings.Contains(view, "generated pinned variant") || !strings.Contains(view, "ride the parent") || strings.Contains(view, "enter writes") {
+		text := boxText(view)
+		if !ui.PopupOpen(m) || !strings.Contains(text, "ubuntu's pinned variant for path lan") || !strings.Contains(text, "tunnels ride the parent — use ubuntu") || strings.Contains(view, "enter writes") {
 			t.Errorf("a variant should be refused and pointed at its parent:\n%s", view)
 		}
 		if c := press(t, m, "enter"); ui.PopupOpen(c) || writes != 0 {
@@ -136,19 +116,20 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		t.Parallel()
 		tests := []struct {
 			name  string
-			ctrl  setup.Control
+			ctrl  ui.ControlStatus
 			want  string
 			offer bool
 		}{
-			{name: "ControlPath none", ctrl: setup.Control{Other: []string{"ControlPath none"}}, want: "the block sets ControlPath none"},
-			{name: "ControlMaster no with the rest missing", ctrl: setup.Control{Missing: []string{"ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}, Other: []string{"ControlMaster no"}}, want: "the block sets ControlMaster no"},
-			{name: "another socket path is fine", ctrl: setup.Control{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlPath ~/.ssh/other/%C"}}, want: "  ControlPersist 30m", offer: true},
-			{name: "ask starts a master", ctrl: setup.Control{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlMaster ask"}}, want: "  ControlPersist 30m", offer: true},
+			{name: "ControlPath none", ctrl: ui.ControlStatus{Other: []string{"ControlPath none"}}, want: "the block sets ControlPath none"},
+			{name: "a valueless ControlPath", ctrl: ui.ControlStatus{Other: []string{"ControlPath"}}, want: "the block sets an empty ControlPath"},
+			{name: "ControlMaster no with the rest missing", ctrl: ui.ControlStatus{Missing: []string{"ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}, Other: []string{"ControlMaster no"}}, want: "the block sets ControlMaster no"},
+			{name: "another socket path is fine", ctrl: ui.ControlStatus{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlPath ~/.ssh/other/%C"}}, want: "  ControlPersist 30m", offer: true},
+			{name: "ask starts a master", ctrl: ui.ControlStatus{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlMaster ask"}}, want: "  ControlPersist 30m", offer: true},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Parallel()
-				m, _ := controlModel(t, true, func(string) (setup.Control, error) { return tt.ctrl, nil }, func(string) ([]string, error) { return nil, nil })
+				m, _ := controlModel(t, true, func(string) (ui.ControlStatus, error) { return tt.ctrl, nil }, func(string) ([]string, error) { return nil, nil })
 				view := m.View()
 				if !strings.Contains(view, tt.want) || strings.Contains(view, "enter writes") != tt.offer {
 					t.Errorf("View() want %q, offer %v:\n%s", tt.want, tt.offer, view)
@@ -162,13 +143,13 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 	t.Run("@sasash meta outside sasash.conf gets the e hint", func(t *testing.T) {
 		t.Parallel()
 		m, _ := controlModel(t, true,
-			func(string) (setup.Control, error) {
-				return setup.Control{}, errors.New("host \"ubuntu\": " + setup.ErrNotManaged.Error())
+			func(string) (ui.ControlStatus, error) {
+				return ui.ControlStatus{}, errors.New("host \"ubuntu\": " + ui.ErrNotManaged.Error())
 			},
 			func(string) ([]string, error) { return nil, nil })
 		// errors.Is needs the wrapped sentinel: mirror setup's wrapping.
 		m2, _ := controlModel(t, true,
-			func(string) (setup.Control, error) { return setup.Control{}, wrapNotManaged() },
+			func(string) (ui.ControlStatus, error) { return ui.ControlStatus{}, wrapNotManaged() },
 			func(string) ([]string, error) { return nil, nil })
 		if view := m2.View(); !strings.Contains(view, "not in sasash.conf") || !strings.Contains(view, "e to add them by hand") || strings.Contains(view, "cannot read the block") {
 			t.Errorf("meta outside sasash.conf should get the e hint:\n%s", view)
@@ -180,8 +161,8 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 	t.Run("only what is missing is offered", func(t *testing.T) {
 		t.Parallel()
 		m, _ := controlModel(t, true,
-			func(string) (setup.Control, error) {
-				return setup.Control{Missing: []string{"ControlPersist 30m"}}, nil
+			func(string) (ui.ControlStatus, error) {
+				return ui.ControlStatus{Missing: []string{"ControlPersist 30m"}}, nil
 			},
 			func(string) ([]string, error) { return nil, nil })
 		if view := m.View(); !strings.Contains(view, "  ControlPersist 30m") || strings.Contains(view, "  ControlMaster auto") {
@@ -191,7 +172,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 	t.Run("a complete block is not a question", func(t *testing.T) {
 		t.Parallel()
 		m, _ := controlModel(t, true,
-			func(string) (setup.Control, error) { return setup.Control{}, nil },
+			func(string) (ui.ControlStatus, error) { return ui.ControlStatus{}, nil },
 			func(string) ([]string, error) { return nil, nil })
 		lines := strings.Split(m.View(), "\n")
 		if !ui.PopupOpen(m) || !strings.Contains(m.View(), "already carries the ControlMaster trio") || !strings.Contains(lines[len(lines)-1], "esc/enter close") {
@@ -280,5 +261,17 @@ func TestModel_Update_SaveSaysWhenTheControlDirIsMissing(t *testing.T) {
 	})
 }
 
-// wrapNotManaged mirrors setup's wrapping of its sentinel.
-func wrapNotManaged() error { return fmt.Errorf("host %q: %w", "ubuntu", setup.ErrNotManaged) }
+// wrapNotManaged mirrors the cmd hook's wrapping of the sentinel.
+func wrapNotManaged() error { return fmt.Errorf("host %q: %w", "ubuntu", ui.ErrNotManaged) }
+
+// boxText is the popup's rows as one line, so a sentence the box wrapped
+// can be matched whole.
+func boxText(view string) string {
+	var parts []string
+	for _, l := range boxLines(view) {
+		if l = strings.TrimSpace(l); l != "" {
+			parts = append(parts, l)
+		}
+	}
+	return strings.Join(parts, " ")
+}

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/action"
+	"github.com/nadavushka-dev/sasash/internal/controlmaster"
 	"github.com/nadavushka-dev/sasash/internal/fwdset"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
@@ -150,8 +151,8 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		},
 		// 4.18: an older managed entry without the ControlMaster trio is
 		// offered the missing lines from the No-ControlPath failure.
-		InspectControl: func(alias string) (setup.Control, error) { return setup.InspectControl(confPath, alias) },
-		EnableControl:  func(alias string) ([]string, error) { return setup.EnsureControl(confPath, alias) },
+		InspectControl: inspectControl(confPath),
+		EnableControl:  enableControl(confPath),
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg
@@ -229,10 +230,105 @@ func saveHostTo(confPath string) func(ui.AdhocEntry) error {
 		if len(e.Forwards) > 0 {
 			b.WriteString("# @sasash forwards adhoc " + strings.Join(e.Forwards, " ") + "\n")
 		}
-		b.WriteString(setup.ManagedBlock(e.Alias, e.Host, e.User, e.Port))
+		b.WriteString(managedBlock(e.Alias, e.Host, e.User, e.Port))
 		nf := sshconf.Parse(confPath, []byte(b.String()))
 		nf.Perm = f.Perm
 		return nf.WriteAtomic(confPath)
+	}
+}
+
+// managedBlock renders a new managed entry as sasash writes it: the Host
+// line, HostName, User and Port when given, then the ControlMaster trio
+// from controlmaster.Trio — the one owner of the literal (SPEC §2).
+func managedBlock(alias, hostName, user, port string) string {
+	var b strings.Builder
+	b.WriteString("Host " + alias + "\n")
+	b.WriteString("  HostName " + hostName + "\n")
+	if user != "" {
+		b.WriteString("  User " + user + "\n")
+	}
+	if port != "" {
+		b.WriteString("  Port " + port + "\n")
+	}
+	for _, d := range controlmaster.Trio {
+		b.WriteString("  " + d.Keyword + " " + d.Value + "\n")
+	}
+	return b.String()
+}
+
+// inspectControl is the TUI's read of a managed host's trio (4.18): the
+// lines the block lacks, as controlmaster.Enable would write them, and
+// the trio directives it sets to another value, as written — the helper
+// keeps a hand-chosen value and reports only what is missing, while the
+// popup has to say when that value (ControlPath none) defeats the engine.
+// Read-only; the block is the one the helper would write (first pattern).
+func inspectControl(confPath string) func(alias string) (ui.ControlStatus, error) {
+	return func(alias string) (ui.ControlStatus, error) {
+		var st ui.ControlStatus
+		f, err := sshconf.ParseFile(confPath)
+		if err != nil {
+			return st, err
+		}
+		h, ok := f.Host(alias)
+		if !ok || len(h.Patterns) == 0 {
+			return st, fmt.Errorf("host %q: %w", alias, ui.ErrNotManaged)
+		}
+		if v := pinnedVariant(f, alias); v != nil {
+			return st, v
+		}
+		for _, d := range controlmaster.Trio {
+			v, ok := h.Get(d.Keyword)
+			switch {
+			case !ok:
+				st.Missing = append(st.Missing, d.Keyword+" "+d.Value)
+			case !strings.EqualFold(v, d.Value):
+				st.Other = append(st.Other, strings.TrimSpace(d.Keyword+" "+v))
+			}
+		}
+		return st, nil
+	}
+}
+
+// pinnedVariant reports whether alias is a parent's pinned variant —
+// `<parent>.<path>` for a Host in the file and one of the path names its
+// block declares (the generator's own naming). The address is not a
+// witness: a variant whose HostName went stale under a hand edit is
+// still the generator's block, and exactly the one the next switch
+// would repair. A block of the user's that merely wears the name is
+// refused too — conservative, and said as "looks like" in the popup's
+// terms; the writer's own ownership test is pathswitch's (flagged).
+func pinnedVariant(f *sshconf.File, alias string) *ui.VariantError {
+	for _, parent := range f.Hosts() {
+		if len(parent.Patterns) == 0 {
+			continue
+		}
+		name, ok := strings.CutPrefix(alias, parent.Name()+".")
+		if !ok || name == "" {
+			continue
+		}
+		model, _ := hostmodel.Build(&parent)
+		for _, p := range model.Paths {
+			if p.Name == name {
+				return &ui.VariantError{Parent: parent.Name(), Path: name}
+			}
+		}
+	}
+	return nil
+}
+
+// enableControl writes the missing trio lines through the one writer,
+// reporting them as the popup lists them.
+func enableControl(confPath string) func(alias string) ([]string, error) {
+	return func(alias string) ([]string, error) {
+		added, err := controlmaster.Enable(confPath, alias)
+		if err != nil || len(added) == 0 {
+			return nil, err
+		}
+		lines := make([]string, 0, len(added))
+		for _, d := range added {
+			lines = append(lines, d.Keyword+" "+d.Value)
+		}
+		return lines, nil
 	}
 }
 

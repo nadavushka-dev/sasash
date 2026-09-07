@@ -230,7 +230,7 @@ type Model struct {
 	prompt         textinput.Model
 	pending        adhocTarget
 	saveHost       func(AdhocEntry) error // nil -> no save offer after connect
-	inspectControl func(alias string) (setup.Control, error)
+	inspectControl func(alias string) (ControlStatus, error)
 	enableControl  func(alias string) ([]string, error)
 	loadHosts      func() ([]hostmodel.Host, []error, error)
 
@@ -344,9 +344,10 @@ type Config struct {
 	// disables the save offer after an ad-hoc connect.
 	SaveHost func(AdhocEntry) error
 	// InspectControl reads what a managed host's block has of the
-	// ControlMaster trio; EnableControl writes the missing lines (4.18).
-	// Both nil disables the offer that follows a No-ControlPath failure.
-	InspectControl func(alias string) (setup.Control, error)
+	// ControlMaster trio; EnableControl writes the missing lines through
+	// controlmaster.Enable (4.18). Both nil disables the offer that
+	// follows a No-ControlPath failure.
+	InspectControl func(alias string) (ControlStatus, error)
 	EnableControl  func(alias string) ([]string, error)
 	// LoadHosts re-reads the config after a save or an edit so the change
 	// appears in the list; nil skips the reload. Its warnings (malformed

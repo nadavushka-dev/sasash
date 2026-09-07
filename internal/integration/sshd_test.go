@@ -26,9 +26,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nadavushka-dev/sasash/internal/controlmaster"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/run"
-	"github.com/nadavushka-dev/sasash/internal/setup"
 )
 
 const sshBin = "/usr/bin/ssh" // SPEC §1: shell out to /usr/bin/ssh, always
@@ -278,8 +278,8 @@ func TestControlMaster_LiveForwardLifecycle(t *testing.T) {
 }
 
 // TestControlMaster_SavedEntryTemplate is SASASH.4.18's regression: a
-// Host block exactly as sasash saves it (setup.ManagedBlock — the
-// ControlMaster trio included) drives the engine's flow against a real
+// Host block exactly as sasash saves it (the ControlMaster trio from
+// controlmaster.Trio included) drives the engine's flow against a real
 // sshd: `ssh -fN <alias>` starts a master under ControlMaster auto, and
 // `ssh -O check <alias>` finds it. The one substitution is the socket
 // path: the template's `~/.ssh/cm/%C` expands to the passwd home, which
@@ -293,13 +293,19 @@ func TestControlMaster_SavedEntryTemplate(t *testing.T) {
 	userKey, sshdPort, login := startSshd(t, r)
 	sock := filepath.Join(controlSocketDir(t), "cm.sock")
 
-	block := setup.ManagedBlock("saved", "127.0.0.1", login, sshdPort)
+	// The block as the save writes it: Host, HostName, User, Port, then
+	// controlmaster.Trio — the one owner of the literal (the save's own
+	// rendering is pinned byte for byte in cmd/sasash).
+	block := fmt.Sprintf("Host saved\n  HostName 127.0.0.1\n  User %s\n  Port %s\n", login, sshdPort)
+	for _, d := range controlmaster.Trio {
+		block += "  " + d.Keyword + " " + d.Value + "\n"
+	}
 	if !strings.Contains(block, "ControlMaster auto") || !strings.Contains(block, "ControlPersist 30m") {
-		t.Fatalf("ManagedBlock() lacks the trio:\n%s", block)
+		t.Fatalf("the block lacks the trio:\n%s", block)
 	}
 	const templatePath = "  ControlPath ~/.ssh/cm/%C\n"
 	if !strings.Contains(block, templatePath) {
-		t.Fatalf("ManagedBlock() lacks the template's ControlPath line:\n%s", block)
+		t.Fatalf("the block lacks the template's ControlPath line:\n%s", block)
 	}
 	block = strings.Replace(block, templatePath, "  ControlPath "+sock+"\n", 1)
 	conf := block + fmt.Sprintf(`  IdentityFile %s

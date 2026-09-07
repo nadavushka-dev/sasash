@@ -121,6 +121,16 @@ func (m Model) show(title string, lines ...string) Model {
 	return m.showRows(title, rows)
 }
 
+// ask opens a question: a popup whose enter does run and whose esc
+// declines, the footer naming the deed (verb) and the decline notice
+// saying what was left undone (declined) — the three set together, so a
+// question can never be shown half-made.
+func (m Model) ask(title string, lines []string, verb, declined string, run func(Model) (Model, tea.Cmd)) Model {
+	m = m.show(title, lines...)
+	m.popup.confirm, m.popup.verb, m.popup.declined = run, verb, declined
+	return m
+}
+
 // showRows is show for rows that carry their own plain words.
 func (m Model) showRows(title string, rows []popupLine) Model {
 	prior := ""
