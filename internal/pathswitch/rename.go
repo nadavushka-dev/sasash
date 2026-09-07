@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
 )
@@ -39,15 +40,19 @@ func Rename(confPath, old, new string) (RenameResult, error) {
 	}
 	// A leading dash would make `ssh <alias>` parse the alias as an option;
 	// a leading # would comment the Host line out; wildcards make a pattern,
-	// not a name (the 2.3 save rules).
+	// not a name (the 2.3 save rules). Whitespace is sshconf's notion —
+	// unicode.IsSpace, the rule strings.Fields splits patterns on — so a
+	// pasted no-break space cannot become two patterns.
 	if new == "" || strings.HasPrefix(new, "-") || strings.HasPrefix(new, "#") ||
-		strings.ContainsAny(new, " \t\r\n\"") || strings.ContainsAny(new, "*?!") {
+		strings.IndexFunc(new, unicode.IsSpace) >= 0 || strings.ContainsAny(new, "\"*?!") {
 		return RenameResult{}, fmt.Errorf("alias %q: want a single plain word", new)
 	}
 	f, err := sshconf.ParseFile(confPath)
 	if err != nil {
 		return RenameResult{}, err
 	}
+	// First block wins, as ssh resolves it; a duplicate `Host <old>` further
+	// down is not this rename's (the reader never showed it either).
 	main, ok := f.Host(old)
 	if !ok {
 		return RenameResult{}, fmt.Errorf("host %q not managed by sasash", old)
@@ -71,12 +76,19 @@ func Rename(confPath, old, new string) (RenameResult, error) {
 	anchored := anchoredStarts(f, prefix)
 	for _, b := range f.Hosts() {
 		suffix := strings.TrimPrefix(b.Name(), prefix)
-		if suffix == b.Name() || suffix == "" {
+		if suffix == b.Name() {
 			continue
 		}
 		if !anchored[b.Start] {
 			res.LeftAsIs = append(res.LeftAsIs, b.Name())
 			continue
+		}
+		// The names the fan-out creates are checked like new itself: a
+		// generated "<new>.<name>" above a user's block of that name would
+		// shadow it under first-value-wins — a touched host by a semantic
+		// route, which byte-identity alone cannot see.
+		if _, taken := f.Host(new + "." + suffix); taken {
+			return RenameResult{}, fmt.Errorf("alias %q already exists", new+"."+suffix)
 		}
 		raw[b.Start] = renameToken(f.Line(b.Start), b.Name(), new+"."+suffix)
 		res.Followed = append(res.Followed, suffix)
@@ -98,7 +110,9 @@ func Rename(confPath, old, new string) (RenameResult, error) {
 func renameToken(line sshconf.Line, old, new string) string {
 	body := strings.TrimRight(line.Raw, "\r\n")
 	term := line.Raw[len(body):]
-	start := len(strings.TrimRight(body, " \t")) - len(line.Args)
+	// Args was right-trimmed with unicode.IsSpace; the body must be too, or
+	// a trailing \v or no-break space shifts the splice into the alias.
+	start := len(strings.TrimRightFunc(body, unicode.IsSpace)) - len(line.Args)
 	return body[:start] + new + body[start+len(old):] + term
 }
 

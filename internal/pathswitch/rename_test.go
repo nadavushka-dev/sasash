@@ -9,6 +9,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
+	"github.com/nadavushka-dev/sasash/internal/sshconf"
 )
 
 func TestRename_ExactBytes(t *testing.T) {
@@ -44,6 +45,18 @@ func TestRename_ExactBytes(t *testing.T) {
 			want: "Host srv\r\n  HostName 192.0.2.10\r\n",
 		},
 		{
+			// sshconf trims with unicode.IsSpace: the alias must be located
+			// by the same rule or the splice eats real bytes.
+			name: "trailing vertical tab",
+			in:   "Host web\v\n  HostName 192.0.2.10\n",
+			want: "Host srv\v\n  HostName 192.0.2.10\n",
+		},
+		{
+			name: "trailing no-break space",
+			in:   "Host web \u00a0\n  HostName 192.0.2.10\n",
+			want: "Host srv \u00a0\n  HostName 192.0.2.10\n",
+		},
+		{
 			name: "Host line is the unterminated last line",
 			in:   "# managed\nHost web",
 			want: "# managed\nHost srv",
@@ -63,6 +76,20 @@ func TestRename_ExactBytes(t *testing.T) {
 			}
 			if got := read(t, path); got != tt.want {
 				t.Errorf("file = %q, want %q", got, tt.want)
+			}
+			// The parser must see exactly one host named srv with the
+			// pattern count the input had.
+			f, err := sshconf.ParseFile(path)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			h, ok := f.Host("srv")
+			if !ok {
+				t.Fatalf("Host(%q) after Rename = missing", "srv")
+			}
+			in, _ := sshconf.Parse(path, []byte(tt.in)).Host("web")
+			if len(h.Patterns) != len(in.Patterns) {
+				t.Errorf("patterns after Rename = %v, want %d as before", h.Patterns, len(in.Patterns))
 			}
 		})
 	}
@@ -248,6 +275,8 @@ func TestRename_Errors(t *testing.T) {
 		{name: "negation", old: "web", new: "!web", wantErr: "want a single plain word"},
 		{name: "leading dash", old: "web", new: "-v", wantErr: "want a single plain word"},
 		{name: "leading hash", old: "web", new: "#web", wantErr: "want a single plain word"},
+		{name: "no-break space splits into two patterns", old: "web", new: "a\u00a0b", wantErr: "want a single plain word"},
+		{name: "trailing vertical tab", old: "web", new: "srv\v", wantErr: "want a single plain word"},
 		{name: "not managed", old: "nope", new: "srv", wantErr: `host "nope" not managed by sasash`},
 		{name: "second pattern is not a managed name", old: "db-alt", new: "srv", wantErr: `host "db-alt" not managed by sasash`},
 		{name: "collides with a main block", old: "web", new: "db", wantErr: `alias "db" already exists`},
@@ -267,6 +296,40 @@ func TestRename_Errors(t *testing.T) {
 				t.Errorf("file after a rejected Rename = %q, want untouched", got)
 			}
 		})
+	}
+}
+
+func TestRename_FanOutCollisionRefused(t *testing.T) {
+	t.Parallel()
+	// The names the fan-out CREATES are checked too: an owned web.lan
+	// would become prod.lan, shadowing the user's hand-written prod.lan
+	// under first-value-wins — a touched user host by a semantic route.
+	in := "Host web\n  HostName 192.0.2.10\n\n" + pathswitch.Header + "\nHost web.lan\n  HostName 192.0.2.10\n# my own bastion\nHost prod.lan\n  HostName 203.0.113.9\n  IdentityFile ~/.ssh/k\n"
+	path := write(t, in)
+	_, err := pathswitch.Rename(path, "web", "prod")
+	if err == nil || !strings.Contains(err.Error(), `alias "prod.lan" already exists`) {
+		t.Errorf("Rename() = %v, want error containing %q", err, `alias "prod.lan" already exists`)
+	}
+	if got := read(t, path); got != in {
+		t.Errorf("file after a rejected Rename = %q, want untouched", got)
+	}
+}
+
+func TestRename_TrailingDotBlockIsReported(t *testing.T) {
+	t.Parallel()
+	// "Host web." is a dotted block under the old prefix that the
+	// generator never owns: left verbatim and reported like any other.
+	in := "Host web\n  HostName 192.0.2.10\nHost web.\n  HostName 192.0.2.11\n"
+	path := write(t, in)
+	res, err := pathswitch.Rename(path, "web", "srv")
+	if err != nil {
+		t.Fatalf("Rename() = %v", err)
+	}
+	if want := "Host srv\n  HostName 192.0.2.10\nHost web.\n  HostName 192.0.2.11\n"; read(t, path) != want {
+		t.Errorf("file = %q, want %q", read(t, path), want)
+	}
+	if want := (pathswitch.RenameResult{LeftAsIs: []string{"web."}}); !reflect.DeepEqual(res, want) {
+		t.Errorf("Rename() = %+v, want %+v", res, want)
 	}
 }
 
