@@ -1219,11 +1219,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				case choice == choiceOK:
 					return m.focusPathsWith(host, b), nil
-				case choice == choiceShadowed:
-					// The diagnostic p would give is kept on the way past.
+				}
+				m = m.focusTunnelsOn(host)
+				if choice == choiceShadowed {
+					// The diagnostic p would give is kept on the way past —
+					// set last, so a host without tunnels does not talk over it.
 					m.notice = shadowedPaths
 				}
-				return m.focusTunnelsOn(host), nil
+				return m, nil
 			case key.Matches(msg, m.keys.FocusLeft):
 				return m, nil // already on the list
 			case key.Matches(msg, m.keys.Toggle):

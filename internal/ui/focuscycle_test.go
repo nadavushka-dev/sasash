@@ -181,6 +181,20 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 		if !ui.TunnelsFocused(m) || ui.PathsFocused(m) || !strings.Contains(m.View(), "the paths on screen are not sasash.conf's") {
 			t.Errorf("l should pass a pane with one rendered path by, keeping p's diagnostic (paths %v, tunnels %v):\n%s", ui.PathsFocused(m), ui.TunnelsFocused(m), m.View())
 		}
+		// Without tunnels either, the diagnostic still wins the line.
+		shadow.Forwards = nil
+		hosts = append(tunnelHosts(), shadow)
+		m2 := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d)})
+		m2 = feed(t, update(t, m2, tea.WindowSizeMsg{Width: 120, Height: 30}), m2.Init())
+		m2 = ui.WithSwitcher(m2,
+			func(alias, name string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+			func(alias string) ([]probe.Path, string, bool) {
+				return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true
+			}, nil)
+		m2 = press(t, m2, "G", "l")
+		if ui.TunnelsFocused(m2) || ui.PathsFocused(m2) || !strings.Contains(m2.View(), "the paths on screen are not sasash.conf's") {
+			t.Errorf("without tunnels the shadow diagnostic should still be the notice:\n%s", m2.View())
+		}
 	})
 	t.Run("the keys panel says what l does at both ends of the cycle", func(t *testing.T) {
 		t.Parallel()
@@ -190,6 +204,11 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 			if !strings.Contains(inner, want) {
 				t.Errorf("keys panel missing %q:\n%s", want, inner)
 			}
+		}
+		// The way in is listed under the host list itself, before the
+		// pane groups — not only inside the tunnels group.
+		if !order(inner, "host list", "l/tab      paths / tunnels pane", "paths (p)") {
+			t.Errorf("l/tab should be a host-list row:\n%s", inner)
 		}
 		if strings.Contains(inner, "l/tab      tunnels pane") {
 			t.Errorf("keys panel still gives l/tab its old meaning:\n%s", inner)
