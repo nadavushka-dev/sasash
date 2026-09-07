@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nadavushka-dev/sasash/internal/controlmaster"
+	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -67,10 +68,12 @@ func TestInspectControl_Cases(t *testing.T) {
 
 func TestInspectControl_RefusesAPinnedVariant(t *testing.T) {
 	t.Parallel()
-	// ubuntu declares paths lan and wan; ubuntu.lan is its pinned variant
-	// whatever address the block carries (stale under a hand edit here);
-	// ubuntu.other names no path, so it is a host of the user's.
-	conf := "# @sasash path lan 192.0.2.77\n# @sasash path wan 203.0.113.10\nHost ubuntu\n  HostName 192.0.2.77\n\n# pinned variants, generated\nHost ubuntu.lan\n  HostName 192.0.2.10\nHost ubuntu.wan\n  HostName 203.0.113.10\nHost ubuntu.other\n  HostName 192.0.2.5\n"
+	// ubuntu's paths were hand-edited — lan renamed to home, wan's address
+	// changed — yet ubuntu.lan and ubuntu.wan sit in the generator's
+	// Header run with its shape: they are the generator's, whatever the
+	// meta now says. ubuntu.other follows them with a directive of the
+	// user's, which breaks the run: a host of the user's.
+	conf := "# @sasash path home 192.0.2.77\n# @sasash path wan 203.0.113.99\nHost ubuntu\n  HostName 192.0.2.77\n\n" + pathswitch.Header + "\nHost ubuntu.lan\n  HostName 192.0.2.10\nHost ubuntu.wan\n  HostName 203.0.113.10\nHost ubuntu.other\n  HostName 192.0.2.5\n  ForwardAgent yes\n"
 	path := filepath.Join(t.TempDir(), "sasash.conf")
 	if err := os.WriteFile(path, []byte(conf), 0o600); err != nil {
 		t.Fatal(err)

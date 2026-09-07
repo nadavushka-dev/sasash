@@ -289,31 +289,17 @@ func inspectControl(confPath string) func(alias string) (ui.ControlStatus, error
 	}
 }
 
-// pinnedVariant reports whether alias is a parent's pinned variant —
-// `<parent>.<path>` for a Host in the file and one of the path names its
-// block declares (the generator's own naming). The address is not a
-// witness: a variant whose HostName went stale under a hand edit is
-// still the generator's block, and exactly the one the next switch
-// would repair. A block of the user's that merely wears the name is
-// refused too — conservative, and said as "looks like" in the popup's
-// terms; the writer's own ownership test is pathswitch's (flagged).
+// pinnedVariant reports whether alias is a block the path generator
+// wrote — pathswitch's own question (Generated: the generated shape,
+// anchored in its Header run), so the refusal and the switcher agree on
+// ownership whatever a hand edit did to the parent's path names or
+// addresses. A user's dotted host outside a Header run is not one.
 func pinnedVariant(f *sshconf.File, alias string) *ui.VariantError {
-	for _, parent := range f.Hosts() {
-		if len(parent.Patterns) == 0 {
-			continue
-		}
-		name, ok := strings.CutPrefix(alias, parent.Name()+".")
-		if !ok || name == "" {
-			continue
-		}
-		model, _ := hostmodel.Build(&parent)
-		for _, p := range model.Paths {
-			if p.Name == name {
-				return &ui.VariantError{Parent: parent.Name(), Path: name}
-			}
-		}
+	parent, ok := pathswitch.Generated(f, alias)
+	if !ok {
+		return nil
 	}
-	return nil
+	return &ui.VariantError{Parent: parent, Path: strings.TrimPrefix(alias, parent+".")}
 }
 
 // enableControl writes the missing trio lines through the one writer,

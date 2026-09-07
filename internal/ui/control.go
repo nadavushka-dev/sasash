@@ -31,9 +31,9 @@ var ErrNotManaged = errors.New("not managed by sasash: no Host block in sasash.c
 
 // VariantError says the alias is a parent's pinned variant (the block
 // pathswitch generates for one named path): not a block to write into.
-// The cmd layer decides it from the file — the alias form and the
-// parent's declared path names, never the address, so a variant whose
-// address went stale under a hand edit is still a variant.
+// The cmd layer asks pathswitch itself (Generated), so the refusal and
+// the switcher agree on ownership whatever a hand edit did to the
+// parent's meta.
 type VariantError struct{ Parent, Path string }
 
 func (e *VariantError) Error() string {
@@ -120,7 +120,8 @@ func (m Model) offerControl(alias, label string, reason []string) Model {
 func hostileControl(other []string) string {
 	for _, o := range other {
 		kw, v, _ := strings.Cut(o, " ")
-		v = strings.ToLower(v)
+		// ssh reads "none" and none alike: the quotes go before the look.
+		v = strings.Trim(strings.ToLower(v), "\"'")
 		switch strings.ToLower(kw) {
 		case "controlmaster":
 			if v != "auto" && v != "yes" && v != "ask" && v != "autoask" {

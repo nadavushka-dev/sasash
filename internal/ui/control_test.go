@@ -122,6 +122,7 @@ func TestModel_Update_NoControlPathOffersTheTrio(t *testing.T) {
 		}{
 			{name: "ControlPath none", ctrl: ui.ControlStatus{Other: []string{"ControlPath none"}}, want: "the block sets ControlPath none"},
 			{name: "a valueless ControlPath", ctrl: ui.ControlStatus{Other: []string{"ControlPath"}}, want: "the block sets an empty ControlPath"},
+			{name: "a quoted none is none to ssh", ctrl: ui.ControlStatus{Other: []string{"ControlPath \"none\""}}, want: "the block sets ControlPath \"none\""},
 			{name: "ControlMaster no with the rest missing", ctrl: ui.ControlStatus{Missing: []string{"ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}, Other: []string{"ControlMaster no"}}, want: "the block sets ControlMaster no"},
 			{name: "another socket path is fine", ctrl: ui.ControlStatus{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlPath ~/.ssh/other/%C"}}, want: "  ControlPersist 30m", offer: true},
 			{name: "ask starts a master", ctrl: ui.ControlStatus{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlMaster ask"}}, want: "  ControlPersist 30m", offer: true},
