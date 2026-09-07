@@ -156,10 +156,11 @@ func TestModel_Update_FocusPagingKeysStayInPane(t *testing.T) {
 	if view := m.View(); !lineHas(view, "› ", specWeb0) {
 		t.Errorf("View() after ctrl+u should highlight the first row:\n%s", view)
 	}
-	// l while focused is idempotent: the highlight stays put.
+	// l while focused closes the cycle (2.11): back on the list, the
+	// highlight is gone; the host is unchanged.
 	m = press(t, m, "G", "l")
-	if view := m.View(); !lineHas(view, "› ", specAPI) {
-		t.Errorf("View() after G l moved the highlight:\n%s", view)
+	if host, _ := m.Selected(); host.Alias != "ubuntu" || ui.TunnelsFocused(m) || lineHas(m.View(), "› ", specAPI) {
+		t.Errorf("View() after G l should be back on the list without a highlight:\n%s", m.View())
 	}
 }
 

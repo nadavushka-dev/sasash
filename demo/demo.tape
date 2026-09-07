@@ -55,6 +55,16 @@ Escape
 Sleep 300ms
 Type "ttt"
 Sleep 500ms
+Type "l"
+Sleep 800ms
+Screenshot demo/out/frame-paths.png
+Type "j"
+Sleep 500ms
+Type "l"
+Sleep 800ms
+Screenshot demo/out/frame-tunnels.png
+Escape
+Sleep 300ms
 Type "?"
 Sleep 1.5s
 Screenshot demo/out/frame-keys.png

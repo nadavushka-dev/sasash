@@ -16,6 +16,10 @@ import (
 // j/k move the mark, enter makes the highlighted path active through
 // pathswitch.Set (the same pipeline the cycle and the 2.8 overlay used),
 // esc/h return to the list. Any host change drops the focus (settleFocus).
+// Since SASASH.2.11 the paths pane is a stop on the l/tab focus cycle
+// (list → paths → tunnels → list), reached by the same focusPathsOn as
+// p — one flow, two keys — so picking a path is a right-pane action and
+// the v-shown variant rows are no longer the way to do it.
 
 // pathRows are the rows p moves over: the rendered named paths that the
 // sasash.conf block also declares (by name — Set works by name), in the
@@ -51,6 +55,23 @@ func activeIndex(rows []probe.Path, hostName string) int {
 		}
 	}
 	return cur
+}
+
+// pathChoice reports whether the paths focus has anything to offer on
+// host — a managed block with two or more named paths the pane renders —
+// so the focus cycle can pass the pane by, silently, when it does not.
+// The block is read against disk, as focusPathsOn reads it.
+func (m Model) pathChoice(host hostmodel.Host) bool {
+	if m.pathBlock == nil || m.setPath == nil {
+		return false // no switcher wired: nothing the focus could do
+	}
+	delete(m.blocks, host.Alias)
+	b := m.block(host.Alias)
+	if !b.managed || len(namedPaths(b.paths)) < 2 {
+		return false
+	}
+	rows, _ := pathRows(host, b)
+	return len(rows) >= 2
 }
 
 // focusPathsOn is p on the selected host: the paths focus when there is
@@ -112,6 +133,10 @@ func (m Model) pathsFocusKey(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter):
 		return m.setFocus(focusList), nil, true
+	case msg.String() == "l":
+		// On to the tunnels pane (2.11) — tab keeps moving the mark, as
+		// under the tunnels focus.
+		return m.focusTunnelsOn(host), nil, true
 	case msg.Type == tea.KeyEnter:
 		name := rows[m.pathIdx].Name
 		m = m.setFocus(focusList)
@@ -178,6 +203,7 @@ func (pathsKeys) ShortHelp() []key.Binding {
 		moveKeys,
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "make active")),
 		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "keep current")),
+		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "tunnels pane")),
 	}
 }
 

@@ -603,11 +603,26 @@ func (m Model) settleFocus() Model {
 	return m
 }
 
+// focusTunnelsOn is the tunnels focus on host when it has forward rows,
+// else a notice — the way l (from the list or the paths pane) lands there.
+func (m Model) focusTunnelsOn(host hostmodel.Host) Model {
+	if m.tunnels == nil {
+		return m
+	}
+	if rows, _ := m.forwardRows(host); len(rows) == 0 {
+		m.notice = "no tunnels on " + host.Alias + " — + adds one"
+		return m
+	}
+	m = m.setFocus(focusTunnels)
+	m.fwdIdx = 0
+	return m
+}
+
 // tunnelsFocusKey routes navigation while the tunnels pane holds focus:
 // j/k (tab/shift+tab) move the highlight, clamped; g/G jump; h/esc go
-// back to the list. Everything else is not handled here — action keys
-// keep their meanings in both foci. settleFocus guarantees rows exist
-// whenever this runs.
+// back to the list, and so does l — the cycle closes (2.11). Everything
+// else is not handled here — action keys keep their meanings in both
+// foci. settleFocus guarantees rows exist whenever this runs.
 func (m Model) tunnelsFocusKey(msg tea.KeyMsg) (Model, bool) {
 	host, _ := m.Selected()
 	rows, _ := m.forwardRows(host)
@@ -630,7 +645,7 @@ func (m Model) tunnelsFocusKey(msg tea.KeyMsg) (Model, bool) {
 	case key.Matches(msg, m.keys.Bottom):
 		m.fwdIdx = len(rows) - 1
 		return m, true
-	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter):
+	case key.Matches(msg, m.keys.FocusLeft), key.Matches(msg, m.keys.ClearFilter), msg.String() == "l":
 		return m.setFocus(focusList), true
 	}
 	return m, false
@@ -1189,17 +1204,22 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, clipCmd(m.runner, strings.Join(argv, " "))
 			case key.Matches(msg, m.keys.FocusRight):
+				// The pane-focus cycle (SASASH.2.11): list → paths → tunnels
+				// → list. From the list, the paths pane first when the host
+				// has a path to choose — the same focus p gives — else on
+				// to the tunnels.
 				host, ok := m.Selected()
-				if !ok || m.tunnels == nil || m.focus == focusTunnels {
-					return m, nil // already there: l is idempotent (or from the paths pane)
-				}
-				if rows, _ := m.forwardRows(host); len(rows) == 0 {
-					m.notice = "no tunnels on " + host.Alias + " — + adds one"
+				if !ok {
 					return m, nil
 				}
-				m = m.setFocus(focusTunnels)
-				m.fwdIdx = 0
-				return m, nil
+				if m.pathChoice(host) {
+					if m.switching[host.Alias] {
+						m.notice = "a switch is already running for " + host.Alias
+						return m, nil
+					}
+					return m.focusPathsOn(host), nil
+				}
+				return m.focusTunnelsOn(host), nil
 			case key.Matches(msg, m.keys.FocusLeft):
 				return m, nil // already on the list
 			case key.Matches(msg, m.keys.Toggle):
