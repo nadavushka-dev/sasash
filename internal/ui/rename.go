@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -50,7 +51,9 @@ func (m Model) openRename() (Model, tea.Cmd) {
 	alias := host.Alias
 	if name, ok := m.fold.variants[alias]; ok {
 		parent := strings.TrimSuffix(alias, "."+name)
-		m.notice = alias + " is " + parent + "'s pinned variant for path " + name + " — rename " + parent + ": its variants follow"
+		// Listed as a variant by the fold's display witnesses; whether
+		// the writer carries it along is the writer's call (LeftAsIs).
+		m.notice = alias + " is listed as " + parent + "'s pinned variant for path " + name + " — rename " + parent + " instead"
 		return m, nil
 	}
 	if !m.inConf(host) {
@@ -65,7 +68,7 @@ func (m Model) openRename() (Model, tea.Cmd) {
 	}
 	if m.switching[alias] || m.tinflight[alias] {
 		// Both write files keyed by the alias (sasash.conf, the caches).
-		m.notice = alias + " is busy — a path switch or tunnel action is running; try again"
+		m.notice = busyNotice(alias)
 		return m, nil
 	}
 	m.renaming = alias
@@ -77,6 +80,11 @@ func (m Model) openRename() (Model, tea.Cmd) {
 	return m, m.prompt.Focus()
 }
 
+// busyNotice is the one-writer-per-host refusal.
+func busyNotice(alias string) string {
+	return alias + " is busy — a path switch or tunnel action is running; try again"
+}
+
 // inConf reports a host whose block lives in sasash.conf (paths compared
 // cleaned, as managed does).
 func (m Model) inConf(h hostmodel.Host) bool {
@@ -86,30 +94,48 @@ func (m Model) inConf(h hostmodel.Host) bool {
 // submitRename is enter in the rename prompt. The 2.3 save rules gate
 // the name first — the collision against EVERY listed host, ambient
 // tier included, is this side's (the writer sees only sasash.conf), for
-// the alias and for each "<new>.<name>" the fan-out would create.
+// the alias and for each "<new>.<x>" the fan-out could create: every
+// "<old>.<x>" block, not just the ones the fold lists as variants — the
+// writer's ownership test is its own, and a hand-edited address must not
+// let a generated block shadow a user's host in another file.
 func (m Model) submitRename() (Model, tea.Cmd) {
 	old, new := m.renaming, strings.TrimSpace(m.prompt.Value())
 	if new == old {
 		m.notice = "unchanged — esc cancels"
 		return m, nil
 	}
-	if new == "" {
-		m.notice = `alias "": want a single plain word`
+	// A slash or a dot-name would make a cache file the store refuses
+	// to write (CacheRenames moves nothing then): the history would be
+	// silently left behind.
+	if new == "" || new == "." || new == ".." || strings.Contains(new, "/") {
+		m.notice = "alias " + strconv.Quote(new) + ": want a single plain word"
 		return m, nil
 	}
 	if problem := m.aliasProblem(new); problem != "" {
 		m.notice = problem
 		return m, nil
 	}
-	for _, name := range variantsOf(old, m.hosts, m.fold.variants) {
-		if problem := m.aliasProblem(new + "." + name); problem != "" {
-			m.notice = problem
-			return m, nil
+	for _, h := range m.hosts {
+		if suffix, dotted := strings.CutPrefix(h.Alias, old+"."); dotted {
+			if problem := m.aliasProblem(new + "." + suffix); problem != "" {
+				m.notice = problem
+				return m, nil
+			}
 		}
+	}
+	// The gate read at R, re-read at enter (a poll may have started
+	// while the prompt was open) and then HELD until the outcome lands:
+	// the rename moves the files a poll writes.
+	if m.switching[old] || m.tinflight[old] {
+		m.mode = promptNone
+		m.prompt.Blur()
+		m.notice = busyNotice(old)
+		return m, nil
 	}
 	m.mode = promptNone
 	m.prompt.Blur()
 	m.notice = "renaming " + old + " → " + new + " …"
+	m.tinflight[old] = true
 	rename := m.renameHost
 	return m, func() tea.Msg {
 		res, err := rename(old, new)
@@ -124,6 +150,7 @@ func (m Model) submitRename() (Model, tea.Cmd) {
 // tell (blocks that did not follow, a cache that stayed) the popup
 // carries it, with the live-master caveat.
 func (m Model) renamed(msg renameDoneMsg) (Model, tea.Cmd) {
+	delete(m.tinflight, msg.old) // the gate held since enter, whatever the outcome
 	if msg.err != nil && !errors.Is(msg.err, ErrCacheKept) {
 		// The writer's words verbatim: it can name a dotted alias the
 		// user did not type ("alias "web.lan" already exists").
@@ -141,6 +168,7 @@ func (m Model) renamed(msg renameDoneMsg) (Model, tea.Cmd) {
 	}
 	m.hosts = hosts
 	m.fold.variants = computeVariants(m.hosts)
+	m.fold.hidden = hiddenSet(m.hosts)
 	// A master up under the old alias is not touched: its socket is
 	// keyed by the old connection params. Said on the line when it is
 	// known to be running — the pane keeps showing it as the old name

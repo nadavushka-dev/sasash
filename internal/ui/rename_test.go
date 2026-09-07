@@ -49,6 +49,8 @@ func webGroup() []hostmodel.Host {
 		managedHost("web", probe.Path{Name: "lan", Host: "192.0.2.1"}, probe.Path{Name: "wan", Host: "203.0.113.1"}),
 		managedHost("web.lan", probe.Path{Name: "lan", Host: "192.0.2.1"}),
 		managedHost("web.wan", probe.Path{Name: "wan", Host: "203.0.113.1"}),
+		// A hand-authored dotted block: two paths, so no variant.
+		managedHost("web.old", probe.Path{Name: "a", Host: "192.0.2.3"}, probe.Path{Name: "b", Host: "192.0.2.4"}),
 		managedHost("api", probe.Path{Name: "lan", Host: "192.0.2.2"}),
 	}
 }
@@ -136,7 +138,7 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 			notice: "bare is not in sasash.conf — rename it by hand (e)"},
 		{name: "pinned variant points at its parent", hook: true, hosts: webGroup(),
 			keys:   []string{"v", "j", "R"},
-			notice: "web.lan is web's pinned variant for path lan — rename web: its variants follow"},
+			notice: "web.lan is listed as web's pinned variant for path lan — rename web instead"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,10 +158,75 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 
 func TestModel_Rename_BusyHostRefused(t *testing.T) {
 	t.Parallel()
+	const busy = "web is busy — a path switch or tunnel action is running; try again"
+	tests := []struct {
+		name string
+		mark func(ui.Model, string) ui.Model
+	}{
+		{name: "path switch in flight", mark: ui.MarkSwitching},
+		{name: "tunnel action or poll in flight", mark: ui.MarkInflight},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := &renameHook{}
+			m := press(t, tt.mark(renameModel(t, webGroup(), h), "web"), "R")
+			if ui.Prompting(m) || len(h.calls) != 0 || !strings.Contains(m.View(), busy) {
+				t.Errorf("R on a busy host should refuse (prompting %v, calls %v):\n%s", ui.Prompting(m), h.calls, m.View())
+			}
+			// The gate is read again at enter: a poll that started while
+			// the prompt was open wins, and the prompt closes.
+			h2 := &renameHook{}
+			m = press(t, renameModel(t, webGroup(), h2), "R", "ctrl+u", "srv")
+			m, msgs := submit(t, tt.mark(m, "web"))
+			if ui.Prompting(m) || len(h2.calls) != 0 || len(msgs) != 0 || !strings.Contains(m.View(), busy) {
+				t.Errorf("enter on a host that went busy should refuse (prompting %v, calls %v, msgs %d):\n%s", ui.Prompting(m), h2.calls, len(msgs), m.View())
+			}
+		})
+	}
+}
+
+func TestModel_Rename_HoldsTheGateUntilTheOutcome(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "renamed"},
+		{name: "refused", err: errors.New("alias \"srv\" already exists")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := &renameHook{err: tt.err}
+			m := press(t, renameModel(t, webGroup(), h), "R", "ctrl+u", "srv")
+			m, msgs := submit(t, m)
+			if !ui.Inflight(m, "web") {
+				t.Fatal("enter should hold the host's gate while the rename runs")
+			}
+			m = update(t, m, msgs[0])
+			if ui.Inflight(m, "web") || ui.Inflight(m, "srv") {
+				t.Errorf("the outcome should release the gate (web %v, srv %v)", ui.Inflight(m, "web"), ui.Inflight(m, "srv"))
+			}
+		})
+	}
+}
+
+func TestModel_Rename_FanOutCollisionBeyondTheFold(t *testing.T) {
+	t.Parallel()
+	// web.lan sits under web's prefix but its address was hand-edited,
+	// so the fold does not list it as a variant — the writer may still
+	// carry it along, and srv.lan is a user's host in another file.
+	hosts := []hostmodel.Host{
+		managedHost("web", probe.Path{Name: "lan", Host: "192.0.2.1"}),
+		managedHost("web.lan", probe.Path{Name: "lan", Host: "198.51.100.99"}),
+		{Alias: "srv.lan", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.9"}}, File: ambientFile},
+	}
 	h := &renameHook{}
-	m := press(t, ui.MarkSwitching(renameModel(t, webGroup(), h), "web"), "R")
-	if ui.Prompting(m) || len(h.calls) != 0 || !strings.Contains(m.View(), "web is busy — a path switch or tunnel action is running; try again") {
-		t.Errorf("R on a switching host should refuse (prompting %v, calls %v):\n%s", ui.Prompting(m), h.calls, m.View())
+	m := press(t, renameModel(t, hosts, h), "R", "ctrl+u", "srv")
+	m, msgs := submit(t, m)
+	if !ui.Prompting(m) || len(h.calls) != 0 || len(msgs) != 0 || !strings.Contains(m.View(), `alias "srv.lan" already exists`) {
+		t.Errorf("enter should refuse the fan-out collision (prompting %v, calls %v):\n%s", ui.Prompting(m), h.calls, m.View())
 	}
 }
 
@@ -176,6 +243,10 @@ func TestModel_Rename_SubmitRefusals(t *testing.T) {
 		{name: "two words", typed: "a b", notice: `alias "a b": want a single plain word`},
 		{name: "leading dash", typed: "-x", notice: `alias "-x": want a single plain word`},
 		{name: "wildcard", typed: "w*", notice: `alias "w*": want a single plain word`},
+		{name: "a path is no file name", typed: "../x", notice: `alias "../x": want a single plain word`},
+		{name: "a slash is no file name", typed: "a/b", notice: `alias "a/b": want a single plain word`},
+		{name: "dot", typed: ".", notice: `alias ".": want a single plain word`},
+		{name: "dot dot", typed: "..", notice: `alias "..": want a single plain word`},
 		{name: "collides with a managed host", typed: "api", notice: `alias "api" already exists`},
 		{name: "collides with its own variant", typed: "web.lan", notice: `alias "web.lan" already exists`},
 		{name: "fan-out would shadow an ambient host", typed: "srv", notice: `alias "srv.lan" already exists`},
@@ -203,7 +274,7 @@ func TestModel_Rename_Renamed(t *testing.T) {
 	m := ui.WithLoadHosts(renameModel(t, webGroup(), h), func() ([]hostmodel.Host, []error, error) {
 		loads++
 		hosts := webGroup()
-		hosts[0].Alias, hosts[1].Alias, hosts[2].Alias = "srv", "srv.lan", "srv.wan"
+		hosts[0].Alias, hosts[1].Alias, hosts[2].Alias = "srv", "srv.lan", "srv.wan" // web.old stays
 		return hosts, nil, nil
 	})
 	m = press(t, m, "R", "ctrl+u", "srv")
@@ -239,9 +310,11 @@ func TestModel_Rename_Renamed(t *testing.T) {
 	if loads != 1 || selectedAlias(t, m) != "srv" {
 		t.Errorf("reload: loads = %d, selected %q; want 1 and srv", loads, selectedAlias(t, m))
 	}
+	// The followed variants are listed under the new alias; the
+	// hand-authored dotted block the writer left as-is keeps its name.
 	m = press(t, m, "v")
-	if view := m.View(); !strings.Contains(view, "srv.lan") || !strings.Contains(view, "srv.wan") || strings.Contains(view, "web.") {
-		t.Errorf("variants should be listed under the new alias:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "srv.lan") || !strings.Contains(view, "srv.wan") || !strings.Contains(view, "web.old") || strings.Contains(view, "srv.old") || strings.Contains(view, "web.lan") {
+		t.Errorf("variants should follow and web.old stay:\n%s", view)
 	}
 }
 
@@ -289,21 +362,24 @@ func TestModel_Rename_MasterUpIsSaid(t *testing.T) {
 
 func TestModel_Rename_UnderFilterKeepsSelection(t *testing.T) {
 	t.Parallel()
+	// Three matches, the cursor on the middle one: the match set is
+	// recomputed after the rename, and the selection must land on the
+	// renamed host by name, never on whichever row the index now hits.
 	h := &renameHook{}
-	hosts := []hostmodel.Host{managedHost("api"), managedHost("wes")}
-	m := press(t, renameModel(t, hosts, h), "/", "s", "enter")
-	if ui.FilterState(m) != list.FilterApplied || selectedAlias(t, m) != "wes" {
-		t.Fatalf("filter s should leave wes selected (state %v, selected %q)", ui.FilterState(m), selectedAlias(t, m))
+	hosts := []hostmodel.Host{managedHost("zeta"), managedHost("beta"), managedHost("gamma")}
+	m := press(t, renameModel(t, hosts, h), "/", "a", "enter", "j")
+	if ui.FilterState(m) != list.FilterApplied || selectedAlias(t, m) != "zeta" {
+		t.Fatalf("filter a then j should select the middle match, zeta (state %v, selected %q)", ui.FilterState(m), selectedAlias(t, m))
 	}
-	m = press(t, m, "R", "ctrl+u", "srv")
+	m = press(t, m, "R", "ctrl+u", "aab")
 	m, msgs := submit(t, m)
 	next, cmd := m.Update(msgs[0])
 	m = next.(ui.Model)
 	for _, msg := range drain(cmd) {
 		m = update(t, m, msg)
 	}
-	if got := selectedAlias(t, m); got != "srv" {
-		t.Errorf("Selected() after a rename under a filter = %q, want srv", got)
+	if got := selectedAlias(t, m); got != "aab" {
+		t.Errorf("Selected() after a rename under a filter = %q, want aab", got)
 	}
 }
 

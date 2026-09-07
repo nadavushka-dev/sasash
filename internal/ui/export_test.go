@@ -311,8 +311,15 @@ func WithRenameHost(m Model, f func(old, new string) (pathswitch.RenameResult, e
 }
 func PromptValue(m Model) string { return m.prompt.Value() }
 
-// MarkSwitching flags a path switch in flight on alias, as p does.
+// MarkSwitching flags a path switch in flight on alias, as p does;
+// MarkInflight a tunnel action or poll, as the engine calls do; Inflight
+// reads that gate.
 func MarkSwitching(m Model, alias string) Model {
 	m.switching[alias] = true
 	return m
 }
+func MarkInflight(m Model, alias string) Model {
+	m.tinflight[alias] = true
+	return m
+}
+func Inflight(m Model, alias string) bool { return m.tinflight[alias] }
