@@ -29,6 +29,9 @@ type popup struct {
 	offset int    // first visible line when the content outgrows the frame
 	glyph  string // "!" for attention (the default), "?" for the keys panel
 	find   finder // the / search over the rows
+	// confirm makes the popup a question (4.17): enter proceeds with the
+	// unmanaged tunnel, esc declines; the title says which is which.
+	confirm bool
 }
 
 // popupLine is one row: the text as drawn and the words the / search
@@ -142,6 +145,17 @@ func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, m.keys.ClearFilter) && p.find.query != "" {
 		p.find, p.offset = finder{}, 0
 		return m, nil
+	}
+	if p.confirm {
+		switch {
+		case msg.Type == tea.KeyEnter:
+			m.popup = popup{}
+			return m.runUnmanagedTunnel()
+		case key.Matches(msg, m.keys.ClearFilter):
+			m.popup = popup{}
+			m.notice = "cancelled — nothing started"
+			return m, nil
+		}
 	}
 	// The keys panel is a reference, not an acknowledgement: ? and q
 	// close it too.

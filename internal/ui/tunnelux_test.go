@@ -66,16 +66,19 @@ func TestParseAdhocTunnelArgv_ExactStrings(t *testing.T) {
 
 func TestModel_Update_AdhocTunnelOnly(t *testing.T) {
 	t.Parallel()
+	// SASASH.4.17: an unsaved -N target saves first. Declining the save
+	// offers the unmanaged run up front; proceeding runs the raw ssh -fN
+	// and its outcome names the cleanup — never a silent, invisible tunnel.
 	const input = "-N -L 8080:localhost:80 root@192.0.2.99"
 	argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "-L", "8080:localhost:80", "root@192.0.2.99"}
 	tests := []struct {
 		name      string
 		reply     fakerun.Reply
 		wantNote  []string
-		wantOffer bool
+		wantPopup bool
 	}{
-		{name: "up in the background", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNote: []string{"tunnel up in the background"}, wantOffer: true},
-		{name: "auth needed a prompt", reply: fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("root@192.0.2.99: Permission denied (publickey,password).\n")}}, wantNote: []string{"ssh -fN failed: Permission denied (publickey,password).", "keys/agent", "connect once"}, wantOffer: true},
+		{name: "up, unmanaged", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNote: []string{"unmanaged tunnel up", "pgrep -fl 'ssh -fN'", "x/X cannot stop it"}, wantPopup: true},
+		{name: "auth needed a prompt", reply: fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("root@192.0.2.99: Permission denied (publickey,password).\n")}}, wantNote: []string{"ssh -fN failed: Permission denied (publickey,password).", "keys/agent", "connect once"}, wantPopup: true},
 		{name: "ssh never ran", reply: fakerun.Reply{Err: errors.New("no ssh binary")}, wantNote: []string{"ssh: no ssh binary"}},
 	}
 	for _, tt := range tests {
@@ -83,19 +86,29 @@ func TestModel_Update_AdhocTunnelOnly(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().Stub(tt.reply, argv...)
 			m := ui.WithSaveHost(probedModel(t, r), func(ui.AdhocEntry) error { return nil })
-			m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24}) // the reason plus the hint plus the offer
+			m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
 			m = press(t, m, "a")
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(input)})
+			m = press(t, m, "enter")
+			// Save first: the alias prompt, saying why.
+			if !ui.PromptingSave(m) || !strings.Contains(m.View(), "shown and stoppable") || len(r.CallKeys()) != 0 {
+				t.Fatalf("enter on an unsaved -N should open the save prompt first (prompting %v, calls %v):\n%s", ui.PromptingSave(m), r.CallKeys(), m.View())
+			}
+			// Declined: the honest question, nothing run yet.
+			m = press(t, m, "esc")
+			if view := m.View(); !ui.PopupOpen(m) || ui.Prompting(m) || !strings.Contains(view, "run an unmanaged tunnel?") || !strings.Contains(view, strings.Join(argv, " ")) || !strings.Contains(view, "pgrep -fl 'ssh -fN'") || !strings.Contains(view, "cannot stop it") || len(r.CallKeys()) != 0 {
+				t.Fatalf("declining the save should offer the unmanaged run (popup %v, calls %v):\n%s", ui.PopupOpen(m), r.CallKeys(), view)
+			}
+			// esc there runs nothing.
+			if c := press(t, m, "esc"); ui.PopupOpen(c) || len(r.CallKeys()) != 0 || !strings.Contains(c.View(), "cancelled — nothing started") {
+				t.Errorf("esc on the question should run nothing (popup %v, calls %v):\n%s", ui.PopupOpen(c), r.CallKeys(), c.View())
+			}
+			// enter proceeds: the raw path, through the runner, no handoff.
 			next, cmd := m.Update(keyMsg("enter"))
 			m = next.(ui.Model)
-			if cmd == nil || ui.Prompting(m) {
-				t.Fatalf("enter: cmd %v, prompting %v; want the background cmd and the prompt closed", cmd != nil, ui.Prompting(m))
+			if cmd == nil || ui.PopupOpen(m) || !strings.Contains(m.View(), "starting unmanaged ssh -fN") {
+				t.Fatalf("enter on the question: cmd %v, popup %v:\n%s", cmd != nil, ui.PopupOpen(m), m.View())
 			}
-			if view := m.View(); !strings.Contains(view, "starting ssh -fN") {
-				t.Errorf("View() while starting missing the command:\n%s", view)
-			}
-			// No handoff: the cmd runs ssh through the runner and returns a
-			// message the model handles — the TUI never left the screen.
 			msg := cmd()
 			if got, want := r.CallKeys(), []string{fakerun.Key(argv...)}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("runner calls = %v, want %v", got, want)
@@ -107,34 +120,134 @@ func TestModel_Update_AdhocTunnelOnly(t *testing.T) {
 					t.Errorf("View() missing %q:\n%s", w, view)
 				}
 			}
-			if got := ui.PromptingSave(m); got != tt.wantOffer {
-				t.Errorf("PromptingSave() = %v, want %v", got, tt.wantOffer)
-			}
-			if !tt.wantOffer {
-				return
-			}
-			// A failure opened the attention popup over the save offer:
-			// it owns the keyboard until dismissed, then the prompt is
-			// there as before (SASASH.4.11).
-			if ui.PopupOpen(m) {
-				m = press(t, m, "esc")
-				if ui.PopupOpen(m) || !ui.PromptingSave(m) {
-					t.Fatalf("after dismissing the popup: open %v, prompting save %v", ui.PopupOpen(m), ui.PromptingSave(m))
-				}
-			}
-			// The save offer is the ordinary one: the entry carries the
-			// forwards and the host exactly as typed.
-			m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
-			var saved []ui.AdhocEntry
-			m = ui.WithSaveHost(m, func(e ui.AdhocEntry) error { saved = append(saved, e); return nil })
-			next, save := m.Update(keyMsg("enter"))
-			update(t, next.(ui.Model), save())
-			want := []ui.AdhocEntry{{Alias: "edge", User: "root", Host: "192.0.2.99", Forwards: []string{"8080:localhost:80"}}}
-			if !reflect.DeepEqual(saved, want) {
-				t.Errorf("saved = %+v, want %+v", saved, want)
+			// The save was declined: no offer follows either outcome.
+			if ui.PopupOpen(m) != tt.wantPopup || ui.PromptingSave(m) {
+				t.Errorf("after the run: popup %v (want %v), save prompt %v (want none):\n%s", ui.PopupOpen(m), tt.wantPopup, ui.PromptingSave(m), view)
 			}
 		})
 	}
+}
+
+func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
+	t.Parallel()
+	t.Run("a saved alias carries the tunnel through the engine", func(t *testing.T) {
+		t.Parallel()
+		// The block is on disk after the save: the engine starts the master
+		// through the new alias and adds the forward — recorded, shown.
+		const spec = "8080:localhost:80"
+		r := fakerun.New().StubExit(1, "ssh", "-O", "check", "edge").StubExit(0, "ssh", "-fN", "edge").StubExit(0, "ssh", "-O", "forward", "-L", spec, "edge")
+		var saved []ui.AdhocEntry
+		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(e ui.AdhocEntry) error { saved = append(saved, e); return nil })
+		m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m = press(t, m, "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec + " root@192.0.2.99")})
+		m = press(t, m, "enter")
+		if !ui.PromptingSave(m) {
+			t.Fatalf("enter should open the save prompt first:\n%s", m.View())
+		}
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("edge")})
+		next, save := m.Update(keyMsg("enter"))
+		m = next.(ui.Model)
+		if save == nil {
+			t.Fatalf("enter on the alias should save")
+		}
+		next, start := m.Update(save())
+		m = next.(ui.Model)
+		if len(saved) != 1 || saved[0].Alias != "edge" || saved[0].Host != "192.0.2.99" || saved[0].User != "root" || !reflect.DeepEqual(saved[0].Forwards, []string{spec}) {
+			t.Errorf("saved = %+v, want the typed target under edge", saved)
+		}
+		if start == nil || !strings.Contains(m.View(), "starting ssh -fN edge ; ssh -O forward -L "+spec+" edge") {
+			t.Fatalf("the save should start the engine flow (cmd %v):\n%s", start != nil, m.View())
+		}
+		before := len(r.CallKeys())
+		m = feed(t, m, start)
+		if got, want := r.CallKeys()[before:], []string{"ssh -O check edge", "ssh -fN edge", "ssh -O forward -L " + spec + " edge"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("calls = %v, want the engine's flow %v", got, want)
+		}
+		if view := m.View(); !strings.Contains(view, "tunnel up on edge: "+spec) || ui.PopupOpen(m) || ui.Prompting(m) {
+			t.Errorf("View() after the engine flow (popup %v, prompting %v):\n%s", ui.PopupOpen(m), ui.Prompting(m), view)
+		}
+	})
+	t.Run("an empty alias declines too", func(t *testing.T) {
+		t.Parallel()
+		m := ui.WithSaveHost(probedModel(t, fakerun.New()), func(ui.AdhocEntry) error { return nil })
+		m = press(t, update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24}), "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
+		m = press(t, m, "enter", "enter")
+		if !ui.PopupOpen(m) || !strings.Contains(m.View(), "run an unmanaged tunnel?") {
+			t.Errorf("an empty alias should offer the unmanaged run:\n%s", m.View())
+		}
+	})
+	t.Run("declining a plain connect's save is still just not saved", func(t *testing.T) {
+		t.Parallel()
+		// The question belongs to -N alone: a declined save after an
+		// interactive connect changes nothing and asks nothing.
+		m := ui.WithSaveHost(probedModel(t, fakerun.New()), func(ui.AdhocEntry) error { return nil })
+		m = press(t, update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24}), "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("root@192.0.2.99")})
+		next, _ := m.Update(keyMsg("enter"))
+		next, _ = next.(ui.Model).Update(ui.AdhocExit(nil))
+		m = next.(ui.Model)
+		if !ui.PromptingSave(m) {
+			t.Fatalf("the save offer should follow the connect:\n%s", m.View())
+		}
+		m = press(t, m, "esc")
+		if ui.PopupOpen(m) || ui.Prompting(m) || !strings.Contains(m.View(), "not saved") {
+			t.Errorf("esc should decline quietly (popup %v):\n%s", ui.PopupOpen(m), m.View())
+		}
+	})
+	t.Run("nowhere to save: the question comes at once", func(t *testing.T) {
+		t.Parallel()
+		m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 100, Height: 24}), "a")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
+		m = press(t, m, "enter")
+		if !ui.PopupOpen(m) || ui.Prompting(m) || !strings.Contains(m.View(), "run an unmanaged tunnel?") {
+			t.Errorf("without a save hook enter should ask at once:\n%s", m.View())
+		}
+	})
+	t.Run("a typed saved alias goes through the engine; a user or port beside it does not", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name    string
+			input   string
+			preview string
+			engine  bool
+		}{
+			{name: "bare alias", input: "-N ubuntu -L 8080:localhost:80", preview: "ssh -fN ubuntu ; ssh -O forward -L 8080:localhost:80 ubuntu", engine: true},
+			{name: "alias with no specs", input: "ubuntu -N", preview: "ssh -fN ubuntu", engine: true},
+			{name: "alias with a user", input: "-N root@ubuntu", engine: false},
+			{name: "alias with a port", input: "-N ubuntu:2222", engine: false},
+			{name: "not a host", input: "-N 192.0.2.99", engine: false},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu")
+				m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
+				m = press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}), "a")
+				m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.input)})
+				if tt.engine && !strings.Contains(m.View(), "→ "+tt.preview) {
+					t.Errorf("View() should preview the engine's flow:\n%s", m.View())
+				}
+				before := len(r.CallKeys())
+				next, cmd := m.Update(keyMsg("enter"))
+				m = next.(ui.Model)
+				if tt.engine {
+					if cmd == nil || ui.Prompting(m) {
+						t.Fatalf("enter: cmd %v, prompting %v; want the engine action", cmd != nil, ui.Prompting(m))
+					}
+					m = update(t, m, cmd())
+					if got := r.CallKeys()[before:]; len(got) == 0 || got[0] != "ssh -O check ubuntu" || strings.Contains(strings.Join(got, " "), "BatchMode") {
+						t.Errorf("calls = %v, want the engine's, never the raw ssh -fN", got)
+					}
+					return
+				}
+				if !ui.PromptingSave(m) || len(r.CallKeys()) != before {
+					t.Errorf("enter should save first (prompting %v, calls %v)", ui.PromptingSave(m), r.CallKeys()[before:])
+				}
+			})
+		}
+	})
 }
 
 // editModel is the tunnels fixture with the edit hook recording calls:

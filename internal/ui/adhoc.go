@@ -308,8 +308,7 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 		m.mode = promptNone
 		m.prompt.Blur()
 		if target.TunnelOnly {
-			m.notice = "starting " + strings.Join(adhocTunnelArgv(target), " ") + " …"
-			return m, adhocTunnelCmd(m.runner, target)
+			return m.startTunnelOnly(target)
 		}
 		argv := adhocArgv(target)
 		return m, tea.ExecProcess(execCommand(argv), func(err error) tea.Msg {
@@ -319,11 +318,7 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 	case promptAlias:
 		alias := strings.TrimSpace(m.prompt.Value())
 		if alias == "" {
-			m.mode = promptNone
-			m.saveThenConnect = false
-			m.prompt.Blur()
-			m.notice = "not saved"
-			return m, nil
+			return m.declineSave()
 		}
 		if problem := m.aliasProblem(alias); problem != "" {
 			m.notice = problem
@@ -346,6 +341,120 @@ func (m Model) promptSubmit() (Model, tea.Cmd) {
 	return m, nil
 }
 
+// declineSave is esc, or an empty alias, in the save prompt: nothing is
+// written. A tunnel waiting on the save (SASASH.4.17) is not started
+// behind the user's back — the choice to run it unmanaged is put up
+// front, in a popup that says what that means.
+func (m Model) declineSave() (Model, tea.Cmd) {
+	m.mode = promptNone
+	m.saveThenConnect = false
+	m.prompt.Blur()
+	if !m.tunnelFirst {
+		m.notice = "not saved"
+		return m, nil
+	}
+	m.tunnelFirst = false
+	return m.offerUnmanagedTunnel(), nil
+}
+
+// Tunnel-only ad-hoc (-N), SASASH.4.17. The 4.6 path ran `ssh -fN`
+// raw through the run seam: no ControlMaster, no state record, so the
+// tunnel was up but invisible to Status and, for a bare user@host, not
+// x/X's to stop — against SPEC §4's honesty rule. Now a target that is a
+// saved host goes through the engine like `+` (recorded, shown,
+// stoppable); an unsaved one is saved first, then goes the same way
+// through its new alias. Declining the save is honest up front: the
+// unmanaged run is offered, never silent.
+
+// savedTunnelTarget is the alias a -N target names when it IS a saved
+// host: the bare alias, as the selection supplies it or as typed. A user
+// or a port beside it makes another destination, which the alias's
+// config would not honour — that is an unsaved target.
+func (m Model) savedTunnelTarget(t adhocTarget) (string, bool) {
+	if t.User != "" || t.Port != "" {
+		return "", false
+	}
+	if _, ok := m.hostByAlias(t.Host); ok {
+		return t.Host, true
+	}
+	return "", false
+}
+
+// startTunnelOnly is enter on a -N input: the engine for a saved host,
+// the save prompt first for anything else.
+func (m Model) startTunnelOnly(t adhocTarget) (Model, tea.Cmd) {
+	if alias, ok := m.savedTunnelTarget(t); ok {
+		return m.engineTunnel(alias, t.Forwards)
+	}
+	if m.saveHost == nil {
+		// Nowhere to save: the unmanaged run is the only run, and it is
+		// still a choice.
+		return m.offerUnmanagedTunnel(), nil
+	}
+	m.tunnelFirst = true
+	m.mode = promptAlias
+	m.prompt.Reset()
+	m.prompt.Placeholder = "alias to save as — a saved host's tunnel is shown and stoppable · esc: run it unmanaged?"
+	return m, m.prompt.Focus()
+}
+
+// engineTunnel brings the ad-hoc forwards up on a saved host through the
+// engine, under the host's in-flight gate, exactly as `+` does: the
+// master first if it is down, then each spec, recorded as the ad-hoc
+// set so the tunnels pane shows it and x/X can end it.
+func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
+	if m.tunnels == nil {
+		m.notice = "tunnels are not available here — nothing started"
+		return m, nil
+	}
+	eng := m.tunnels
+	done := "master up on " + alias
+	if len(specs) > 0 {
+		done = "tunnel up on " + alias + ": " + strings.Join(specs, " ") + " — ad-hoc, in the tunnels pane"
+	}
+	m.notice = "starting " + strings.Join(engineTunnelPreview(alias, specs), " ; ") + " …"
+	return m, m.tunnelActionCmd(alias, "tunnel", done, func(ctx context.Context) error {
+		return eng.Up(ctx, alias, "", specs)
+	})
+}
+
+// engineTunnelPreview is the engine's flow for a -N as the prompt's
+// expansion line shows it: the master start, then each forward — the
+// engine's own argv, pinned to its calls like the tunnels pane's preview
+// (the check that skips a live master's start is not a step to show).
+func engineTunnelPreview(alias string, specs []string) []string {
+	steps := []string{strings.Join(startArgv(alias), " ")}
+	for _, s := range specs {
+		steps = append(steps, strings.Join(forwardArgv(alias, s), " "))
+	}
+	return steps
+}
+
+// unmanagedCleanup is how a raw `ssh -fN` is found and ended: it has no
+// ControlMaster socket for -O exit to reach.
+const unmanagedCleanup = "to stop it later: pgrep -fl 'ssh -fN' and kill that pid"
+
+// offerUnmanagedTunnel is the honest choice for a -N with no saved host
+// behind it: a confirm popup — enter runs the raw `ssh -fN` anyway, esc
+// runs nothing — that says what unmanaged means before anything starts.
+func (m Model) offerUnmanagedTunnel() Model {
+	argv := strings.Join(adhocTunnelArgv(m.pending), " ")
+	m.notice = "unmanaged tunnel: enter starts it anyway, esc cancels"
+	m = m.show("run an unmanaged tunnel? enter starts it · esc cancels",
+		argv,
+		"not saved, so it runs outside sasash: no ControlMaster, so it will not appear in the tunnels pane and x/X cannot stop it",
+		unmanagedCleanup)
+	m.popup.confirm = true
+	return m
+}
+
+// runUnmanagedTunnel is enter in that popup: the raw path, kept for this
+// one case.
+func (m Model) runUnmanagedTunnel() (Model, tea.Cmd) {
+	m.notice = "starting unmanaged " + strings.Join(adhocTunnelArgv(m.pending), " ") + " …"
+	return m, adhocTunnelCmd(m.runner, m.pending)
+}
+
 // selectedAlias is the connect prompt's default target: the selected
 // host's alias, "" with nothing selected.
 func (m Model) selectedAlias() string {
@@ -355,9 +464,9 @@ func (m Model) selectedAlias() string {
 	return ""
 }
 
-// offerSave follows an ad-hoc connect or tunnel: the alias prompt takes
-// the line when saving is wired and the target was typed; a target that
-// came from the selection is already saved. Either way the paths re-probe.
+// offerSave follows an ad-hoc connect: the alias prompt takes the line
+// when saving is wired and the target was typed; a target that came from
+// the selection is already saved. Either way the paths re-probe.
 func (m Model) offerSave() (tea.Model, tea.Cmd) {
 	if m.saveHost == nil || m.pending.FromSelection {
 		return m, probeCmd(m.prober, m.hosts)

@@ -254,6 +254,10 @@ type Model struct {
 	// connect instead of the ad-hoc flow's connect-first order.
 	saveThenConnect bool
 	offerAlias      string
+	// tunnelFirst marks a -N whose target is not saved (SASASH.4.17): the
+	// alias prompt runs first, and the saved alias carries the tunnel
+	// through the engine; a declined save offers the unmanaged run.
+	tunnelFirst bool
 	// add new tunnel: the hook that writes the meta line, and the flow's
 	// collected answers.
 	saveForwardSet func(alias, name string, specs []string) error
@@ -839,11 +843,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.offerSave()
 
 	case adhocTunnelDoneMsg:
+		// The unmanaged run (4.17): the user declined the save, so no
+		// offer follows; a success is not a one-liner — the popup says
+		// again what was run outside sasash and how to end it.
 		if msg.err != nil {
-			// ssh never ran: nothing worth saving.
 			m.notice = "ssh: " + msg.err.Error()
 			return m, probeCmd(m.prober, m.hosts)
 		}
+		argv := strings.Join(adhocTunnelArgv(m.pending), " ")
 		if !msg.res.OK() {
 			// -f cannot answer a prompt: the reason is ssh's, the hint ours.
 			// ssh echoes the destination ahead of the reason; the user
@@ -851,11 +858,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			reason := oneLineText(string(msg.res.Stderr))
 			reason = strings.TrimPrefix(reason, adhocDest(m.pending)+": ")
 			m.notice = "ssh -fN failed: " + cleanLine(reason) + " — keys/agent, or connect once"
-			m = m.show("ssh -fN failed", append([]string{strings.Join(adhocTunnelArgv(m.pending), " "), "auth must be keys or an agent (BatchMode) — or connect once without -N"}, reasonLines(errors.New(strings.TrimSpace(string(msg.res.Stderr))))...)...)
+			m = m.show("ssh -fN failed", append([]string{argv, "auth must be keys or an agent (BatchMode) — or connect once without -N"}, reasonLines(errors.New(strings.TrimSpace(string(msg.res.Stderr))))...)...)
 		} else {
-			m.notice = "tunnel up in the background"
+			m.notice = "unmanaged tunnel up — not in the tunnels pane; " + unmanagedCleanup
+			m = m.show("unmanaged tunnel up", argv, "it runs outside sasash: not in the tunnels pane, and x/X cannot stop it", unmanagedCleanup)
 		}
-		return m.offerSave()
+		return m, probeCmd(m.prober, m.hosts)
 
 	case switchDoneMsg:
 		delete(m.switching, msg.host)
@@ -898,23 +906,31 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case adhocSavedMsg:
-		offer := m.saveThenConnect
-		m.saveThenConnect = false
+		offer, tunnel := m.saveThenConnect, m.tunnelFirst
+		m.saveThenConnect, m.tunnelFirst = false, false
 		if msg.err != nil {
 			m.notice = "not saved: " + msg.err.Error()
 			return m, nil
 		}
 		m.notice = "saved " + msg.alias
+		var reload tea.Cmd
+		if m.loadHosts != nil {
+			reload = m.reloadCmd(false)
+		}
+		if tunnel {
+			// Save-first tunnel (4.17): the block is on disk, so ssh
+			// resolves the alias now; the engine brings the tunnel up
+			// through it while the list reloads.
+			next, start := m.engineTunnel(msg.alias, m.pending.Forwards)
+			return next, tea.Batch(reload, start)
+		}
 		if offer {
 			// Save-first flow: the entry is on disk; now offer the ssh.
 			m.mode, m.offerAlias = promptOffer, msg.alias
 			m.prompt.Reset()
 			m.prompt.Blur()
 		}
-		if m.loadHosts == nil {
-			return m, nil
-		}
-		return m, m.reloadCmd(false)
+		return m, reload
 
 	case hostsReloadedMsg:
 		if msg.err != nil {
@@ -995,13 +1011,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode != promptNone {
 			switch {
 			case key.Matches(msg, m.keys.ClearFilter):
-				declined := m.mode == promptAlias
+				if m.mode == promptAlias {
+					return m.declineSave()
+				}
 				m.mode = promptNone
 				m.saveThenConnect = false
 				m.prompt.Blur()
-				if declined {
-					m.notice = "not saved"
-				}
 				return m, nil
 			case msg.Type == tea.KeyEnter:
 				switch m.mode {

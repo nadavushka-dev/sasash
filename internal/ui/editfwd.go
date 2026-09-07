@@ -165,7 +165,17 @@ func (m Model) promptExpansion() string {
 		if m.mode == promptConnect {
 			selected = m.selectedAlias()
 		}
-		if t, err := parseAdhocFor(v, selected); err == nil && (anyForwardShorthand(v) || t.FromSelection) {
+		if t, err := parseAdhocFor(v, selected); err == nil {
+			// A -N on a saved host runs through the engine (4.17): its
+			// flow is what the line shows, always — it is never what
+			// was typed.
+			saved := ""
+			if t.TunnelOnly && m.mode == promptConnect {
+				saved, _ = m.savedTunnelTarget(t)
+			}
+			if saved == "" && !anyForwardShorthand(v) && !t.FromSelection {
+				return ""
+			}
 			argv := adhocArgv(t)
 			if t.TunnelOnly {
 				if m.mode == promptNewConn {
@@ -174,6 +184,9 @@ func (m Model) promptExpansion() string {
 				argv = adhocTunnelArgv(t)
 			}
 			line := strings.Join(argv, " ")
+			if saved != "" {
+				line = strings.Join(engineTunnelPreview(saved, t.Forwards), " ; ")
+			}
 			if t.FromSelection {
 				// The disclosure leads: the line's tail is what a narrow
 				// frame cuts (4.9's ellipsis), and the tail is the part

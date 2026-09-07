@@ -262,6 +262,12 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		m := ui.StaticCursor(polled(t, r, fakedial.New()))
 		m = press(t, m, "a")
 		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 8080:localhost:80 root@192.0.2.99")})
+		// Unsaved and nowhere to save (4.17): the unmanaged question, then
+		// enter proceeds with the raw run.
+		m = press(t, m, "enter")
+		if !ui.PopupOpen(m) || !strings.Contains(m.View(), "run an unmanaged tunnel?") {
+			t.Fatalf("enter on an unsaved -N should ask first:\n%s", m.View())
+		}
 		next, cmd := m.Update(keyMsg("enter"))
 		m = update(t, next.(ui.Model), cmd())
 		view := m.View()
@@ -343,15 +349,24 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		if ui.PopupOpen(m) || !strings.Contains(m.View(), "web up") {
 			t.Errorf("a successful tunnel action is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
 		}
-		// A successful ad-hoc -N too.
-		argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "root@192.0.2.99"}
-		a := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, argv...), fakedial.New()))
+		// A successful -N through the engine on the selected host too.
+		a := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", "8080:localhost:80", "ubuntu"), fakedial.New()))
 		a = press(t, a, "a")
-		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
+		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 8080:localhost:80")})
 		next, cmd = a.Update(keyMsg("enter"))
 		a = update(t, next.(ui.Model), cmd())
-		if ui.PopupOpen(a) || !strings.Contains(a.View(), "tunnel up in the background") {
-			t.Errorf("a successful -N is a one-liner: popup %v:\n%s", ui.PopupOpen(a), a.View())
+		if ui.PopupOpen(a) || !strings.Contains(a.View(), "tunnel up on ubuntu") {
+			t.Errorf("a successful engine -N is a one-liner: popup %v:\n%s", ui.PopupOpen(a), a.View())
+		}
+		// An unmanaged one is not: the popup names the cleanup (4.17).
+		argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "root@192.0.2.99"}
+		u := ui.StaticCursor(polled(t, fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, argv...), fakedial.New()))
+		u = press(t, u, "a")
+		u = update(t, u, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
+		next, cmd = press(t, u, "enter").Update(keyMsg("enter"))
+		u = update(t, next.(ui.Model), cmd())
+		if !ui.PopupOpen(u) || !strings.Contains(u.View(), "unmanaged tunnel up") || !strings.Contains(u.View(), "pgrep") {
+			t.Errorf("an unmanaged -N should say so in a popup: popup %v:\n%s", ui.PopupOpen(u), u.View())
 		}
 	})
 	t.Run("the cache popup sets the one-line form and hides the command line", func(t *testing.T) {
@@ -407,7 +422,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		a := ui.StaticCursor(polled(t, r2, fakedial.New()))
 		a = press(t, a, "a")
 		a = update(t, a, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N root@192.0.2.99")})
-		next, cmd = a.Update(keyMsg("enter"))
+		next, cmd = press(t, a, "enter").Update(keyMsg("enter")) // the unmanaged question, then proceed
 		a = update(t, next.(ui.Model), cmd())
 		if view := press(t, a, "esc").View(); strings.ContainsAny(view, "\r\t\x1b") {
 			t.Errorf("the -N one-liner should be clean:\n%s", view)

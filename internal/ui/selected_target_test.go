@@ -57,16 +57,18 @@ func TestParseAdhocFor_Table(t *testing.T) {
 
 func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 	t.Parallel()
-	t.Run("tunnel-only names the target on the line, runs it, offers no save", func(t *testing.T) {
+	t.Run("tunnel-only on the selection goes through the engine, shows in the pane, offers no save", func(t *testing.T) {
 		t.Parallel()
-		argv := []string{"ssh", "-fN", "-o", "BatchMode=yes", "-L", "1234:localhost:8080", "ubuntu"}
-		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, argv...)
+		// SASASH.4.17: the selected host is saved, so -N is `+` by another
+		// road — the engine's exact flow, recorded, so Status shows it.
+		const spec = "1234:localhost:8080"
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "forward", "-L", spec, "ubuntu")
 		m := ui.WithSaveHost(polled(t, r, fakedial.New()), func(ui.AdhocEntry) error { return nil })
 		m = ui.StaticCursor(m)
 		m = press(t, m, "a")
-		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L 1234:localhost:8080")})
-		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -fN -o BatchMode=yes -L 1234:localhost:8080 ubuntu") {
-			t.Errorf("View() should name the defaulted target before enter:\n%s", view)
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-N -L " + spec)})
+		if view := m.View(); !strings.Contains(view, "→ target: ubuntu (selected) · ssh -fN ubuntu ; ssh -O forward -L "+spec+" ubuntu") {
+			t.Errorf("View() should name the defaulted target and the engine's flow before enter:\n%s", view)
 		}
 		before := len(r.CallKeys())
 		next, cmd := m.Update(keyMsg("enter"))
@@ -76,11 +78,26 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		}
 		next, after := m.Update(cmd())
 		m = next.(ui.Model)
-		if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{fakerun.Key(argv...)}) {
-			t.Errorf("calls = %v, want %v", got, fakerun.Key(argv...))
+		// The master was alive (check exit 0), so no start: just the forward.
+		if got, want := r.CallKeys()[before:], []string{"ssh -O check ubuntu", "ssh -O forward -L " + spec + " ubuntu"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("calls = %v, want %v", got, want)
 		}
-		if ui.PromptingSave(m) || after == nil || !strings.Contains(m.View(), "tunnel up in the background") {
-			t.Errorf("after the tunnel: save prompt %v (want none), view:\n%s", ui.PromptingSave(m), m.View())
+		if ui.PromptingSave(m) || ui.PopupOpen(m) || after == nil || !strings.Contains(m.View(), "tunnel up on ubuntu: "+spec+" — ad-hoc, in the tunnels pane") {
+			t.Errorf("after the tunnel: save prompt %v (want none), popup %v, view:\n%s", ui.PromptingSave(m), ui.PopupOpen(m), m.View())
+		}
+		// The regression: the re-poll finds the recorded ad-hoc forward,
+		// and the tunnels pane shows it as an ad-hoc row with a live state
+		// (the notice on the bottom line carries the spec too: the row is
+		// the one that ends in a state).
+		m = feed(t, m, after)
+		row := ""
+		for _, l := range strings.Split(m.View(), "\n") {
+			if strings.Contains(l, spec) && strings.HasSuffix(strings.TrimSpace(l), "down") {
+				row = l
+			}
+		}
+		if row == "" || !strings.Contains(row, "ad-hoc") {
+			t.Errorf("View() after the re-poll should list the forward as an ad-hoc row (got %q):\n%s", row, m.View())
 		}
 	})
 	t.Run("handoff to the selection offers no save; a typed target still does", func(t *testing.T) {

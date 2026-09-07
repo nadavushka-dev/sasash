@@ -324,10 +324,13 @@ func oneLine(err error, host string) string {
 }
 
 // cancelCmd is x: `ssh -O cancel` for the one highlighted forward. A
-// forward that is already gone fails with ssh's own reason.
+// forward that is already gone fails with ssh's own reason. The notice
+// says what OpenSSH does (4.17): the listener closes, and connections
+// already established through it stay until they close on their own —
+// a browser's keep-alive outlives the cancel.
 func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	eng, alias, spec := m.tunnels, host.Alias, row.Spec
-	return m.tunnelActionCmd(alias, "cancel", "cancelled "+spec, func(ctx context.Context) error {
+	return m.tunnelActionCmd(alias, "cancel", "cancelled "+spec+" — open connections stay until they close", func(ctx context.Context) error {
 		return eng.Cancel(ctx, alias, spec)
 	})
 }

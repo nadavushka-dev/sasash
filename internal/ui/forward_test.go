@@ -242,7 +242,9 @@ func TestModel_Update_CancelHighlighted(t *testing.T) {
 		reply      fakerun.Reply
 		wantNotice string
 	}{
-		{name: "cancel runs for the one row", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNotice: "cancelled " + specWeb0},
+		// The notice says what OpenSSH does (4.17): the listener is gone,
+		// connections already established through it are not.
+		{name: "cancel runs for the one row", reply: fakerun.Reply{Result: run.Result{Code: 0}}, wantNotice: "cancelled " + specWeb0 + " — open connections stay until they close"},
 		{name: "already gone reports ssh's reason", reply: fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("unknown port forwarding")}}, wantNotice: "cancel: unknown port forwarding"},
 	}
 	for _, tt := range tests {
