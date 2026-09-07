@@ -53,7 +53,7 @@ func TestModel_View_SettingsIsACenteredBox(t *testing.T) {
 	// Centered both ways: as wide as its rows, not the frame, with the
 	// same room on either side and above as below (within rounding).
 	left, right, above, below := boxMargins(t, view, 100)
-	if left < 20 || right < 20 || left-right > 1 || right-left > 1 {
+	if left < 10 || right < 10 || left-right > 1 || right-left > 1 {
 		t.Errorf("box not centered horizontally: %d left, %d right:\n%s", left, right, view)
 	}
 	if above < 3 || below < 3 || above-below > 1 || below-above > 1 {
@@ -67,7 +67,7 @@ func TestModel_View_SettingsIsACenteredBox(t *testing.T) {
 	}
 	// The keys panel and the attention popup float in the same box: the
 	// panel is taller than the frame here, so it is centered sideways.
-	if left, right, _, _ := boxMargins(t, press(t, wide(t), "?").View(), 100); left < 10 || right < 10 || left-right > 1 || right-left > 1 {
+	if left, right, _, _ := boxMargins(t, press(t, wide(t), "?").View(), 100); left < 1 || right < 1 || left-right > 1 || right-left > 1 {
 		t.Errorf("keys panel not centered horizontally: %d left, %d right", left, right)
 	}
 	f, _ := failedForward(t)
@@ -166,6 +166,13 @@ func TestModel_View_SettingsSetupRowsReachableOnAShortFrame(t *testing.T) {
 		view := short.View()
 		if !strings.Contains(view, want) || !strings.Contains(view, "enter writes") || !strings.Contains(view, "of 3 · j/k scroll") {
 			t.Errorf("View() at row %d should show %q with the footer and the hint:\n%s", i, want, view)
+		}
+		// The bottom line is longer than the frame here: clamped, so the
+		// box never outgrows the terminal.
+		for j, l := range strings.Split(view, "\n") {
+			if w := lipgloss.Width(l); w > 80 {
+				t.Errorf("View() at row %d, line %d width = %d, want <= 80", i, j, w)
+			}
 		}
 		for j, other := range pieces {
 			if j != i && strings.Contains(view, other) {

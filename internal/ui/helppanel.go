@@ -100,15 +100,15 @@ func (m Model) helpLines() []popupLine {
 		if i > 0 {
 			out = append(out, popupLine{})
 		}
-		out = append(out, popupLine{text: m.styles.SectionLabel.Render(g.name), plain: g.name, heading: true})
+		out = append(out, popupLine{text: m.styles.BoxHeading.Render(g.name), plain: g.name, heading: true})
 		for _, b := range g.keys {
 			h := b.Help()
-			out = append(out, popupLine{text: m.styles.HelpKey.Render(padRight(h.Key, width)) + "  " + m.styles.HelpDesc.Render(h.Desc), plain: h.Key + "  " + h.Desc})
+			out = append(out, popupLine{text: m.styles.BoxKey.Render(padRight(h.Key, width)) + "  " + m.styles.BoxDesc.Render(h.Desc), plain: h.Key + "  " + h.Desc})
 		}
 	}
 	if line := actionsLine(m.actions); line != "" {
 		line = strings.TrimSpace(line)
-		out = append(out, popupLine{}, popupLine{text: m.styles.SectionLabel.Render("actions.toml"), plain: "actions.toml", heading: true}, popupLine{text: line, plain: line})
+		out = append(out, popupLine{}, popupLine{text: m.styles.BoxHeading.Render("actions.toml"), plain: "actions.toml", heading: true}, popupLine{text: line, plain: line})
 	}
 	return out
 }

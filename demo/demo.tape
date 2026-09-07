@@ -39,6 +39,17 @@ Escape
 Sleep 300ms
 Escape
 Sleep 500ms
+Type "t"
+Sleep 500ms
+Type "o"
+Sleep 1s
+Screenshot demo/out/frame-settings-mocha.png
+Type "j"
+Sleep 800ms
+Escape
+Sleep 300ms
+Type "ttt"
+Sleep 500ms
 Type "?"
 Sleep 1.5s
 Screenshot demo/out/frame-keys.png

@@ -313,12 +313,32 @@ func (m Model) settingsView() string {
 	}
 	switch h := m.settings.find.hint(); {
 	case h != "":
-		bottom = append(bottom, m.styles.CmdPreview.Render(h))
+		bottom = append(bottom, m.styles.BoxQuery.Render(h))
 	case foot != "":
 		bottom = append(bottom, foot)
 	}
-	return m.box(m.styles.SectionLabel.Render(title), rows[offset:end], strings.Join(bottom, helpSeparator))
+	// The bottom line is always there, so the frame's height does not
+	// change when a search or a footer appears.
+	line := strings.Join(bottom, helpSeparator)
+	if line == "" {
+		line = " "
+	}
+	width := settingsBoxWidth
+	if m.settings.pane == settingsSetup {
+		width = 0 // the confirmation is as wide as the pieces it lists
+	}
+	return m.box(m.styles.BoxTitle.Render(title), rows[offset:end], line, false, width, min(settingsBoxRows, room))
 }
+
+// The settings box's fixed frame (4.15): as wide as the menu's longest
+// row with room to spare, as tall as the menu, clamped to the frame —
+// so the box does not move as a search narrows the entries, a picker
+// opens or between visits; the rows scroll or pad inside it. The setup
+// confirmation alone takes the width its pieces need.
+const (
+	settingsBoxWidth = 60
+	settingsBoxRows  = entryCount
+)
 
 // settingsContent is the open pane as the box shows it: title, rows,
 // the row index to keep in view (-1 when none is highlighted) and the
@@ -328,19 +348,23 @@ func (m Model) settingsView() string {
 func (m Model) settingsContent() (title string, rows []string, cursor int, foot string) {
 	s := m.settings
 	cursor = -1
-	mark := func(i, cur int) string {
+	// The highlighted row is the list's selected row: the mark, then the
+	// label in accent over the selection fill (4.15); the others plain.
+	label := func(i, cur int, text string) string {
 		if i == cur {
-			return m.styles.RowMark.Render("› ")
+			return m.styles.RowMark.Render("› ") + m.styles.ItemSelected.Render(text)
 		}
-		return "  "
+		return "  " + m.styles.PathName.Render(text)
 	}
 	switch s.pane {
 	case settingsMenu:
 		title = "settings"
+		// A live value (the theme, the target) in the secondary accent;
+		// the config path is a location, dim.
 		detail := [entryCount]string{
-			entryEdit:  m.underHome(m.confPath),
-			entryTheme: Themes[m.themeIdx].Name,
-			entrySpawn: m.spawnTarget() + " (" + m.spawn.where(m.spawnTarget()) + ")",
+			entryEdit:  m.styles.PathExtra.Render(m.underHome(m.confPath)),
+			entryTheme: m.styles.BoxValue.Render(Themes[m.themeIdx].Name),
+			entrySpawn: m.styles.BoxValue.Render(m.spawnTarget()) + " " + m.styles.PathExtra.Render("("+m.spawn.where(m.spawnTarget())+")"),
 		}
 		hits := m.settingsMatches()
 		if len(hits) == 0 {
@@ -350,9 +374,9 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 			if i == s.cursor {
 				cursor = at
 			}
-			row := mark(i, s.cursor) + m.styles.PathName.Render(entryLabels[i])
+			row := label(i, s.cursor, entryLabels[i])
 			if detail[i] != "" {
-				row += "  " + m.styles.PathExtra.Render(detail[i])
+				row += "  " + detail[i]
 			}
 			rows = append(rows, row)
 		}
@@ -386,30 +410,31 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 		case s.status != nil && s.status.Done():
 			foot = m.styles.Empty.Render("already set up — nothing to write; esc back")
 		case s.status != nil:
-			foot = m.styles.Empty.Render("enter writes the missing pieces (atomically, nothing else touched) · esc back")
+			foot = m.styles.Empty.Render("enter writes the missing pieces, nothing else touched · esc back")
 		}
 	case settingsSpawn:
 		title = "spawn target — where enter opens the connection; enter applies and persists"
 		cursor = s.cursor
 		for i, t := range SpawnTargets {
-			glyph := m.styles.StatusDown.Render("○")
+			// ● in effect, ○ not — a choice, not a failure, so dim.
+			glyph := m.styles.BoxOff.Render("○")
 			if t == m.spawnTarget() {
 				glyph = m.styles.StatusUp.Render("●")
 			}
-			rows = append(rows, mark(i, s.cursor)+glyph+" "+m.styles.PathName.Render(t)+"  "+m.styles.PathExtra.Render("herdr "+t+" · tmux "+tmuxWord(t)))
+			rows = append(rows, label(i, s.cursor, glyph+" "+t)+"  "+m.styles.PathExtra.Render("herdr "+t+" · tmux "+tmuxWord(t)))
 		}
 		if m.spawn.mux == MuxNone {
-			foot = m.styles.Empty.Render("no herdr or tmux around this terminal: enter uses the OS-window template, or hands off")
+			foot = m.styles.Empty.Render("no herdr or tmux here: enter uses the OS window, or hands off")
 		}
 	case settingsTheme:
 		title = "theme — enter applies and persists"
 		cursor = s.cursor
 		for i, t := range Themes {
-			glyph := m.styles.StatusDown.Render("○")
+			glyph := m.styles.BoxOff.Render("○")
 			if i == m.themeIdx {
 				glyph = m.styles.StatusUp.Render("●")
 			}
-			rows = append(rows, mark(i, s.cursor)+glyph+" "+m.styles.PathName.Render(t.Name))
+			rows = append(rows, label(i, s.cursor, glyph+" "+t.Name))
 		}
 	}
 	return title, rows, cursor, foot

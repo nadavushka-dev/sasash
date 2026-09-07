@@ -182,16 +182,30 @@ const boxChrome = 5
 // narrow frame, ugly but whole. A search narrows the rows first; no
 // match is said, not shown as an empty box.
 func (m Model) popupBody() []string {
-	var out []string
-	if m.popup.prior != "" {
-		out = append(out, m.styles.PathExtra.Render("(replaced: "+m.popup.prior+")"))
-	}
 	rows := m.popup.visible()
 	if len(rows) == 0 && m.popup.find.query != "" {
-		return append(out, m.styles.Empty.Render(noMatch(m.popup.find.query)))
+		return append(m.popupPrior(), m.styles.Empty.Render(noMatch(m.popup.find.query)))
 	}
-	// Width wraps AND pads; the padding goes, so the box is as wide as
-	// its longest row, not the frame, and can float centered.
+	return m.popupWrap(rows)
+}
+
+// popupFrame is the whole content wrapped — what the box is sized by, so
+// a search narrows the rows inside a frame that does not move (4.15).
+func (m Model) popupFrame() []string { return m.popupWrap(m.popup.lines) }
+
+// popupPrior is the line naming the popup this one replaced, if any.
+func (m Model) popupPrior() []string {
+	if m.popup.prior == "" {
+		return nil
+	}
+	return []string{m.styles.PathExtra.Render("(replaced: " + m.popup.prior + ")")}
+}
+
+// popupWrap is rows as lines wrapped to the box width, the prior line
+// first. Width wraps AND pads; the padding goes, so the box is as wide
+// as its longest row, not the frame, and can float centered.
+func (m Model) popupWrap(rows []popupLine) []string {
+	out := m.popupPrior()
 	wrap := lipgloss.NewStyle().Width(m.boxWidth())
 	for _, l := range rows {
 		for _, w := range strings.Split(wrap.Render(l.text), "\n") {
@@ -257,33 +271,60 @@ func (m Model) popupView() string {
 	room := m.popupRoom()
 	p := m.popup
 	offset := min(max(p.offset, 0), max(len(body)-room, 0))
-	glyph, title := p.glyph, m.styles.Notice
+	glyph, title := p.glyph, m.styles.BoxTitleWarn
 	if glyph == "" {
 		glyph = "!"
 	} else {
-		title = m.styles.SectionLabel // a reference, not a warning
+		title = m.styles.BoxTitle // a reference, not a warning
 	}
 	end := min(offset+room, len(body))
 	var hint []string
 	if h := p.find.hint(); h != "" {
-		hint = append(hint, m.styles.CmdPreview.Render(h))
+		hint = append(hint, m.styles.BoxQuery.Render(h))
 	}
 	if len(body) > room {
 		hint = append(hint, m.styles.PathExtra.Render(scrollHint(offset, end, len(body), p.find.typing)))
 	}
-	return m.box(title.Render(glyph+" "+p.title), body[offset:end], strings.Join(hint, helpSeparator))
+	// The frame is the whole content's: as wide as its widest line (or
+	// the bottom line, on a narrow popup), as tall as it is up to the
+	// room, whatever the search leaves inside; the bottom line is always
+	// there, so a search hint does not add a row.
+	line := strings.Join(hint, helpSeparator)
+	if line == "" {
+		line = " "
+	}
+	frame := m.popupFrame()
+	width := lipgloss.Width(line) - 1
+	for _, l := range frame {
+		width = max(width, lipgloss.Width(l))
+	}
+	return m.box(title.Render(glyph+" "+p.title), body[offset:end], line, p.glyph == "", width, min(len(frame), room))
 }
 
 // box draws the popup frame the attention popup, the keys panel and the
 // settings menu share: a bordered, palette-styled box — the title, a
 // blank, the rows indented, and a bottom line when there is one — that
-// the view centers in the body. The title is clamped to the content
-// width so a long one cannot widen the box past the frame; on a frame
-// too short for even one row under the chrome, the blank goes first,
-// then the border.
-func (m Model) box(title string, rows []string, bottom string) string {
+// the view centers in the body. The border is the theme's accent, or
+// its warning color for an alert (the ! title says so without color).
+// The frame is fixed by width and height (4.15): rows are padded to
+// height and each padded or cut to width, so the box does not move as
+// its content changes; both are clamped to the frame, and zero means
+// the content's own. The title is clamped to the content width so a
+// long one cannot widen the box past the frame; on a frame too short
+// for even one row under the chrome, the blank goes first, then the
+// border.
+func (m Model) box(title string, rows []string, bottom string, alert bool, width, height int) string {
 	w := m.boxWidth()
+	if width > 0 {
+		w = min(width, w)
+	}
+	fixed := lipgloss.NewStyle().Width(w).MaxWidth(w)
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
 	var b strings.Builder
+	// The title and the bottom line span the rows' width and the border's
+	// padding: clamped there, they cannot widen a fixed box.
 	b.WriteString(m.styles.Clamp.MaxWidth(w + 2).Render(" " + title))
 	tall := 3 + len(rows) // the border and the title
 	if bottom != "" {
@@ -293,12 +334,18 @@ func (m Model) box(title string, rows []string, bottom string) string {
 		b.WriteString("\n")
 	}
 	for _, l := range rows {
+		if width > 0 {
+			l = fixed.Render(l)
+		}
 		b.WriteString("\n   " + l)
 	}
 	if bottom != "" {
 		b.WriteString("\n " + m.styles.Clamp.MaxWidth(w+2).Render(bottom))
 	}
 	style := m.styles.Popup
+	if alert {
+		style = m.styles.PopupAlert
+	}
 	if m.contentHeight() < boxChrome {
 		// Too short for the border to leave a row: the panel goes bare
 		// rather than showing a frame around nothing.

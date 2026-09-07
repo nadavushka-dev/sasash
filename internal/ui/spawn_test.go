@@ -451,7 +451,7 @@ func TestModel_Update_SettingsSpawnTarget(t *testing.T) {
 		t.Errorf("View() entry without a template should say handoff:\n%s", view)
 	}
 	m = press(t, m, "g", "j", "j", "j", "enter")
-	if view := m.View(); !strings.Contains(view, "no herdr or tmux around this terminal") {
+	if view := m.View(); !strings.Contains(view, "no herdr or tmux here") {
 		t.Errorf("View() picker without a multiplexer should say so:\n%s", view)
 	}
 	m = spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: darwinWindow}, nil)

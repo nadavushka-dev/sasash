@@ -214,6 +214,12 @@ func TestModel_View_EveryThemeEveryState(t *testing.T) {
 		{name: "filter applied", keys: []string{"/", "a", "l", "p", "enter"}, want: "/alp"},
 		{name: "no match", keys: []string{"/", "z", "z"}, want: "no hosts match"},
 		{name: "full help", keys: []string{"?"}, want: "? keys — ? q esc closes"},
+		{name: "help search", keys: []string{"?", "/", "yank"}, want: "/yank▏"},
+		{name: "settings menu", keys: []string{"o"}, want: "› create config file"},
+		{name: "settings search", keys: []string{"o", "/", "th"}, want: "› theme"},
+		{name: "settings no match", keys: []string{"o", "/", "zz"}, want: "no match for /zz"},
+		{name: "theme picker", keys: []string{"o", "j", "j", "enter"}, want: "theme — enter applies"},
+		{name: "spawn picker", keys: []string{"o", "j", "j", "j", "enter"}, want: "spawn target"},
 		{name: "notice", keys: []string{"t"}, want: "theme:"},
 	}
 	for _, th := range ui.Themes {

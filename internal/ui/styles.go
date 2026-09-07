@@ -41,7 +41,21 @@ type Styles struct {
 
 	Empty lipgloss.Style // empty-state sentence
 	Clamp lipgloss.Style // colorless layout style for width truncation
-	Popup lipgloss.Style // the centered popup's box: a border, no fill
+
+	// The popup family (SASASH.4.15): the box is the theme's signature
+	// — accent border and title for a reference (settings, the keys
+	// panel), the warning color for an attention popup — so the two kinds
+	// read apart by color as they do by their ! and ? glyphs.
+	Popup        lipgloss.Style // reference box: accent border, no fill
+	PopupAlert   lipgloss.Style // attention box: warning border
+	BoxTitle     lipgloss.Style // reference title, bold accent
+	BoxTitleWarn lipgloss.Style // attention title, bold warning
+	BoxHeading   lipgloss.Style // a group heading inside the box
+	BoxKey       lipgloss.Style // a key in a keys-panel row
+	BoxDesc      lipgloss.Style // its description
+	BoxValue     lipgloss.Style // a live value beside a menu entry (theme, target)
+	BoxQuery     lipgloss.Style // the / search as typed
+	BoxOff       lipgloss.Style // the ○ of a picker choice not in effect
 }
 
 // NewStyles materializes the widget styles for one theme.
@@ -77,6 +91,16 @@ func NewStyles(p Palette) Styles {
 
 		Empty: lipgloss.NewStyle().Foreground(p.FgDim),
 		Clamp: lipgloss.NewStyle(),
-		Popup: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.FgDim).PaddingRight(1),
+
+		Popup:        lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Accent).PaddingRight(1),
+		PopupAlert:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Warning).PaddingRight(1),
+		BoxTitle:     lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
+		BoxTitleWarn: lipgloss.NewStyle().Foreground(p.Warning).Bold(true),
+		BoxHeading:   lipgloss.NewStyle().Foreground(p.Accent),
+		BoxKey:       lipgloss.NewStyle().Foreground(p.Accent2).Bold(true),
+		BoxDesc:      lipgloss.NewStyle().Foreground(p.Fg),
+		BoxValue:     lipgloss.NewStyle().Foreground(p.Accent2),
+		BoxQuery:     lipgloss.NewStyle().Foreground(p.Accent2).Bold(true),
+		BoxOff:       lipgloss.NewStyle().Foreground(p.FgDim),
 	}
 }
