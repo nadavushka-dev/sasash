@@ -167,8 +167,12 @@ func TestModel_View_SettingsSetupRowsReachableOnAShortFrame(t *testing.T) {
 		if !strings.Contains(view, want) || !strings.Contains(view, "enter writes") || !strings.Contains(view, "of 3 · j/k scroll") {
 			t.Errorf("View() at row %d should show %q with the footer and the hint:\n%s", i, want, view)
 		}
-		// The bottom line is longer than the frame here: clamped, so the
-		// box never outgrows the terminal.
+		// The bottom line is longer than the frame here: clamped inside
+		// the box, so the box keeps its right border (the view's own
+		// clamp would otherwise cut the corners off).
+		if !strings.Contains(view, "╮") || !strings.Contains(view, "╯") {
+			t.Errorf("View() at row %d lost the box's right corners:\n%s", i, view)
+		}
 		for j, l := range strings.Split(view, "\n") {
 			if w := lipgloss.Width(l); w > 80 {
 				t.Errorf("View() at row %d, line %d width = %d, want <= 80", i, j, w)
