@@ -119,6 +119,35 @@ func TestRenameHost_KeptCache(t *testing.T) {
 	}
 }
 
+func TestRenameHost_LeftoverUnderTheNewName(t *testing.T) {
+	t.Parallel()
+	// An earlier host's history under the new name is not overwritten:
+	// both files stay, and the report names them.
+	dir := t.TempDir()
+	confPath := filepath.Join(dir, "sasash.conf")
+	if err := os.WriteFile(confPath, []byte("Host old\n  HostName 192.0.2.7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "state")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"old.stats.json", "new.stats.json"} {
+		if err := os.WriteFile(filepath.Join(state, f), []byte(f), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := renameHost(confPath, state)("old", "new")
+	if !errors.Is(err, ui.ErrCacheKept) || !strings.Contains(err.Error(), "new.stats.json exists: ") || !strings.Contains(err.Error(), "old.stats.json left in place") {
+		t.Errorf("renameHost() err = %v, want ErrCacheKept naming both files", err)
+	}
+	for _, f := range []string{"old.stats.json", "new.stats.json"} {
+		if got, _ := os.ReadFile(filepath.Join(state, f)); string(got) != f {
+			t.Errorf("%s = %q, want untouched", f, got)
+		}
+	}
+}
+
 func TestRenameHost_UnreadableConf(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

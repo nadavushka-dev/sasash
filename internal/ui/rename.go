@@ -20,9 +20,10 @@ import (
 // wired by the cmd layer — and esc cancels. Only a block in sasash.conf
 // is sasash's to rename: an ambient host is pointed at e, a pinned
 // variant at its parent (a parent's rename carries its variants along).
-// A running master is not touched — its socket is keyed by the OLD
-// connection params — so it keeps working and the next connect uses the
-// new alias; the notice says so.
+// A running master is not touched — and with sasash's ControlPath
+// (~/.ssh/cm/%C, a hash of HostName, port and user, none of which a
+// rename changes) the same socket answers under the new alias at the
+// next poll; the notice says so.
 
 // ErrCacheKept marks a rename that reached sasash.conf but could not
 // move a state-cache file: the host IS renamed (the list reloads), and
@@ -58,10 +59,13 @@ func (m Model) openRename() (Model, tea.Cmd) {
 	}
 	if !m.inConf(host) {
 		// Managed in the list's eyes or not, the block is not in the one
-		// file sasash writes.
-		where := "by hand (e)"
+		// file sasash writes. e is named only when it works.
+		where := "by hand"
 		if host.File != "" {
-			where = "in " + host.File + " yourself (e)"
+			where = "in " + host.File + " yourself"
+		}
+		if len(m.editor) > 0 && m.confPath != "" {
+			where += " (e)"
 		}
 		m.notice = alias + " is not in sasash.conf — rename it " + where
 		return m, nil
@@ -149,8 +153,8 @@ func (m Model) submitRename() (Model, tea.Cmd) {
 // the cursor stays on its row, and the reload then keeps the selection
 // by the NEW alias — and the config is re-read so the panes show the
 // file as written. The line says the rename; when there is more to
-// tell (blocks that did not follow, a cache that stayed) the popup
-// carries it, with the live-master caveat.
+// tell (blocks that did not follow, a cache that stayed, a master up)
+// the popup carries it, with why the master follows.
 func (m Model) renamed(msg renameDoneMsg) (Model, tea.Cmd) {
 	delete(m.tinflight, msg.old) // the gate held since enter, whatever the outcome
 	if msg.err != nil && !errors.Is(msg.err, ErrCacheKept) {
@@ -172,9 +176,9 @@ func (m Model) renamed(msg renameDoneMsg) (Model, tea.Cmd) {
 	m.fold.variants = computeVariants(m.hosts)
 	m.fold.hidden = hiddenSet(m.hosts)
 	// A master up under the old alias is not touched: its socket is
-	// keyed by the old connection params. Said on the line when it is
-	// known to be running — the pane keeps showing it as the old name
-	// until it exits.
+	// keyed by the connection (%C), which the rename leaves as it was,
+	// so the next poll finds it under the new alias. Said on the line
+	// when it is known to be running.
 	ts, known := m.tstatus[msg.old]
 	masterUp := known && ts.err == nil && ts.status.Master
 	delete(m.blocks, msg.old)
@@ -184,7 +188,7 @@ func (m Model) renamed(msg renameDoneMsg) (Model, tea.Cmd) {
 		m.reselect = msg.new // under a filter the match set lands later
 	}
 	m.notice = renameNotice(msg, masterUp)
-	if len(msg.res.LeftAsIs) > 0 || msg.err != nil {
+	if len(msg.res.LeftAsIs) > 0 || msg.err != nil || masterUp {
 		m = m.show("renamed "+msg.old+" → "+msg.new, renameLines(msg)...)
 	}
 	if m.loadHosts != nil {
@@ -194,14 +198,14 @@ func (m Model) renamed(msg renameDoneMsg) (Model, tea.Cmd) {
 }
 
 // renameNotice is the one line: the rename, the fan-out count, and the
-// master caveat only when a master is up.
+// master's fate only when one is up.
 func renameNotice(msg renameDoneMsg, masterUp bool) string {
 	s := "renamed " + msg.old + " → " + msg.new
 	if n := len(msg.res.Followed); n > 0 {
 		s += fmt.Sprintf(" (%d %s followed)", n, plural(n, "variant"))
 	}
 	if masterUp {
-		s += " — master still up as " + msg.old + " until it exits"
+		s += " — the master follows"
 	}
 	return s
 }
@@ -221,7 +225,7 @@ func renameLines(msg renameDoneMsg) []string {
 		lines = append(lines, cleanLine(msg.err.Error()), "  (what did not move stays under "+msg.old+")")
 	}
 	return append(lines, "",
-		"a running master is not touched: its socket is keyed by the old",
-		"connection, so it keeps working under "+msg.old+" until it exits;",
-		"the next connect uses "+msg.new)
+		"a running master is not restarted; with sasash's ControlPath (~/.ssh/cm/%C)",
+		"its socket is keyed by the connection, so the same master answers under",
+		msg.new+" at the next poll — an alias-keyed ControlPath would need a reconnect")
 }

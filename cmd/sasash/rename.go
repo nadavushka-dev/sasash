@@ -32,10 +32,19 @@ func renameHost(confPath, stateDir string) func(old, new string) (pathswitch.Ren
 			return res, err
 		}
 		// Every cache is tried: one failing must not leave the next
-		// orphaned under the old name; the report names what stayed.
+		// orphaned under the old name; the report names what stayed. A
+		// leftover under the new name (the observed history of some
+		// earlier host) is never overwritten — both are kept and said.
 		var kept []error
 		for _, cr := range pathswitch.CacheRenames(stateDir, old, new) {
-			if err := os.Rename(cr.From, cr.To); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			if _, err := os.Lstat(cr.From); errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if _, err := os.Lstat(cr.To); err == nil {
+				kept = append(kept, fmt.Errorf("%s exists: %s left in place", cr.To, cr.From))
+				continue
+			}
+			if err := os.Rename(cr.From, cr.To); err != nil {
 				kept = append(kept, err)
 			}
 		}

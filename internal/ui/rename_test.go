@@ -59,7 +59,7 @@ func webGroup() []hostmodel.Host {
 // hook wired.
 func renameModel(t *testing.T, hosts []hostmodel.Host, h *renameHook) ui.Model {
 	t.Helper()
-	m := ui.WithEditor(sized(t, hosts), nil, "", renameConf)
+	m := ui.WithEditor(sized(t, hosts), []string{"vi"}, "", renameConf)
 	return ui.WithRenameHost(m, h.rename)
 }
 
@@ -117,13 +117,18 @@ func TestModel_Rename_PromptPrefilledAndEscCancels(t *testing.T) {
 func TestModel_Rename_RefusedRows(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name   string
-		hosts  []hostmodel.Host
-		hook   bool
-		keys   []string
-		notice string
+		name     string
+		hosts    []hostmodel.Host
+		hook     bool
+		noEditor bool
+		keys     []string
+		notice   string
 	}{
 		{name: "no hook", hosts: testHosts(1), keys: []string{"R"}, notice: "renaming is not available"},
+		{name: "without an editor e is not named", hook: true, noEditor: true,
+			hosts:  []hostmodel.Host{{Alias: "other", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.9"}}, File: ambientFile}},
+			keys:   []string{"R"},
+			notice: "other is not in sasash.conf — rename it in " + ambientFile + " yourself\n"},
 		{name: "ambient row points at e", hook: true,
 			hosts:  []hostmodel.Host{managedHost("web"), {Alias: "other", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.9"}}, File: ambientFile}},
 			keys:   []string{"G", "R"},
@@ -144,7 +149,11 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			h := &renameHook{}
-			m := ui.WithEditor(sized(t, tt.hosts), nil, "", renameConf)
+			editor := []string{"vi"}
+			if tt.noEditor {
+				editor = nil
+			}
+			m := ui.WithEditor(sized(t, tt.hosts), editor, "", renameConf)
 			if tt.hook {
 				m = ui.WithRenameHost(m, h.rename)
 			}
@@ -291,12 +300,12 @@ func TestModel_Rename_Renamed(t *testing.T) {
 	view := m.View()
 	// The line says the rename; the popup tells the rest, the
 	// live-master caveat included.
-	for _, want := range []string{"renamed web → srv (2 variants followed)", "pinned variants followed: lan, wan", "dotted blocks left as-is: web.old", "rename them by hand, e", "keeps working under web until it exits", "the next connect uses srv"} {
+	for _, want := range []string{"renamed web → srv (2 variants followed)", "pinned variants followed: lan, wan", "dotted blocks left as-is: web.old", "rename them by hand, e", "the same master answers under", "srv at the next poll"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
 	}
-	if !ui.PopupOpen(m) || strings.Contains(view, "master still up") {
+	if !ui.PopupOpen(m) || strings.Contains(view, "the master follows") {
 		t.Errorf("the popup should carry the story (open %v); no master was up:\n%s", ui.PopupOpen(m), view)
 	}
 	m = press(t, m, "esc")
@@ -360,8 +369,8 @@ func TestModel_Rename_MasterUpIsSaid(t *testing.T) {
 	m = press(t, m, "R", "ctrl+u", "srv")
 	m, msgs := submit(t, m)
 	m = update(t, m, msgs[0])
-	if view := m.View(); ui.PopupOpen(m) || !strings.Contains(view, "renamed web → srv (2 variants followed) — master still up as web until it exits") {
-		t.Errorf("a live master should be said on the line, no popup (open %v):\n%s", ui.PopupOpen(m), view)
+	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "renamed web → srv (2 variants followed) — the master follows") || !strings.Contains(view, "the same master answers under") || !strings.Contains(view, "srv at the next poll") {
+		t.Errorf("a live master should be said on the line and explained in the popup (open %v):\n%s", ui.PopupOpen(m), view)
 	}
 }
 
