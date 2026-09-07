@@ -1,10 +1,9 @@
 // Package fwdset declares durable forward sets: it adds exactly one
 // `# @sasash forwards <name> <spec>...` line to a host's own meta run in
 // sasash.conf (CONTRACT-fwdset), rewrites one spec of it, or removes the
-// line again. It writes DESIRE only — starting the
-// tunnel is space / `+` / `sasash up`'s job — and follows the write
-// invariants: re-read at call time, atomic write, byte-identity outside
-// the inserted line.
+// line again. It writes DESIRE only — starting the tunnel is space / `+` /
+// `sasash up`'s job — and follows the write invariants: re-read at call
+// time, atomic write, byte-identity outside the touched line.
 package fwdset
 
 import (
