@@ -190,6 +190,14 @@ func TestModel_Update_SettingsSearch(t *testing.T) {
 			t.Errorf("View() after /th should show only theme, highlighted, with the query:\n%s", view)
 		}
 	})
+	t.Run("the scroll hint names the arrows while typing", func(t *testing.T) {
+		t.Parallel()
+		// A two-row box with five matches: j/k are text, the arrows move.
+		m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 11}), "o", "/", "n")
+		if view := m.View(); !strings.Contains(view, "of 5 · ↑/↓ scroll") || strings.Contains(view, "j/k scroll") {
+			t.Errorf("View() while typing should name the arrows in the hint:\n%s", view)
+		}
+	})
 	t.Run("a space is text: the search spans words", func(t *testing.T) {
 		t.Parallel()
 		if view := press(t, wide(t), "o", "/", "new", " ", "c").View(); !strings.Contains(view, "› add new connection") || strings.Contains(view, "add new tunnel") || !strings.Contains(view, "/new c▏") {
