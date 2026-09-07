@@ -57,12 +57,20 @@ func Rename(confPath, old, new string) (RenameResult, error) {
 	if !ok {
 		return RenameResult{}, fmt.Errorf("host %q not managed by sasash", old)
 	}
-	for _, b := range f.Hosts() {
-		for _, p := range b.Patterns {
-			if p == new {
-				return RenameResult{}, fmt.Errorf("alias %q already exists", new)
+	// A name is taken by ANY pattern of ANY block: a host reachable under
+	// two names is shadowed just the same.
+	taken := func(name string) bool {
+		for _, b := range f.Hosts() {
+			for _, p := range b.Patterns {
+				if p == name {
+					return true
+				}
 			}
 		}
+		return false
+	}
+	if taken(new) {
+		return RenameResult{}, fmt.Errorf("alias %q already exists", new)
 	}
 
 	raw := make([]string, f.Len())
@@ -87,7 +95,7 @@ func Rename(confPath, old, new string) (RenameResult, error) {
 		// generated "<new>.<name>" above a user's block of that name would
 		// shadow it under first-value-wins — a touched host by a semantic
 		// route, which byte-identity alone cannot see.
-		if _, taken := f.Host(new + "." + suffix); taken {
+		if taken(new + "." + suffix) {
 			return RenameResult{}, fmt.Errorf("alias %q already exists", new+"."+suffix)
 		}
 		raw[b.Start] = renameToken(f.Line(b.Start), b.Name(), new+"."+suffix)

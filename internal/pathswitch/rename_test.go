@@ -87,7 +87,10 @@ func TestRename_ExactBytes(t *testing.T) {
 			if !ok {
 				t.Fatalf("Host(%q) after Rename = missing", "srv")
 			}
-			in, _ := sshconf.Parse(path, []byte(tt.in)).Host("web")
+			in, ok := sshconf.Parse(path, []byte(tt.in)).Host("web")
+			if !ok {
+				t.Fatalf("Host(%q) in the input = missing", "web")
+			}
 			if len(h.Patterns) != len(in.Patterns) {
 				t.Errorf("patterns after Rename = %v, want %d as before", h.Patterns, len(in.Patterns))
 			}
@@ -311,6 +314,17 @@ func TestRename_FanOutCollisionRefused(t *testing.T) {
 		t.Errorf("Rename() = %v, want error containing %q", err, `alias "prod.lan" already exists`)
 	}
 	if got := read(t, path); got != in {
+		t.Errorf("file after a rejected Rename = %q, want untouched", got)
+	}
+	// The same through a block reachable under two names: the created
+	// name is checked against every pattern, as new itself is.
+	in2 := "Host web\n  HostName 192.0.2.10\n\n" + pathswitch.Header + "\nHost web.lan\n  HostName 192.0.2.10\n# my own bastion, reachable under both names\nHost bastion prod.lan\n  HostName 203.0.113.9\n"
+	path2 := write(t, in2)
+	_, err = pathswitch.Rename(path2, "web", "prod")
+	if err == nil || !strings.Contains(err.Error(), `alias "prod.lan" already exists`) {
+		t.Errorf("Rename() through a further pattern = %v, want error containing %q", err, `alias "prod.lan" already exists`)
+	}
+	if got := read(t, path2); got != in2 {
 		t.Errorf("file after a rejected Rename = %q, want untouched", got)
 	}
 }
