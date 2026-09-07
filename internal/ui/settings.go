@@ -323,7 +323,7 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 	case settingsMenu:
 		title = "settings"
 		detail := [entryCount]string{
-			entryEdit:  m.confPath,
+			entryEdit:  m.underHome(m.confPath),
 			entryTheme: Themes[m.themeIdx].Name,
 			entrySpawn: m.spawnTarget() + " (" + m.spawn.where(m.spawnTarget()) + ")",
 		}
@@ -402,6 +402,16 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 // tildePath spells a path under ~/.ssh the way the Include line does.
 func (m Model) tildePath(parts ...string) string {
 	return "~/" + filepath.Join(append([]string{".ssh"}, parts...)...)
+}
+
+// underHome spells a path under the home directory with ~, the way the
+// setup pane does — so the menu's box is as wide as its words, not the
+// home's absolute path. Anything else is shown as it is.
+func (m Model) underHome(path string) string {
+	if rest, ok := strings.CutPrefix(path, m.home+"/"); ok && m.home != "" {
+		return "~/" + rest
+	}
+	return path
 }
 
 // settingsKeys is the help shown while the panel owns the keyboard.

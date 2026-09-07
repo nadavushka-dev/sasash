@@ -76,6 +76,20 @@ func TestModel_View_SettingsIsACenteredBox(t *testing.T) {
 	}
 }
 
+func TestModel_View_SettingsSpellsTheConfigUnderHome(t *testing.T) {
+	t.Parallel()
+	// The edit row's path is shown under ~ when it is under home, so the
+	// box stays as wide as its words; another path is shown whole.
+	m := ui.WithHome(ui.WithEditor(wide(t), []string{"vi"}, "", "/home/u/.ssh/config.d/sasash.conf"), "/home/u")
+	if view := press(t, m, "o").View(); !strings.Contains(view, "edit config file  ~/.ssh/config.d/sasash.conf") || strings.Contains(view, "/home/u/") {
+		t.Errorf("View() should spell the config path under ~:\n%s", view)
+	}
+	other := ui.WithHome(ui.WithEditor(wide(t), []string{"vi"}, "", "/etc/ssh/sasash.conf"), "/home/u")
+	if view := press(t, other, "o").View(); !strings.Contains(view, "edit config file  /etc/ssh/sasash.conf") {
+		t.Errorf("View() should show a path outside home whole:\n%s", view)
+	}
+}
+
 func TestModel_View_SettingsBoxFitsATinyFrame(t *testing.T) {
 	t.Parallel()
 	m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 30, Height: 8}), "o")
