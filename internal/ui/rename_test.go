@@ -154,6 +154,15 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 	}
 }
 
+func TestModel_Rename_BusyHostRefused(t *testing.T) {
+	t.Parallel()
+	h := &renameHook{}
+	m := press(t, ui.MarkSwitching(renameModel(t, webGroup(), h), "web"), "R")
+	if ui.Prompting(m) || len(h.calls) != 0 || !strings.Contains(m.View(), "web is busy — a path switch or tunnel action is running; try again") {
+		t.Errorf("R on a switching host should refuse (prompting %v, calls %v):\n%s", ui.Prompting(m), h.calls, m.View())
+	}
+}
+
 func TestModel_Rename_SubmitRefusals(t *testing.T) {
 	t.Parallel()
 	hosts := append(webGroup(), hostmodel.Host{Alias: "srv.lan", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.9"}}, File: ambientFile})

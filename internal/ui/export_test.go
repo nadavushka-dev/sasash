@@ -310,3 +310,9 @@ func WithRenameHost(m Model, f func(old, new string) (pathswitch.RenameResult, e
 	return m
 }
 func PromptValue(m Model) string { return m.prompt.Value() }
+
+// MarkSwitching flags a path switch in flight on alias, as p does.
+func MarkSwitching(m Model, alias string) Model {
+	m.switching[alias] = true
+	return m
+}
