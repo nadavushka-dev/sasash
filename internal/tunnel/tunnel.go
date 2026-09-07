@@ -41,8 +41,9 @@ import (
 var ErrStateWrite = errors.New("state not recorded")
 
 // pollInterval paces the Spawn handshake and the post-Kill wait. Every
-// fake path in the unit tier resolves on the first iteration, so tests
-// never sleep on it.
+// fake path in the unit tier resolves on the first iteration — except the
+// grace wait after an aborted Spawn, which is wall-clock by nature and
+// bounded by Engine.Timeout (one 50ms sleep in the suite).
 const pollInterval = 50 * time.Millisecond
 
 // Status is the honest three-state model (SPEC §4). Never collapsed.
@@ -251,9 +252,14 @@ func (e Engine) Spawn(ctx context.Context, host, set, spec string) error {
 			}
 			// It survived the signal (auth may have finished a beat after it):
 			// record it, so KillAll can reach what would otherwise be an orphan.
-			return errors.Join(
-				fmt.Errorf("%s: not listening on %s, and pid %d survived SIGTERM (recorded): %w", strings.Join(argv, " "), port, pid, ctx.Err()),
-				e.record(host, set, spec, pid))
+			// The record failure rides along as text, never as ErrStateWrite:
+			// a consumer reading "only the cache failed" would take a tunnel
+			// that is not listening for a working one.
+			what := "recorded"
+			if rerr := e.record(host, set, spec, pid); rerr != nil {
+				what = "NOT recorded: " + rerr.Error()
+			}
+			return fmt.Errorf("%s: not listening on %s, and pid %d survived SIGTERM (%s): %w", strings.Join(argv, " "), port, pid, what, ctx.Err())
 		case <-time.After(pollInterval):
 		}
 	}
@@ -293,8 +299,9 @@ func (Engine) lastWords(logPath string) string {
 // pid, or a pid already dead, means nothing to signal: the state is updated
 // and nil returned. A process that could not be signalled or outlives the
 // wait is an error and ITS record is kept, pid and all — the next Kill or
-// KillAll must still be able to reach it. A state failure wraps
-// ErrStateWrite.
+// KillAll must still be able to reach it; a pid that REFUSES the signal is
+// not ours (reused since a reboot) and its record goes with the error. A
+// state failure wraps ErrStateWrite.
 func (e Engine) Kill(ctx context.Context, host, spec string) error {
 	st, _ := e.loadState(host)
 	survivors, err := e.killPids(ctx, st.pids(spec))
@@ -329,8 +336,10 @@ func (e Engine) KillAll(ctx context.Context, host string) error {
 
 // killPids signals EVERY live pid first, then waits for each to die; a
 // ctx that ends mid-wait never leaves a later pid unsignalled. It returns
-// the pids still alive at the end — refused signals and survivors of the
-// wait — with the joined errors; their records must be kept.
+// the pids that outlived the wait, with the joined errors; their records
+// must be kept (ours, not dead yet). A REFUSED signal is reported but not
+// returned as a survivor: a pid we may not signal is not ours to manage
+// (a number reused since a reboot), and its record is garbage.
 func (e Engine) killPids(ctx context.Context, pids []int) (survivors []int, err error) {
 	sp := e.spawner()
 	var errs []error
@@ -341,7 +350,6 @@ func (e Engine) killPids(ctx context.Context, pids []int) (survivors []int, err 
 		}
 		if kerr := sp.Kill(pid); kerr != nil {
 			errs = append(errs, fmt.Errorf("pid %d: %w", pid, kerr))
-			survivors = append(survivors, pid)
 			continue
 		}
 		signalled = append(signalled, pid)

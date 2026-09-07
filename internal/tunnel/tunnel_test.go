@@ -384,6 +384,9 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			if tt.wantCtxErr && !errors.Is(err, context.Canceled) {
 				t.Errorf("Spawn() err = %v, want wrapping context.Canceled", err)
 			}
+			if errors.Is(err, tunnel.ErrStateWrite) {
+				t.Errorf("Spawn() err = %v reads as ErrStateWrite: no handshake failure may pass for a cache-only one", err)
+			}
 			if got := len(s.Spawned()) > 0; got != tt.wantSpawn {
 				t.Errorf("spawned = %v, want %v", got, tt.wantSpawn)
 			}
@@ -394,6 +397,29 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 				t.Errorf("state = %s, want %s", got, tt.wantState)
 			}
 		})
+	}
+}
+
+// A survivor whose record cannot be written is still reported as a survivor
+// — as text, never as ErrStateWrite, which would read as "the tunnel works,
+// only the cache failed" to the CLI's errors.Is switch.
+func TestEngine_Spawn_SurvivorRecordFailureIsNotErrStateWrite(t *testing.T) {
+	t.Parallel()
+	s := newSpawner()
+	s.neverListens, s.stubborn = true, true
+	e := engine(t, s, fakedial.New())
+	if err := os.Mkdir(filepath.Join(e.StateDir, "ubuntu.json"), 0o700); err != nil {
+		t.Fatalf("Mkdir() err = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.onSpawn = cancel
+	err := e.Spawn(ctx, "ubuntu", "web", specWeb)
+	if err == nil || !strings.Contains(err.Error(), "survived SIGTERM (NOT recorded") {
+		t.Fatalf("Spawn() err = %v, want the survivor and the record failure named", err)
+	}
+	if errors.Is(err, tunnel.ErrStateWrite) || !errors.Is(err, context.Canceled) {
+		t.Errorf("Spawn() err = %v, want context.Canceled and NOT ErrStateWrite", err)
 	}
 }
 
@@ -512,13 +538,13 @@ func TestEngine_Kill(t *testing.T) {
 			wantState:  `{"forwards":[{"set":"","spec":"3000:localhost:3000"}]}`,
 		},
 		{
-			name:       "signal refused: error, record kept — it is still reachable",
+			name:       "signal refused: error, record retired — a pid we may not signal is not ours",
 			state:      `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
 			live:       []int{41},
 			spawner:    func(s *fakeSpawner) { s.killErr = errors.New("operation not permitted") },
 			wantKilled: []int{41},
 			wantErr:    "pid 41: operation not permitted",
-			wantState:  `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
+			wantState:  `{"forwards":[]}`,
 		},
 		{
 			name:    "process outlives the wait: error, record kept",
@@ -877,8 +903,8 @@ func TestEngine_KillSet_JoinsErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pid 41") || !strings.Contains(err.Error(), "pid 42") {
 		t.Errorf("KillSet() err = %v, want both failures joined", err)
 	}
-	if got, want := readState(t, e, "ubuntu"), `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"web","spec":"5432:localhost:5432","pid":42}]}`; got != want {
-		t.Errorf("state = %s, want both records kept: neither process was ended", got)
+	if got := readState(t, e, "ubuntu"); got != `{"forwards":[]}` {
+		t.Errorf("state = %s, want both records retired: pids we may not signal are not ours", got)
 	}
 
 	t.Run("a survivor keeps its record, the rest are retired", func(t *testing.T) {
