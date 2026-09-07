@@ -299,9 +299,14 @@ func TestModel_Rename_Renamed(t *testing.T) {
 		t.Errorf("the popup should carry the story (open %v); no master was up:\n%s", ui.PopupOpen(m), view)
 	}
 	m = press(t, m, "esc")
-	// The rows follow at once, the cursor on the renamed row.
+	// The rows follow at once — before the reload — with the cursor on
+	// the renamed row: the followed variants under the new alias, the
+	// hand-authored dotted block the writer left as-is under its own.
 	if got := selectedAlias(t, m); got != "srv" {
 		t.Errorf("Selected() after the rename = %q, want srv", got)
+	}
+	if view := press(t, m, "v").View(); !strings.Contains(view, "srv.lan") || !strings.Contains(view, "srv.wan") || !strings.Contains(view, "web.old") || strings.Contains(view, "srv.old") || strings.Contains(view, "web.lan") {
+		t.Errorf("rows before the reload: variants should follow and web.old stay:\n%s", view)
 	}
 	// The reload lands with the file's hosts; the selection stays.
 	for _, msg := range drain(cmd) {
@@ -309,12 +314,6 @@ func TestModel_Rename_Renamed(t *testing.T) {
 	}
 	if loads != 1 || selectedAlias(t, m) != "srv" {
 		t.Errorf("reload: loads = %d, selected %q; want 1 and srv", loads, selectedAlias(t, m))
-	}
-	// The followed variants are listed under the new alias; the
-	// hand-authored dotted block the writer left as-is keeps its name.
-	m = press(t, m, "v")
-	if view := m.View(); !strings.Contains(view, "srv.lan") || !strings.Contains(view, "srv.wan") || !strings.Contains(view, "web.old") || strings.Contains(view, "srv.old") || strings.Contains(view, "web.lan") {
-		t.Errorf("variants should follow and web.old stay:\n%s", view)
 	}
 }
 
