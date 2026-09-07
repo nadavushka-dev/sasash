@@ -36,6 +36,7 @@ type KeyMap struct {
 	Theme       key.Binding
 	Settings    key.Binding
 	Variants    key.Binding
+	Rename      key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 	ForceQuit   key.Binding
@@ -73,6 +74,7 @@ func DefaultKeyMap() KeyMap {
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Settings:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "settings")),
 		Variants:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "pinned variants")),
+		Rename:      key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "rename host")),
 		Help:        key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "keys")),
 		Quit:        key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 		ForceQuit:   key.NewBinding(key.WithKeys("ctrl+c")), // no help text: always-on escape hatch
@@ -118,6 +120,8 @@ func (p promptKeys) ShortHelp() []key.Binding {
 		enter = "declare"
 	case promptEditFwd:
 		enter = "save"
+	case promptRename:
+		enter = "rename"
 	}
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", enter)),

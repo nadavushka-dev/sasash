@@ -269,6 +269,9 @@ type Model struct {
 	// and the row being edited.
 	saveForwardEdit func(alias, set, old, new string) error
 	editFwd         editFwdState
+	// rename (R): the hook, and the alias the open prompt renames.
+	renameHost func(old, new string) (pathswitch.RenameResult, error)
+	renaming   string
 
 	// Stats (SASASH.4.8): every duration the UI renders comes from clock;
 	// hist is the per-path session memory behind the sparkline and the
@@ -386,6 +389,11 @@ type Config struct {
 	// SaveForwardEdit rewrites one spec of a declared set in place (the E
 	// key); nil makes E live-only. The cmd layer wires fwdset.Update.
 	SaveForwardEdit func(alias, set, old, new string) error
+	// RenameHost renames a managed host (the R key, SASASH.4.16): the
+	// cmd layer wires pathswitch.Rename on sasash.conf and then moves the
+	// state-cache files pathswitch.CacheRenames lists, wrapping a failed
+	// move in ErrCacheKept; nil disables R.
+	RenameHost func(old, new string) (pathswitch.RenameResult, error)
 	// Clock is the time source for every duration rendered (uptime,
 	// down-since, ago); nil is wall time. Tests inject a fake and never
 	// sleep.
@@ -439,6 +447,7 @@ const (
 	promptTunnelName
 	promptTunnelSpecs
 	promptEditFwd // E: a highlighted forward's spec, prefilled
+	promptRename  // R: the selected host's alias, prefilled
 
 	promptModeCount // sentinel: every mode above is walked by the keys panel
 )
@@ -512,6 +521,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 
 		saveForwardSet:  cfg.SaveForwardSet,
 		saveForwardEdit: cfg.SaveForwardEdit,
+		renameHost:      cfg.RenameHost,
 		clock:           clockOr(cfg.Clock),
 		hist:            make(map[string]*pathHist),
 		recordHandoff:   cfg.RecordHandoff,
@@ -933,6 +943,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(probeCmd(m.prober, m.hosts), stamp)
 
+	case renameDoneMsg:
+		return m.renamed(msg)
+
 	case editFwdDoneMsg:
 		delete(m.tinflight, msg.host)
 		if msg.err != nil {
@@ -1096,6 +1109,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.submitTunnel()
 				case promptEditFwd:
 					return m.submitEditFwd()
+				case promptRename:
+					return m.submitRename()
 				}
 				return m.promptSubmit()
 			}
@@ -1310,6 +1325,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Under a filter SetItems' cmd is the only thing that
 				// refills the match set: it must reach the runtime.
 				rowsCmd = m.setRows(m.listRows())
+			case key.Matches(msg, m.keys.Rename):
+				return m.openRename()
 			case key.Matches(msg, m.keys.Help):
 				return m.openHelp(), nil
 			case key.Matches(msg, m.keys.ClearFilter):
@@ -1523,6 +1540,8 @@ func (m Model) View() string {
 			label = "specs:"
 		case promptEditFwd:
 			label = "edit " + setLabel(m.editFwd.set) + " on " + m.editFwd.host + ":"
+		case promptRename:
+			label = "rename " + m.renaming + " to:"
 		}
 		// textinput pads its value to Width; trim the raw padding so a
 		// notice (a rejection message, typically) still fits the line.

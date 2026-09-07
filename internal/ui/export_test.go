@@ -302,3 +302,11 @@ func WithHome(m Model, home string) Model {
 // Prompting and PromptingSave expose which prompt, if any, owns the keys.
 func Prompting(m Model) bool     { return m.mode != promptNone }
 func PromptingSave(m Model) bool { return m.mode == promptAlias }
+
+// WithRenameHost swaps the R hook (4.16); PromptValue is the prompt's
+// text, so a test can see the prefill.
+func WithRenameHost(m Model, f func(old, new string) (pathswitch.RenameResult, error)) Model {
+	m.renameHost = f
+	return m
+}
+func PromptValue(m Model) string { return m.prompt.Value() }

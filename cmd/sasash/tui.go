@@ -153,6 +153,8 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		// offered the missing lines from the No-ControlPath failure.
 		InspectControl: inspectControl(confPath),
 		EnableControl:  enableControl(confPath),
+		// R: the rename writer on sasash.conf plus the caches under sd.
+		RenameHost: renameHost(confPath, sd),
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg
