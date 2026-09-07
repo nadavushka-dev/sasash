@@ -276,18 +276,32 @@ func TestEngine_DownSet(t *testing.T) {
 
 func TestEngine_DownSet_JoinsCancelErrors(t *testing.T) {
 	t.Parallel()
-	r := fakerun.New().
-		Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("no such forward"), Code: 255}},
-			"ssh", "-O", "cancel", "-L", "3000:localhost:3000", "ubuntu").
-		StubExit(0, "ssh", "-O", "cancel", "-L", "3001:localhost:3001", "ubuntu")
-	e := engine(t, r, fakedial.New())
-	err := e.DownSet(context.Background(), "ubuntu", "web", []string{"3000:localhost:3000", "3001:localhost:3001"})
-	if err == nil || !strings.Contains(err.Error(), "no such forward") {
-		t.Fatalf("DownSet() err = %v, want the cancel failure", err)
+	// Named and ad-hoc alike: the ad-hoc path returns early without a
+	// state write, and must still carry ssh's refusal.
+	for _, set := range []string{"web", ""} {
+		t.Run(setLabel(set), func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().
+				Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("no such forward"), Code: 255}},
+					"ssh", "-O", "cancel", "-L", "3000:localhost:3000", "ubuntu").
+				StubExit(0, "ssh", "-O", "cancel", "-L", "3001:localhost:3001", "ubuntu")
+			e := engine(t, r, fakedial.New())
+			err := e.DownSet(context.Background(), "ubuntu", set, []string{"3000:localhost:3000", "3001:localhost:3001"})
+			if err == nil || !strings.Contains(err.Error(), "no such forward") {
+				t.Fatalf("DownSet() err = %v, want the cancel failure", err)
+			}
+			if got := len(r.CallKeys()); got != 2 {
+				t.Errorf("DownSet() made %d calls, want 2 (keeps going after a failure)", got)
+			}
+		})
 	}
-	if got := len(r.CallKeys()); got != 2 {
-		t.Errorf("DownSet() made %d calls, want 2 (keeps going after a failure)", got)
+}
+
+func setLabel(set string) string {
+	if set == "" {
+		return "ad-hoc"
 	}
+	return set
 }
 
 func TestEngine_StateLifecycle(t *testing.T) {
