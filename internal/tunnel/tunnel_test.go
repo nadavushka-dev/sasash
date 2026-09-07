@@ -42,6 +42,7 @@ type fakeSpawner struct {
 	spawnErr     error
 	killErr      error
 	stubborn     bool              // Kill is recorded but the process lives on
+	stubbornPids map[int]bool      // the same, per pid
 	neverListens bool              // the process runs but its port never answers
 	onSpawn      func()            // runs inside Spawn (a test cancels its ctx here)
 	exits        map[string]string // argv key -> stderr; the process exits at start
@@ -51,6 +52,7 @@ type fakeSpawner struct {
 	spawned      []string
 	logPaths     []string
 	killed       []int
+	probed       []int // every Alive call
 }
 
 var _ run.Spawner = (*fakeSpawner)(nil)
@@ -113,7 +115,14 @@ func (f *fakeSpawner) Spawn(argv []string, stderrPath string) (int, error) {
 func (f *fakeSpawner) Alive(pid int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.probed = append(f.probed, pid)
 	return f.alive[pid]
+}
+
+func (f *fakeSpawner) Probed() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.probed...)
 }
 
 func (f *fakeSpawner) Kill(pid int) error {
@@ -123,7 +132,7 @@ func (f *fakeSpawner) Kill(pid int) error {
 	if f.killErr != nil {
 		return f.killErr
 	}
-	if !f.stubborn {
+	if !f.stubborn && !f.stubbornPids[pid] {
 		f.alive[pid] = false
 		if port := f.ports[pid]; port != "" && f.dial != nil {
 			f.dial.Down("127.0.0.1:" + port)
@@ -314,6 +323,18 @@ func TestEngine_Spawn_Handshake(t *testing.T) {
 			wantKilled:    true,
 		},
 		{
+			name:          "context ends and the process survives SIGTERM: recorded, so KillAll can reach it",
+			spec:          specWeb,
+			dial:          func(d *fakedial.Fake) { d.Down("127.0.0.1:3000") },
+			spawner:       func(s *fakeSpawner) { s.neverListens = true; s.stubborn = true },
+			cancelOnSpawn: true,
+			wantErr:       "pid 1000 survived SIGTERM (recorded)",
+			wantCtxErr:    true,
+			wantSpawn:     true,
+			wantKilled:    true,
+			wantState:     `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":1000}]}`,
+		},
+		{
 			name:    "unparseable local port is refused before spawning",
 			spec:    "[::1]:3000:localhost:3000",
 			wantErr: "no local port to verify",
@@ -491,13 +512,13 @@ func TestEngine_Kill(t *testing.T) {
 			wantState:  `{"forwards":[{"set":"","spec":"3000:localhost:3000"}]}`,
 		},
 		{
-			name:       "signal failure is returned, record still retired",
+			name:       "signal refused: error, record kept — it is still reachable",
 			state:      `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
 			live:       []int{41},
 			spawner:    func(s *fakeSpawner) { s.killErr = errors.New("operation not permitted") },
 			wantKilled: []int{41},
 			wantErr:    "pid 41: operation not permitted",
-			wantState:  `{"forwards":[]}`,
+			wantState:  `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
 		},
 		{
 			name:    "process outlives the wait: error, record kept",
@@ -511,7 +532,21 @@ func TestEngine_Kill(t *testing.T) {
 			},
 			wantKilled: []int{41},
 			wantErr:    "pid 41 still running after SIGTERM",
-			wantState:  `{"forwards":[]}`,
+			wantState:  `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
+		},
+		{
+			name:    "ctx ends on a stubborn first pid: the second is still signalled; only the survivor's record stays",
+			state:   `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"old","spec":"3000:localhost:3000","pid":43}]}`,
+			live:    []int{41, 43},
+			spawner: func(s *fakeSpawner) { s.stubbornPids = map[int]bool{41: true} },
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			wantKilled: []int{41, 43},
+			wantErr:    "pid 41 still running after SIGTERM",
+			wantState:  `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`,
 		},
 	}
 	for _, tt := range tests {
@@ -547,10 +582,7 @@ func TestEngine_Kill(t *testing.T) {
 	}
 }
 
-// The "still running" case above retires the record anyway? No — re-read
-// the table: the record IS retired because the mutation is the intent and
-// the cache is never truth; reality (Status: pid alive + port) re-derives
-// it. This pins that a Kill error and a state error both surface.
+// A signal error and a state error both surface from one Kill.
 func TestEngine_Kill_JoinsStateError(t *testing.T) {
 	t.Parallel()
 	s := newSpawner().Live(41)
@@ -577,12 +609,35 @@ func TestEngine_KillAll(t *testing.T) {
 	if got := s.Killed(); !reflect.DeepEqual(got, []int{41, 43}) {
 		t.Errorf("killed = %v, want [41 43]", got)
 	}
-	if got := readState(t, e, "ubuntu"); got != `{"forwards":null}` {
+	if got := readState(t, e, "ubuntu"); got != `{"forwards":[]}` {
 		t.Errorf("state = %s, want everything cleared, ad-hoc included", got)
 	}
 	// The interactive master is not touched.
 	if got := e.Runner.(*fakerun.Fake).CallKeys(); len(got) != 0 {
 		t.Errorf("runner saw %q, want nothing", got)
+	}
+}
+
+// The reason the kill path signals everything before waiting on anything:
+// a ctx that ends on a stubborn first process must not leave the others
+// unsignalled and forgotten. Survivors keep their records.
+func TestEngine_KillAll_SurvivorsStayRecorded(t *testing.T) {
+	t.Parallel()
+	s := newSpawner().Live(41).Live(42).Live(43)
+	s.stubbornPids = map[int]bool{41: true}
+	e := engine(t, s, fakedial.New())
+	writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"db","spec":"5432:localhost:5432","pid":42},{"set":"","spec":"8080:localhost:80","pid":43}]}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := e.KillAll(ctx, "ubuntu")
+	if err == nil || !strings.Contains(err.Error(), "pid 41 still running") {
+		t.Fatalf("KillAll() err = %v, want the survivor named", err)
+	}
+	if got := s.Killed(); !reflect.DeepEqual(got, []int{41, 42, 43}) {
+		t.Errorf("killed = %v, want every pid signalled", got)
+	}
+	if got := readState(t, e, "ubuntu"); got != `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}` {
+		t.Errorf("state = %s, want only the survivor kept", got)
 	}
 }
 
@@ -725,6 +780,20 @@ func TestEngine_SpawnSet_ContinuesOnStateWriteFailure(t *testing.T) {
 	}
 }
 
+// A spec listed twice is one process — the second pass must not find its
+// own port and refuse it as foreign, aborting the rest of the set.
+func TestEngine_SpawnSet_DuplicateSpecIsOneProcess(t *testing.T) {
+	t.Parallel()
+	s := newSpawner()
+	e := engine(t, s, fakedial.New())
+	if err := e.SpawnSet(context.Background(), "ubuntu", "web", []string{specWeb, specWeb, specDB}); err != nil {
+		t.Fatalf("SpawnSet() err = %v", err)
+	}
+	if got := s.Spawned(); !reflect.DeepEqual(got, []string{argvWeb, argvDB}) {
+		t.Errorf("spawned = %q, want one process per distinct spec", got)
+	}
+}
+
 func TestEngine_SpawnSet_Empty(t *testing.T) {
 	t.Parallel()
 	s := newSpawner()
@@ -808,9 +877,28 @@ func TestEngine_KillSet_JoinsErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "pid 41") || !strings.Contains(err.Error(), "pid 42") {
 		t.Errorf("KillSet() err = %v, want both failures joined", err)
 	}
-	if got := readState(t, e, "ubuntu"); got != `{"forwards":[]}` {
-		t.Errorf("state = %s, want the set's records cleared regardless", got)
+	if got, want := readState(t, e, "ubuntu"), `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"web","spec":"5432:localhost:5432","pid":42}]}`; got != want {
+		t.Errorf("state = %s, want both records kept: neither process was ended", got)
 	}
+
+	t.Run("a survivor keeps its record, the rest are retired", func(t *testing.T) {
+		t.Parallel()
+		s := newSpawner().Live(41).Live(42)
+		s.stubbornPids = map[int]bool{42: true}
+		e := engine(t, s, fakedial.New())
+		writeState(t, e, "ubuntu", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41},{"set":"web","spec":"5432:localhost:5432","pid":42}]}`)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := e.KillSet(ctx, "ubuntu", "web", nil); err == nil || !strings.Contains(err.Error(), "pid 42 still running") {
+			t.Fatalf("KillSet() err = %v, want the survivor named", err)
+		}
+		if got := s.Killed(); !reflect.DeepEqual(got, []int{41, 42}) {
+			t.Errorf("killed = %v, want both signalled", got)
+		}
+		if got, want := readState(t, e, "ubuntu"), `{"forwards":[{"set":"web","spec":"5432:localhost:5432","pid":42}]}`; got != want {
+			t.Errorf("state = %s, want %s", got, want)
+		}
+	})
 
 	t.Run("state failure surfaces as ErrStateWrite", func(t *testing.T) {
 		t.Parallel()

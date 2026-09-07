@@ -15,6 +15,11 @@ import (
 // / SpawnSet / KillSet. This file is deleted, and its callers renamed, in
 // the consumer rename pass once 2.11 and 4.16 are merged. Do not add
 // callers. Not part of the contract.
+//
+// Known gap until then: Exit is a contract method and no longer clears
+// tunnel records (M1 #5), but the Model A callers of `X` / `sasash down`
+// still call it expecting the purge — on this branch those lose the purge
+// and gain nothing; the rename pass maps them onto KillAll (+ Exit).
 
 // Start launches the Model A master: `ssh -fN <host>`, recorded as
 // sasash-started in the stats store.
@@ -44,7 +49,7 @@ func (e Engine) Forward(ctx context.Context, host, set, spec string) error {
 func (e Engine) Cancel(ctx context.Context, host, spec string) error {
 	err := e.exec(ctx, "ssh", "-O", "cancel", "-L", spec, host)
 	if serr := e.mutateState(host, "cancel attempted", func(st *hostState) {
-		st.retire(spec)
+		st.retire(spec, nil)
 	}); serr != nil && err == nil {
 		err = serr
 	}

@@ -78,6 +78,9 @@ func TestEngine_Bridge_Argv(t *testing.T) {
 			if got := s.Spawned(); len(got) != 0 {
 				t.Errorf("spawned %q, want nothing: the bridge never spawns", got)
 			}
+			if got := s.Probed(); len(got) != 0 || len(s.Killed()) != 0 {
+				t.Errorf("bridge probed %v / killed %v, want no spawner contact at all", got, s.Killed())
+			}
 		})
 	}
 }
@@ -133,13 +136,17 @@ func TestEngine_Bridge_Errors(t *testing.T) {
 			Stub(refuse, "ssh", "-O", "forward", "-L", specWeb, "ubuntu").
 			Stub(refuse, "ssh", "-O", "cancel", "-L", specWeb, "ubuntu").
 			Stub(refuse, "ssh", "-fN", "ubuntu")
-		for name, call := range map[string]func() error{
-			"Forward": func() error { return e.Forward(ctx, "ubuntu", "web", specWeb) },
-			"Cancel":  func() error { return e.Cancel(ctx, "ubuntu", specWeb) },
-			"Start":   func() error { return e.Start(ctx, "ubuntu") },
-		} {
-			if err := call(); err == nil || !strings.Contains(err.Error(), "nope") {
-				t.Errorf("%s() err = %v, want the refusal", name, err)
+		calls := []struct {
+			name string
+			call func() error
+		}{
+			{name: "Forward", call: func() error { return e.Forward(ctx, "ubuntu", "web", specWeb) }},
+			{name: "Cancel", call: func() error { return e.Cancel(ctx, "ubuntu", specWeb) }},
+			{name: "Start", call: func() error { return e.Start(ctx, "ubuntu") }},
+		}
+		for _, c := range calls {
+			if err := c.call(); err == nil || !strings.Contains(err.Error(), "nope") {
+				t.Errorf("%s() err = %v, want the refusal", c.name, err)
 			}
 		}
 		if got := readState(t, e, "ubuntu"); got != `{"forwards":[]}` {

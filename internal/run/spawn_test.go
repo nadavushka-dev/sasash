@@ -115,8 +115,11 @@ func TestOSSpawner_Errors(t *testing.T) {
 	})
 	t.Run("kill of nonpositive pid is an error", func(t *testing.T) {
 		t.Parallel()
-		if err := s.Kill(0); err == nil {
-			t.Error("Kill(0) err = nil, want error (would signal the process group)")
+		// 0 would signal our process group, -1 every process we may signal.
+		for _, pid := range []int{0, -1} {
+			if err := s.Kill(pid); err == nil {
+				t.Errorf("Kill(%d) err = nil, want error", pid)
+			}
 		}
 	})
 	t.Run("a non-child that exists is alive", func(t *testing.T) {

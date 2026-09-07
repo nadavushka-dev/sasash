@@ -246,10 +246,32 @@ func (e Engine) Spawn(ctx context.Context, host, set, spec string) error {
 		select {
 		case <-ctx.Done():
 			_ = sp.Kill(pid)
-			return fmt.Errorf("%s: not listening on %s: %w", strings.Join(argv, " "), port, ctx.Err())
+			if e.grace(pid) {
+				return fmt.Errorf("%s: not listening on %s: %w", strings.Join(argv, " "), port, ctx.Err())
+			}
+			// It survived the signal (auth may have finished a beat after it):
+			// record it, so KillAll can reach what would otherwise be an orphan.
+			return errors.Join(
+				fmt.Errorf("%s: not listening on %s, and pid %d survived SIGTERM (recorded): %w", strings.Join(argv, " "), port, pid, ctx.Err()),
+				e.record(host, set, spec, pid))
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// grace waits one dial-timeout's worth for pid to die after a signal,
+// reaping it; false means it is still alive. Wall-clock, not ctx: the
+// caller's ctx is already over.
+func (e Engine) grace(pid int) bool {
+	sp := e.spawner()
+	deadline := time.Now().Add(e.timeout())
+	for sp.Alive(pid) {
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(pollInterval)
+	}
+	return true
 }
 
 // lastWords is a dead process's stderr, trimmed, or a stand-in when it
@@ -267,15 +289,17 @@ func (Engine) lastWords(logPath string) string {
 // until it is gone or ctx ends. A named set's record of the spec is
 // removed; an ad-hoc record stays with its pid cleared — for the ad-hoc
 // set the record IS the declaration, so the row survives a down and
-// SpawnSet brings it back; only Forget or KillAll purges it. No recorded pid, or a
-// pid already dead, means nothing to signal: the state is updated and nil
-// returned. A state failure wraps ErrStateWrite; a process that outlives
-// the wait is an error and its record is kept (reality will say).
+// SpawnSet brings it back; only Forget or KillAll purges it. No recorded
+// pid, or a pid already dead, means nothing to signal: the state is updated
+// and nil returned. A process that could not be signalled or outlives the
+// wait is an error and ITS record is kept, pid and all — the next Kill or
+// KillAll must still be able to reach it. A state failure wraps
+// ErrStateWrite.
 func (e Engine) Kill(ctx context.Context, host, spec string) error {
 	st, _ := e.loadState(host)
-	err := e.killPids(ctx, st.pids(spec))
+	survivors, err := e.killPids(ctx, st.pids(spec))
 	if serr := e.mutateState(host, "kill attempted", func(st *hostState) {
-		st.retire(spec)
+		st.retire(spec, survivors)
 	}); serr != nil {
 		err = errors.Join(err, serr)
 	}
@@ -283,8 +307,9 @@ func (e Engine) Kill(ctx context.Context, host, spec string) error {
 }
 
 // KillAll ends every recorded process of the host and clears every record,
-// ad-hoc included — the explicit "everything off". The interactive master
-// is not touched; that is Exit's, and a consumer wanting both calls both.
+// ad-hoc included — the explicit "everything off". A process that survives
+// keeps its record (see Kill). The interactive master is not touched; that
+// is Exit's, and a consumer wanting both calls both.
 func (e Engine) KillAll(ctx context.Context, host string) error {
 	st, _ := e.loadState(host)
 	var pids []int
@@ -293,37 +318,63 @@ func (e Engine) KillAll(ctx context.Context, host string) error {
 			pids = append(pids, f.Pid)
 		}
 	}
-	err := e.killPids(ctx, pids)
+	survivors, err := e.killPids(ctx, pids)
 	if serr := e.mutateState(host, "kill attempted", func(st *hostState) {
-		st.Forwards = nil
+		st.remove(func(f stateForward) bool { return !contains(survivors, f.Pid) })
 	}); serr != nil {
 		err = errors.Join(err, serr)
 	}
 	return err
 }
 
-// killPids signals each live pid and waits for it to die, joining errors.
-func (e Engine) killPids(ctx context.Context, pids []int) error {
+// killPids signals EVERY live pid first, then waits for each to die; a
+// ctx that ends mid-wait never leaves a later pid unsignalled. It returns
+// the pids still alive at the end — refused signals and survivors of the
+// wait — with the joined errors; their records must be kept.
+func (e Engine) killPids(ctx context.Context, pids []int) (survivors []int, err error) {
 	sp := e.spawner()
 	var errs []error
+	var signalled []int
 	for _, pid := range pids {
 		if !sp.Alive(pid) {
 			continue
 		}
-		if err := sp.Kill(pid); err != nil {
-			errs = append(errs, fmt.Errorf("pid %d: %w", pid, err))
+		if kerr := sp.Kill(pid); kerr != nil {
+			errs = append(errs, fmt.Errorf("pid %d: %w", pid, kerr))
+			survivors = append(survivors, pid)
 			continue
 		}
-		for sp.Alive(pid) {
-			select {
-			case <-ctx.Done():
-				errs = append(errs, fmt.Errorf("pid %d still running after SIGTERM: %w", pid, ctx.Err()))
-				return errors.Join(errs...)
-			case <-time.After(pollInterval):
-			}
+		signalled = append(signalled, pid)
+	}
+	for _, pid := range signalled {
+		if !e.waitDead(ctx, pid) {
+			errs = append(errs, fmt.Errorf("pid %d still running after SIGTERM: %w", pid, ctx.Err()))
+			survivors = append(survivors, pid)
 		}
 	}
-	return errors.Join(errs...)
+	return survivors, errors.Join(errs...)
+}
+
+// waitDead polls until pid is gone (true) or ctx ends (false).
+func (e Engine) waitDead(ctx context.Context, pid int) bool {
+	sp := e.spawner()
+	for sp.Alive(pid) {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(pollInterval):
+		}
+	}
+	return true
+}
+
+func contains(pids []int, pid int) bool {
+	for _, p := range pids {
+		if p == pid {
+			return true
+		}
+	}
+	return false
 }
 
 // Forget drops every record of spec from the cache without signalling
@@ -375,10 +426,14 @@ func (e Engine) Exit(ctx context.Context, host string) error {
 func (e Engine) SpawnSet(ctx context.Context, host, set string, specs []string) error {
 	st, _ := e.loadState(host)
 	var stateErrs []error
+	seen := make(map[string]bool, len(specs))
 	for _, spec := range specs {
-		if e.serving(ctx, st, spec) {
+		// A spec listed twice is one process: the second pass would find
+		// its own port answering and refuse it as foreign.
+		if seen[spec] || e.serving(ctx, st, spec) {
 			continue
 		}
+		seen[spec] = true
 		if err := e.Spawn(ctx, host, set, spec); err != nil {
 			if errors.Is(err, ErrStateWrite) {
 				stateErrs = append(stateErrs, err)
@@ -429,14 +484,17 @@ func (e Engine) KillSet(ctx context.Context, host, set string, specs []string) e
 	}
 
 	var errs []error
+	var survivors []int
 	for _, spec := range all {
-		if err := e.killPids(ctx, st.pids(spec)); err != nil {
+		alive, err := e.killPids(ctx, st.pids(spec))
+		survivors = append(survivors, alive...)
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	if serr := e.mutateState(host, "set killed", func(st *hostState) {
 		for _, spec := range all {
-			st.retire(spec)
+			st.retire(spec, survivors)
 		}
 	}); serr != nil {
 		errs = append(errs, serr)
@@ -503,9 +561,10 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 	return out, nil
 }
 
-// verdict is the whole reconciliation matrix (CONTRACT-tunnel §6): a
+// verdict is the whole reconciliation matrix (CONTRACT-tunnel §6, with
+// amendment M1 #2: the pid returned is the LIVE one and only on Up): a
 // recorded pid alive AND the port answering => Up (that pid returned);
-// the port answering alone => Listening; anything else => Down.
+// the port answering alone => Listening; anything else => Down, pid 0.
 //
 // Known limits: the dial is always to 127.0.0.1, so a spec bound to a
 // specific non-loopback interface is judged by whoever holds the loopback
@@ -606,11 +665,14 @@ func (st hostState) pids(spec string) []int {
 
 // retire applies the after-kill rule to spec: a named set's record goes
 // (its desire lives in config), an ad-hoc record stays with pid cleared
-// (the record is its declaration).
-func (st *hostState) retire(spec string) {
-	st.remove(func(f stateForward) bool { return f.Spec == spec && f.Set != "" })
+// (the record is its declaration). A record whose pid survived is left
+// exactly as it is — the process is real and must stay reachable.
+func (st *hostState) retire(spec string, survivors []int) {
+	st.remove(func(f stateForward) bool {
+		return f.Spec == spec && f.Set != "" && !contains(survivors, f.Pid)
+	})
 	for i := range st.Forwards {
-		if st.Forwards[i].Spec == spec {
+		if st.Forwards[i].Spec == spec && !contains(survivors, st.Forwards[i].Pid) {
 			st.Forwards[i].Pid = 0
 		}
 	}
