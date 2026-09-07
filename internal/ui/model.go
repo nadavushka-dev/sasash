@@ -230,7 +230,7 @@ type Model struct {
 	prompt         textinput.Model
 	pending        adhocTarget
 	saveHost       func(AdhocEntry) error // nil -> no save offer after connect
-	missingControl func(alias string) ([]string, error)
+	inspectControl func(alias string) (setup.Control, error)
 	enableControl  func(alias string) ([]string, error)
 	loadHosts      func() ([]hostmodel.Host, []error, error)
 
@@ -343,10 +343,10 @@ type Config struct {
 	// SaveHost persists an ad-hoc connection the user chose to keep; nil
 	// disables the save offer after an ad-hoc connect.
 	SaveHost func(AdhocEntry) error
-	// MissingControl lists the ControlMaster trio lines a managed host's
-	// block lacks; EnableControl writes them (4.18). Both nil disables the
-	// offer that follows a No-ControlPath tunnel failure.
-	MissingControl func(alias string) ([]string, error)
+	// InspectControl reads what a managed host's block has of the
+	// ControlMaster trio; EnableControl writes the missing lines (4.18).
+	// Both nil disables the offer that follows a No-ControlPath failure.
+	InspectControl func(alias string) (setup.Control, error)
 	EnableControl  func(alias string) ([]string, error)
 	// LoadHosts re-reads the config after a save or an edit so the change
 	// appears in the list; nil skips the reload. Its warnings (malformed
@@ -496,7 +496,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		saveTheme:      cfg.SaveTheme,
 		prompt:         prompt,
 		saveHost:       cfg.SaveHost,
-		missingControl: cfg.MissingControl,
+		inspectControl: cfg.InspectControl,
 		enableControl:  cfg.EnableControl,
 		loadHosts:      cfg.LoadHosts,
 		editor:         cfg.Editor,
@@ -863,7 +863,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "tunnels not enabled on " + msg.host + ": " + msg.err.Error()
 			return m, nil
 		}
-		m.notice = "tunnels enabled on " + msg.host + " — " + strings.Join(msg.added, ", ") + " written; space or + again"
+		// The instruction leads: it is what an 80-column line must keep
+		// (the popup already listed the lines).
+		m.notice = "tunnels enabled on " + msg.host + " — space or + again (" + strings.Join(msg.added, ", ") + " written)"
 		if m.loadHosts != nil {
 			return m, m.reloadCmd(false)
 		}
@@ -950,7 +952,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = "saved " + msg.alias
 		if m.home != "" {
 			// The saved block's ControlPath points under ~/.ssh/cm: setup's
-			// directory, said here when it is not there yet (4.18).
+			// directory, said here when it is not there yet (4.18). One
+			// read of ~/.ssh/config per save; an unreadable config is the
+			// setup pane's story, so its error is not repeated here.
 			if st, err := setup.Check(m.home); err == nil && !st.CMDirPresent {
 				m.notice += " — ~/.ssh/cm is missing: o → create config file, or `sasash setup`"
 			}

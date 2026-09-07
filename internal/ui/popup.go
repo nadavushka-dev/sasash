@@ -32,8 +32,9 @@ type popup struct {
 	// confirm makes the popup a question (4.17): enter runs it, esc
 	// declines; the title says which is which and verb names enter's
 	// deed in the footer ("run it", "write it").
-	confirm func(Model) (Model, tea.Cmd)
-	verb    string
+	confirm  func(Model) (Model, tea.Cmd)
+	verb     string
+	declined string // the notice when esc declines: what did not happen
 }
 
 // popupLine is one row: the text as drawn and the words the / search
@@ -159,8 +160,8 @@ func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.popup = popup{}
 			return run(m)
 		case key.Matches(msg, m.keys.ClearFilter):
+			m.notice = "cancelled — " + p.declined
 			m.popup = popup{}
-			m.notice = "cancelled — nothing started"
 			return m, nil
 		}
 	}

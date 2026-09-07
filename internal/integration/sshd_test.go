@@ -283,10 +283,10 @@ func TestControlMaster_LiveForwardLifecycle(t *testing.T) {
 // sshd: `ssh -fN <alias>` starts a master under ControlMaster auto, and
 // `ssh -O check <alias>` finds it. The one substitution is the socket
 // path: the template's `~/.ssh/cm/%C` expands to the passwd home, which
-// a test must not touch, so ControlPath is overridden on the command
-// line (first value wins) with a socket under a short temp directory.
-// Everything else — ControlMaster, ControlPersist, HostName, User, Port —
-// comes from the saved block through -F.
+// a test must not touch, so the block's own ControlPath line is
+// re-pointed textually at a socket under a short temp directory — the
+// line must exist for that to happen, so a template without it fails
+// here as it failed the user. Everything comes from the block through -F.
 func TestControlMaster_SavedEntryTemplate(t *testing.T) {
 	t.Parallel()
 	r := run.OS{}
@@ -297,6 +297,11 @@ func TestControlMaster_SavedEntryTemplate(t *testing.T) {
 	if !strings.Contains(block, "ControlMaster auto") || !strings.Contains(block, "ControlPersist 30m") {
 		t.Fatalf("ManagedBlock() lacks the trio:\n%s", block)
 	}
+	const templatePath = "  ControlPath ~/.ssh/cm/%C\n"
+	if !strings.Contains(block, templatePath) {
+		t.Fatalf("ManagedBlock() lacks the template's ControlPath line:\n%s", block)
+	}
+	block = strings.Replace(block, templatePath, "  ControlPath "+sock+"\n", 1)
 	conf := block + fmt.Sprintf(`  IdentityFile %s
   IdentitiesOnly yes
   IdentityAgent none
@@ -312,7 +317,7 @@ func TestControlMaster_SavedEntryTemplate(t *testing.T) {
 	ssh := func(extra ...string) (run.Result, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		argv := append([]string{sshBin, "-F", confPath, "-o", "ControlPath=" + sock}, extra...)
+		argv := append([]string{sshBin, "-F", confPath}, extra...)
 		return r.Run(ctx, append(argv, "saved")...)
 	}
 	// Before the master: -O check on the alias says down, not "No

@@ -480,7 +480,7 @@ func (m Model) offerUnmanagedTunnel() Model {
 		argv,
 		"not saved, so its ssh has no sasash.conf block and no ControlMaster from it: it will not appear in the tunnels pane and x/X cannot stop it",
 		unmanagedCleanup)
-	m.popup.confirm, m.popup.verb = Model.runUnmanagedTunnel, "run it"
+	m.popup.confirm, m.popup.verb, m.popup.declined = Model.runUnmanagedTunnel, "run it", "nothing started"
 	return m
 }
 

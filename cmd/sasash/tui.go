@@ -150,7 +150,7 @@ func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
 		},
 		// 4.18: an older managed entry without the ControlMaster trio is
 		// offered the missing lines from the No-ControlPath failure.
-		MissingControl: func(alias string) ([]string, error) { return setup.MissingControl(confPath, alias) },
+		InspectControl: func(alias string) (setup.Control, error) { return setup.InspectControl(confPath, alias) },
 		EnableControl:  func(alias string) ([]string, error) { return setup.EnsureControl(confPath, alias) },
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)

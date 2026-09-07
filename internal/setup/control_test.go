@@ -42,41 +42,58 @@ func writeConf(t *testing.T, content string) string {
 	return path
 }
 
-func TestMissingControl_Cases(t *testing.T) {
+func TestInspectControl_Cases(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name    string
 		conf    string
 		alias   string
-		want    []string
+		want    setup.Control
 		wantErr error
 	}{
 		{name: "all missing", conf: "Host old\n  HostName 192.0.2.7\n", alias: "old",
-			want: []string{"ControlMaster auto", "ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}},
-		{name: "one missing, another value kept", conf: "Host old\n  HostName 192.0.2.7\n  controlmaster no\n  ControlPath ~/.ssh/other/%C\n", alias: "old",
-			want: []string{"ControlPersist 30m"}},
-		{name: "complete", conf: "Host old\n  HostName 192.0.2.7\n  ControlMaster auto\n  ControlPath ~/.ssh/cm/%C\n  ControlPersist 30m\n", alias: "old"},
+			want: setup.Control{Missing: []string{"ControlMaster auto", "ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}}},
+		{name: "one missing, other values reported as written", conf: "Host old\n  HostName 192.0.2.7\n  controlmaster no\n  ControlPath ~/.ssh/other/%C\n", alias: "old",
+			want: setup.Control{Missing: []string{"ControlPersist 30m"}, Other: []string{"ControlMaster no", "ControlPath ~/.ssh/other/%C"}}},
+		{name: "none is another value, not missing", conf: "Host old\n  ControlMaster auto\n  ControlPath none\n  ControlPersist 30m\n", alias: "old",
+			want: setup.Control{Other: []string{"ControlPath none"}}},
+		{name: "complete, values compared without case", conf: "Host old\n  HostName 192.0.2.7\n  ControlMaster AUTO\n  ControlPath ~/.ssh/cm/%C\n  ControlPersist 30m\n", alias: "old"},
+		{name: "any pattern on the Host line", conf: "Host old alt\n  HostName 192.0.2.7\n", alias: "alt",
+			want: setup.Control{Missing: []string{"ControlMaster auto", "ControlPath ~/.ssh/cm/%C", "ControlPersist 30m"}}},
 		{name: "not managed", conf: "Host old\n  HostName 192.0.2.7\n", alias: "other", wantErr: setup.ErrNotManaged},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := setup.MissingControl(writeConf(t, tt.conf), tt.alias)
+			got, err := setup.InspectControl(writeConf(t, tt.conf), tt.alias)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
-					t.Errorf("MissingControl() err = %v, want %v", err, tt.wantErr)
+					t.Errorf("InspectControl() err = %v, want %v", err, tt.wantErr)
 				}
 				return
 			}
 			if err != nil || !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("MissingControl() = %v, %v; want %v", got, err, tt.want)
+				t.Errorf("InspectControl() = %+v, %v; want %+v", got, err, tt.want)
 			}
 		})
 	}
 	t.Run("missing file", func(t *testing.T) {
 		t.Parallel()
-		if _, err := setup.MissingControl(filepath.Join(t.TempDir(), "none.conf"), "x"); err == nil {
-			t.Errorf("MissingControl() on a missing file = nil, want an error")
+		if _, err := setup.InspectControl(filepath.Join(t.TempDir(), "none.conf"), "x"); err == nil {
+			t.Errorf("InspectControl() on a missing file = nil, want an error")
+		}
+	})
+	t.Run("an empty alias never matches a bare Host line", func(t *testing.T) {
+		t.Parallel()
+		path := writeConf(t, "Host\n  HostName 192.0.2.7\n")
+		if _, err := setup.InspectControl(path, ""); err == nil {
+			t.Errorf("InspectControl(\"\") = nil, want an error")
+		}
+		if _, err := setup.EnsureControl(path, ""); err == nil {
+			t.Errorf("EnsureControl(\"\") = nil, want an error")
+		}
+		if got, _ := os.ReadFile(path); string(got) != "Host\n  HostName 192.0.2.7\n" {
+			t.Errorf("file changed: %q", got)
 		}
 	})
 }

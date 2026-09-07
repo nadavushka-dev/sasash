@@ -12,6 +12,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
@@ -228,8 +229,8 @@ func WithSaveHost(m Model, f func(AdhocEntry) error) Model {
 }
 
 // WithControlHooks swaps the ControlMaster-trio hooks (4.18).
-func WithControlHooks(m Model, missing func(string) ([]string, error), enable func(string) ([]string, error)) Model {
-	m.missingControl, m.enableControl = missing, enable
+func WithControlHooks(m Model, inspect func(string) (setup.Control, error), enable func(string) ([]string, error)) Model {
+	m.inspectControl, m.enableControl = inspect, enable
 	return m
 }
 

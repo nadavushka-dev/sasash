@@ -45,31 +45,58 @@ func ManagedBlock(alias, hostName, user, port string) string {
 	return b.String()
 }
 
-// MissingControl lists the trio's lines the alias's block lacks, as they
-// would be written ("ControlMaster auto"), in the template's order; none
-// when the block has all three. A directive present with another value
-// is the user's choice and counts as present — sasash never overrides a
-// hand-written setting. ErrNotManaged when the alias has no block.
-func MissingControl(confPath, alias string) ([]string, error) {
-	f, err := sshconf.ParseFile(confPath)
-	if err != nil {
-		return nil, err
-	}
-	h, ok := f.Host(alias)
-	if !ok {
-		return nil, fmt.Errorf("host %q: %w", alias, ErrNotManaged)
-	}
-	return missing(h), nil
+// Control is what a block has of the trio: the lines it lacks, as they
+// would be written ("ControlMaster auto"), and the directives it sets to
+// another value, as written ("ControlPath none"). A directive present
+// with another value is the user's choice — sasash never overrides a
+// hand-written setting — so it is never missing; the caller decides
+// what to say about it (a ControlPath of none disables -O as surely as
+// no ControlPath at all).
+type Control struct {
+	Missing []string
+	Other   []string
 }
 
-func missing(h *sshconf.Host) []string {
-	var out []string
-	for _, d := range ControlDirectives {
-		if _, ok := h.Get(d[0]); !ok {
-			out = append(out, d[0]+" "+d[1])
+// InspectControl reads the alias's block. The alias may be any pattern
+// on the Host line, not only the first. ErrNotManaged when no block in
+// the file names it — an empty alias included: a bare `Host` line has
+// no pattern to match.
+func InspectControl(confPath, alias string) (Control, error) {
+	_, h, err := controlBlock(confPath, alias)
+	if err != nil {
+		return Control{}, err
+	}
+	return inspect(h), nil
+}
+
+func controlBlock(confPath, alias string) (*sshconf.File, *sshconf.Host, error) {
+	f, err := sshconf.ParseFile(confPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, h := range f.Hosts() {
+		for _, p := range h.Patterns {
+			if strings.EqualFold(p, alias) {
+				h := h
+				return f, &h, nil
+			}
 		}
 	}
-	return out
+	return nil, nil, fmt.Errorf("host %q: %w", alias, ErrNotManaged)
+}
+
+func inspect(h *sshconf.Host) Control {
+	var c Control
+	for _, d := range ControlDirectives {
+		v, ok := h.Get(d[0])
+		switch {
+		case !ok:
+			c.Missing = append(c.Missing, d[0]+" "+d[1])
+		case !strings.EqualFold(v, d[1]):
+			c.Other = append(c.Other, strings.TrimSpace(d[0]+" "+v))
+		}
+	}
+	return c
 }
 
 // EnsureControl adds the trio's missing directives to the alias's block:
@@ -79,15 +106,11 @@ func missing(h *sshconf.Host) []string {
 // when the block already had all three, in which case the file is not
 // written at all. ErrNotManaged when the alias has no block.
 func EnsureControl(confPath, alias string) ([]string, error) {
-	f, err := sshconf.ParseFile(confPath)
+	f, h, err := controlBlock(confPath, alias)
 	if err != nil {
 		return nil, err
 	}
-	h, ok := f.Host(alias)
-	if !ok {
-		return nil, fmt.Errorf("host %q: %w", alias, ErrNotManaged)
-	}
-	added := missing(h)
+	added := inspect(h).Missing
 	if len(added) == 0 {
 		return nil, nil
 	}
