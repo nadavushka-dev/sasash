@@ -55,7 +55,7 @@ type Styles struct {
 	BoxDesc      lipgloss.Style // its description
 	BoxValue     lipgloss.Style // a live value beside a menu entry (theme, target)
 	BoxQuery     lipgloss.Style // the / search as typed
-	BoxOff       lipgloss.Style // the ○ of a picker choice not in effect
+	BoxOff       lipgloss.Style // the ○ of a picker choice not in effect: plain, a glyph needs contrast
 }
 
 // NewStyles materializes the widget styles for one theme.
@@ -101,6 +101,6 @@ func NewStyles(p Palette) Styles {
 		BoxDesc:      lipgloss.NewStyle().Foreground(p.Fg),
 		BoxValue:     lipgloss.NewStyle().Foreground(p.Accent2),
 		BoxQuery:     lipgloss.NewStyle().Foreground(p.Accent2).Bold(true),
-		BoxOff:       lipgloss.NewStyle().Foreground(p.FgDim),
+		BoxOff:       lipgloss.NewStyle().Foreground(p.Fg),
 	}
 }

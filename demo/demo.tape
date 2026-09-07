@@ -44,8 +44,13 @@ Sleep 500ms
 Type "o"
 Sleep 1s
 Screenshot demo/out/frame-settings-mocha.png
-Type "j"
-Sleep 800ms
+Type "jj"
+Sleep 500ms
+Enter
+Sleep 1s
+Screenshot demo/out/frame-picker-mocha.png
+Escape
+Sleep 300ms
 Escape
 Sleep 300ms
 Type "ttt"

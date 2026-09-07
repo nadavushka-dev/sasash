@@ -135,8 +135,9 @@ func WithSaveTheme(m Model, f func(string) error) Model {
 // assertions: tests run under the Ascii color profile, where every theme
 // renders identically, so wiring must be asserted at the style layer
 // (GetForeground needs no rendering and no profile).
-func StylesOf(m Model) Styles        { return m.styles }
-func HelpStyles(m Model) help.Styles { return m.help.Styles }
+func StylesOf(m Model) Styles            { return m.styles }
+func WithStyles(m Model, s Styles) Model { m.styles = s; return m }
+func HelpStyles(m Model) help.Styles     { return m.help.Styles }
 
 // StaticCursor turns off the filter and prompt inputs' cursor blink so
 // the key-path tests never produce blink tick cmds (which sleep when

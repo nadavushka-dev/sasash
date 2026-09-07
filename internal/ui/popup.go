@@ -307,7 +307,7 @@ func (m Model) popupView() string {
 // the view centers in the body. The border is the theme's accent, or
 // its warning color for an alert (the ! title says so without color).
 // The frame is fixed by width and height (4.15): rows are padded to
-// height and each padded or cut to width, so the box does not move as
+// height and each cut (never wrapped) or padded to width, so the box does not move as
 // its content changes; both are clamped to the frame, and zero means
 // the content's own. The title is clamped to the content width so a
 // long one cannot widen the box past the frame; on a frame too short
@@ -318,7 +318,9 @@ func (m Model) box(title string, rows []string, bottom string, alert bool, width
 	if width > 0 {
 		w = min(width, w)
 	}
-	fixed := lipgloss.NewStyle().Width(w).MaxWidth(w)
+	// Cut, never wrap (Width would wrap and add a display row), then pad
+	// to the width so the box is exactly as wide as asked.
+	cut := m.styles.Clamp.MaxWidth(w)
 	for len(rows) < height {
 		rows = append(rows, "")
 	}
@@ -335,7 +337,7 @@ func (m Model) box(title string, rows []string, bottom string, alert bool, width
 	}
 	for _, l := range rows {
 		if width > 0 {
-			l = fixed.Render(l)
+			l = padRight(cut.Render(l), w)
 		}
 		b.WriteString("\n   " + l)
 	}

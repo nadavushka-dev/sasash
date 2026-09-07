@@ -1,9 +1,11 @@
 package ui_test
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,7 +43,7 @@ func TestNewStyles_BoxRolesFollowPalette(t *testing.T) {
 				{name: "BoxDesc", got: s.BoxDesc.GetForeground(), want: p.Fg},
 				{name: "BoxValue", got: s.BoxValue.GetForeground(), want: p.Accent2},
 				{name: "BoxQuery", got: s.BoxQuery.GetForeground(), want: p.Accent2},
-				{name: "BoxOff", got: s.BoxOff.GetForeground(), want: p.FgDim},
+				{name: "BoxOff", got: s.BoxOff.GetForeground(), want: p.Fg},
 			}
 			for _, tt := range tests {
 				if tt.got != tt.want {
@@ -56,14 +58,165 @@ func TestNewStyles_BoxRolesFollowPalette(t *testing.T) {
 			if p.Accent == p.Warning {
 				t.Errorf("Accent and Warning coincide (%v): the box kinds would not read apart", p.Accent)
 			}
-			// The box's text sits on the theme's background: the roles
-			// used for text are never the background itself.
-			for _, c := range []lipgloss.Color{p.Accent, p.Accent2, p.Fg, p.FgDim, p.Warning} {
-				if c == p.Bg || c == p.Selection {
-					t.Errorf("token %v equals a fill: text in it would vanish", c)
+			// Legible in every theme: the roles the box paints text and
+			// glyphs in clear WCAG's 3:1 floor for graphics against the
+			// ground they sit on — the background, and the selection fill
+			// under the highlighted row's accent.
+			pairs := []struct {
+				name   string
+				fg, bg lipgloss.Color
+			}{
+				{name: "Fg on Bg", fg: p.Fg, bg: p.Bg},
+				{name: "Accent on Bg", fg: p.Accent, bg: p.Bg},
+				{name: "Accent2 on Bg", fg: p.Accent2, bg: p.Bg},
+				{name: "Warning on Bg", fg: p.Warning, bg: p.Bg},
+				{name: "Success on Bg", fg: p.Success, bg: p.Bg},
+				{name: "Accent on Selection", fg: p.Accent, bg: p.Selection},
+			}
+			for _, pr := range pairs {
+				if r := contrast(t, pr.fg, pr.bg); r < 3 {
+					t.Errorf("%s contrast = %.2f, want >= 3", pr.name, r)
 				}
 			}
 		})
+	}
+}
+
+// contrast is the WCAG contrast ratio of two #rrggbb colors.
+func contrast(t *testing.T, a, b lipgloss.Color) float64 {
+	t.Helper()
+	la, lb := luminance(t, a), luminance(t, b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+func luminance(t *testing.T, c lipgloss.Color) float64 {
+	t.Helper()
+	hex := strings.TrimPrefix(string(c), "#")
+	if len(hex) != 6 {
+		t.Fatalf("color %q is not #rrggbb", c)
+	}
+	var ch [3]float64
+	for i := range ch {
+		v, err := strconv.ParseUint(hex[2*i:2*i+2], 16, 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := float64(v) / 255
+		if s <= 0.03928 {
+			ch[i] = s / 12.92
+		} else {
+			ch[i] = math.Pow((s+0.055)/1.055, 2.4)
+		}
+	}
+	return 0.2126*ch[0] + 0.7152*ch[1] + 0.0722*ch[2]
+}
+
+// marked is the gruvbox styles with each box role wrapped so its output
+// carries a marker: which role a surface reaches for becomes visible in
+// any color profile, without a golden frame.
+func marked() ui.Styles {
+	s := ui.NewStyles(ui.Gruvbox)
+	tag := func(st lipgloss.Style, name string) lipgloss.Style {
+		return st.Transform(func(text string) string { return "«" + name + "»" + text })
+	}
+	s.Popup, s.PopupAlert = tag(s.Popup, "REF"), tag(s.PopupAlert, "ALERT")
+	s.BoxTitle, s.BoxTitleWarn = tag(s.BoxTitle, "TITLE"), tag(s.BoxTitleWarn, "WARNTITLE")
+	s.BoxHeading, s.BoxKey, s.BoxDesc = tag(s.BoxHeading, "HEAD"), tag(s.BoxKey, "KEY"), tag(s.BoxDesc, "DESC")
+	s.BoxValue, s.BoxQuery, s.BoxOff = tag(s.BoxValue, "VALUE"), tag(s.BoxQuery, "QUERY"), tag(s.BoxOff, "OFF")
+	s.ItemSelected, s.PathName = tag(s.ItemSelected, "SEL"), tag(s.PathName, "NAME")
+	s.StatusUp = tag(s.StatusUp, "UP")
+	return s
+}
+
+// TestModel_View_BoxSurfacesReachTheirRoles pins the color half of the
+// slice past the Styles struct: each surface paints with the role meant
+// for it, on a wide frame so nothing is cut.
+func TestModel_View_BoxSurfacesReachTheirRoles(t *testing.T) {
+	t.Parallel()
+	base := ui.WithStyles(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 160, Height: 40}), marked())
+	tests := []struct {
+		name    string
+		keys    []string
+		want    []string
+		wantNot []string
+	}{
+		{name: "settings menu", keys: []string{"o"},
+			want:    []string{"«REF»", "«TITLE»settings", "› «SEL»create config file", "  «NAME»edit config file", "«VALUE»gruvbox", "«VALUE»tab"},
+			wantNot: []string{"«ALERT»", "«WARNTITLE»"}},
+		{name: "settings search", keys: []string{"o", "/", "th"}, want: []string{"«QUERY»/th▏", "› «SEL»theme"}},
+		{name: "theme picker", keys: []string{"o", "j", "j", "enter"},
+			want: []string{"› «UP»● «SEL»gruvbox", "  «OFF»○ «NAME»mocha"}},
+		{name: "spawn picker", keys: []string{"o", "j", "j", "j", "enter"},
+			want: []string{"› «UP»● «SEL»tab", "  «OFF»○ «NAME»pane"}},
+		{name: "keys panel", keys: []string{"?"},
+			want:    []string{"«REF»", "«TITLE»? keys", "«HEAD»host list", "«KEY»↑/k", "«DESC»up"},
+			wantNot: []string{"«ALERT»"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			view := press(t, base, tt.keys...).View()
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Errorf("View() missing %q:\n%s", want, view)
+				}
+			}
+			for _, not := range tt.wantNot {
+				if strings.Contains(view, not) {
+					t.Errorf("View() carries %q:\n%s", not, view)
+				}
+			}
+		})
+	}
+	// The attention popup is the other kind.
+	f, _ := failedForward(t)
+	view := ui.WithStyles(f, marked()).View()
+	if !strings.Contains(view, "«ALERT»") || !strings.Contains(view, "«WARNTITLE»!") || strings.Contains(view, "«REF»") || strings.Contains(view, "«TITLE»") {
+		t.Errorf("attention popup should paint with the alert roles:\n%s", view)
+	}
+}
+
+// TestModel_View_SettingsRowsFitTheFixedWidth keeps the constant honest:
+// every menu row with its fixed detail fits the frame with slack, and a
+// value that does not — a config path outside home — is cut on its
+// row, never wrapped onto another.
+func TestModel_View_SettingsRowsFitTheFixedWidth(t *testing.T) {
+	t.Parallel()
+	longest := 0
+	for i, label := range []string{"create config file", "edit config file", "theme", "spawn target", "add new connection", "add new tunnel"} {
+		row := "  " + label
+		switch i {
+		case 1:
+			row += "  ~/.ssh/config.d/sasash.conf"
+		case 2:
+			for _, th := range ui.Themes {
+				longest = max(longest, lipgloss.Width(row+"  "+th.Name))
+			}
+		case 3:
+			row += "  workspace (herdr workspace)"
+		}
+		longest = max(longest, lipgloss.Width(row))
+	}
+	if longest > 60-4 {
+		t.Errorf("longest menu row = %d cells, want <= 56 to leave the fixed width slack", longest)
+	}
+	long := "/Volumes/work-laptop/engineering/team/.ssh/config.d/sasash.conf"
+	m := press(t, ui.WithEditor(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 120, Height: 30}), []string{"vi"}, "", long), "o")
+	view := m.View()
+	w, h := boxSize(t, view)
+	if h != 6+boxChromeRows || w != 66 {
+		t.Errorf("settings box with a long path = %dx%d, want 66x%d (cut, not wrapped):\n%s", w, h, 6+boxChromeRows, view)
+	}
+	if strings.Contains(view, "sasash.conf") || !strings.Contains(view, "╰") {
+		t.Errorf("View() should cut the long path inside the row and keep the box whole:\n%s", view)
+	}
+	for _, l := range boxLines(view) {
+		if l != "" && !strings.HasPrefix(l, " ") {
+			t.Errorf("box row lost its indent: %q", l)
+		}
 	}
 }
 
@@ -84,7 +237,9 @@ func TestModel_ApplyTheme_BoxStylesFollowSwitch(t *testing.T) {
 // the package's sources: a #rrggbb anywhere but palette.go is a leak.
 func TestUI_NoColorLiteralsOutsidePalette(t *testing.T) {
 	t.Parallel()
-	hex := regexp.MustCompile(`#[0-9a-fA-F]{6}\b`)
+	// A hex literal, or any lipgloss color constructor: palette.go is
+	// the one place either belongs.
+	hex := regexp.MustCompile(`#[0-9a-fA-F]{6}\b|lipgloss\.(Color|ANSIColor|AdaptiveColor|CompleteColor|CompleteAdaptiveColor)\(`)
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("Glob(*.go) = %v, %v", files, err)
@@ -151,6 +306,20 @@ func TestModel_View_SettingsBoxHasAFixedFrame(t *testing.T) {
 				t.Errorf("settings box = %dx%d, want the menu's %dx%d:\n%s", w, h, w0, h0, m.View())
 			}
 		})
+	}
+	// Every pane's title fits the fixed width whole at 80 columns: the
+	// instruction is never cut.
+	for _, tt := range []struct {
+		name, want string
+		keys       []string
+	}{
+		{name: "spawn", want: "applies and persists", keys: []string{"o", "j", "j", "j", "enter"}},
+		{name: "theme", want: "enter applies and persists", keys: []string{"o", "j", "j", "enter"}},
+	} {
+		m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 24}), tt.keys...)
+		if view := m.View(); !strings.Contains(view, tt.want) {
+			t.Errorf("%s picker title cut at 80 columns:\n%s", tt.name, view)
+		}
 	}
 	// A short frame clamps the fixed height as the popup's room does.
 	short := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 12}), "o")
