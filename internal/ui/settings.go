@@ -185,6 +185,9 @@ func (m Model) settingsRows() int {
 		return len(SpawnTargets)
 	case settingsMenu:
 		return entryCount
+	case settingsSetup:
+		_, rows, _, _ := m.settingsContent()
+		return len(rows)
 	}
 	return 1
 }
@@ -301,15 +304,27 @@ func (m Model) settingsView() string {
 	room := m.popupRoom()
 	offset := max(cursor-room+1, 0)
 	end := min(offset+room, len(rows))
-	if h := m.settings.find.hint(); h != "" {
-		foot = m.styles.CmdPreview.Render(h)
+	// The bottom line: the search while typed, else the pane's footer;
+	// when the rows outgrow the box the scroll hint leads, so what is
+	// hidden is never silent (the footer's tail yields on a narrow frame).
+	var bottom []string
+	if len(rows) > room {
+		bottom = append(bottom, m.styles.PathExtra.Render(scrollHint(offset, end, len(rows))))
 	}
-	return m.box(m.styles.SectionLabel.Render(title), rows[offset:end], foot)
+	switch h := m.settings.find.hint(); {
+	case h != "":
+		bottom = append(bottom, m.styles.CmdPreview.Render(h))
+	case foot != "":
+		bottom = append(bottom, foot)
+	}
+	return m.box(m.styles.SectionLabel.Render(title), rows[offset:end], strings.Join(bottom, helpSeparator))
 }
 
 // settingsContent is the open pane as the box shows it: title, rows,
 // the row index to keep in view (-1 when none is highlighted) and the
-// footer line.
+// footer line. The setup pane's cursor is unmarked — its rows are read,
+// not chosen — but it still moves, so j/k reach every piece on a frame
+// too short for all three.
 func (m Model) settingsContent() (title string, rows []string, cursor int, foot string) {
 	s := m.settings
 	cursor = -1
@@ -343,6 +358,7 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 		}
 	case settingsSetup:
 		title = "create config file — sasash writes exactly:"
+		cursor = s.cursor
 		type piece struct {
 			text    string
 			present func(setup.Status) bool

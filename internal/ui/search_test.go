@@ -88,25 +88,94 @@ func TestModel_View_SettingsSpellsTheConfigUnderHome(t *testing.T) {
 	if view := press(t, other, "o").View(); !strings.Contains(view, "edit config file  /etc/ssh/sasash.conf") {
 		t.Errorf("View() should show a path outside home whole:\n%s", view)
 	}
+	// No home known: nothing is under it.
+	none := ui.WithHome(ui.WithEditor(wide(t), []string{"vi"}, "", "/srv/sasash.conf"), "")
+	if view := press(t, none, "o").View(); !strings.Contains(view, "edit config file  /srv/sasash.conf") {
+		t.Errorf("View() without a home should show the path whole:\n%s", view)
+	}
 }
 
 func TestModel_View_SettingsBoxFitsATinyFrame(t *testing.T) {
 	t.Parallel()
-	m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 30, Height: 8}), "o")
-	view := m.View()
-	lines := strings.Split(view, "\n")
-	if len(lines) > 8 {
-		t.Errorf("View() is %d lines, want <= 8", len(lines))
+	tests := []struct {
+		name   string
+		height int
+		border bool
+	}{
+		// A five-row body: the blank under the title goes, the border
+		// stays, one row shows with the scroll hint.
+		{name: "border kept at a five-row body", height: 9, border: true},
+		// A four-row body cannot hold a border and a row: the panel
+		// goes bare rather than framing nothing.
+		{name: "bare at a four-row body", height: 8},
 	}
-	for i, l := range lines {
-		if w := lipgloss.Width(l); w > 30 {
-			t.Errorf("View() line %d width = %d, want <= 30", i, w)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 40, Height: tt.height}), "o")
+			view := m.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) > tt.height {
+				t.Errorf("View() is %d lines, want <= %d:\n%s", len(lines), tt.height, view)
+			}
+			for i, l := range lines {
+				if w := lipgloss.Width(l); w > 40 {
+					t.Errorf("View() line %d width = %d, want <= 40", i, w)
+				}
+			}
+			// The top corner says whether a border was drawn at all; a
+			// bordered box must also keep its bottom on screen.
+			if got := strings.Contains(view, "╭"); got != tt.border || (tt.border && !strings.Contains(view, "╰")) {
+				t.Errorf("View() bordered = %v, want %v (bottom kept %v):\n%s", got, tt.border, strings.Contains(view, "╰"), view)
+			}
+			if !strings.Contains(view, "settings") || !strings.Contains(view, "› create config file") || !strings.Contains(view, "of 6 · j/k scroll") {
+				t.Errorf("View() should show the title, the first row and the scroll hint:\n%s", view)
+			}
+			// Every entry is reachable.
+			if view := press(t, m, "G").View(); !strings.Contains(view, "› add new tunnel") || !strings.Contains(view, "lines 6–6 of 6") {
+				t.Errorf("View() after G should reach the last entry:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestModel_View_SettingsPickerKeepsTheHighlightInView(t *testing.T) {
+	t.Parallel()
+	// The theme picker at a one-row box: G lands on the last theme, and
+	// that is the row shown, marked.
+	m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 10}), "o", "j", "j", "enter", "G")
+	last := ui.Themes[len(ui.Themes)-1].Name
+	if view := m.View(); !strings.Contains(view, "› ○ "+last) && !strings.Contains(view, "› ● "+last) {
+		t.Errorf("View() after G in the picker should show the last theme highlighted:\n%s", view)
+	}
+	if view := press(t, m, "g").View(); !strings.Contains(view, "› ● gruvbox") {
+		t.Errorf("View() after g should show the first theme again:\n%s", view)
+	}
+}
+
+func TestModel_View_SettingsSetupRowsReachableOnAShortFrame(t *testing.T) {
+	t.Parallel()
+	// At 80x10 the box holds one piece at a time: the hint says so, j
+	// walks the other two into view, the footer stays on the bottom line
+	// throughout, and the inspection error is reachable the same way.
+	short := ui.WithHome(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 10}), homeWith(t, false, false, false))
+	next, check := press(t, short, "o").Update(keyMsg("enter"))
+	short = update(t, next.(ui.Model), check())
+	pieces := []string{"Include ~/.ssh/config.d/sasash.conf", "~/.ssh/config.d/sasash.conf  (one", "~/.ssh/cm/"}
+	for i, want := range pieces {
+		view := short.View()
+		if !strings.Contains(view, want) || !strings.Contains(view, "enter writes") || !strings.Contains(view, "of 3 · j/k scroll") {
+			t.Errorf("View() at row %d should show %q with the footer and the hint:\n%s", i, want, view)
 		}
+		for j, other := range pieces {
+			if j != i && strings.Contains(view, other) {
+				t.Errorf("View() at row %d should not also show %q:\n%s", i, other, view)
+			}
+		}
+		short = press(t, short, "j")
 	}
-	// Both borders and the first entry are on screen: the blank under
-	// the title went instead of the box's bottom.
-	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") || !strings.Contains(view, "› create config file") {
-		t.Errorf("View() at 30x8 should keep the box whole with its first row:\n%s", view)
+	if view := press(t, short, "k", "k", "k", "k").View(); !strings.Contains(view, pieces[0]) {
+		t.Errorf("View() after k k k k should be back at the first piece:\n%s", view)
 	}
 }
 
@@ -119,6 +188,28 @@ func TestModel_Update_SettingsSearch(t *testing.T) {
 		view := m.View()
 		if !ui.SettingsOpen(m) || !strings.Contains(view, "› theme") || strings.Contains(view, "create config file") || !strings.Contains(view, "/th▏") {
 			t.Errorf("View() after /th should show only theme, highlighted, with the query:\n%s", view)
+		}
+	})
+	t.Run("a space is text: the search spans words", func(t *testing.T) {
+		t.Parallel()
+		if view := press(t, wide(t), "o", "/", "new", " ", "c").View(); !strings.Contains(view, "› add new connection") || strings.Contains(view, "add new tunnel") || !strings.Contains(view, "/new c▏") {
+			t.Errorf("View() after /new c should keep only the connection entry:\n%s", view)
+		}
+	})
+	t.Run("? q and t are text while typing", func(t *testing.T) {
+		t.Parallel()
+		m := press(t, wide(t), "o", "/", "?", "q", "t")
+		if view := m.View(); !ui.SettingsOpen(m) || ui.HelpOpen(m) || ui.ThemeName(m) != "gruvbox" || !strings.Contains(view, "/?qt▏") {
+			t.Errorf("View() after /?qt should have typed all three: settings %v, help %v, theme %s:\n%s", ui.SettingsOpen(m), ui.HelpOpen(m), ui.ThemeName(m), view)
+		}
+	})
+	t.Run("a paste drops control characters", func(t *testing.T) {
+		t.Parallel()
+		m := press(t, wide(t), "o", "/")
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ad\nnew\x1b[2Jx")})
+		view := m.View()
+		if strings.ContainsAny(view, "\x1b\r") || !strings.Contains(view, "/adnew[2Jx▏") || len(strings.Split(view, "\n")) != 24 {
+			t.Errorf("View() after a hostile paste should show the query cleaned in a whole frame:\n%s", view)
 		}
 	})
 	t.Run("the match ignores case", func(t *testing.T) {
@@ -234,11 +325,30 @@ func TestModel_Update_HelpPanelSearch(t *testing.T) {
 			t.Errorf("HelpOpen() = false while searching, want the panel")
 		}
 	})
-	t.Run("a description matches too", func(t *testing.T) {
+	t.Run("a description matches too, spaces included", func(t *testing.T) {
 		t.Parallel()
 		inner := strings.Join(boxLines(press(t, wide(t), "?", "/", "page").View()), "\n")
 		if !strings.Contains(inner, "½ page down") || !strings.Contains(inner, "½ page up") || strings.Contains(inner, "spawn ssh") {
 			t.Errorf("box rows after /page should be the two half pages:\n%s", inner)
+		}
+		if inner := strings.Join(boxLines(press(t, wide(t), "?", "/", "page", " ", "d").View()), "\n"); !strings.Contains(inner, "½ page down") || strings.Contains(inner, "½ page up") {
+			t.Errorf("box rows after /page d should be the one half page:\n%s", inner)
+		}
+	})
+	t.Run("matching groups stay set apart by a blank", func(t *testing.T) {
+		t.Parallel()
+		inner := boxLines(press(t, wide(t), "?", "/", "e", "s", "c").View())
+		headings, blanks := 0, 0
+		for i, l := range inner[2:] { // past the title and its blank
+			switch {
+			case strings.HasPrefix(l, "   ") && !strings.Contains(l, "  "+"esc"):
+				headings++
+			case l == "" && i > 0:
+				blanks++
+			}
+		}
+		if headings < 2 || blanks < headings-1 {
+			t.Errorf("box rows after /esc should hold several groups separated by blanks (headings %d, blanks %d):\n%s", headings, blanks, strings.Join(inner, "\n"))
 		}
 	})
 	t.Run("enter keeps the rows, esc clears, esc closes", func(t *testing.T) {

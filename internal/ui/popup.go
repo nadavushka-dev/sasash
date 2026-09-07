@@ -74,7 +74,15 @@ func (f *finder) key(msg tea.KeyMsg) bool {
 	case tea.KeySpace:
 		f.query += " "
 	case tea.KeyRunes:
-		f.query += string(msg.Runes)
+		// A bracketed paste arrives as one KeyRunes with the raw bytes:
+		// control characters go (a newline would break the box's row
+		// count, an escape would redraw the frame); a space stays.
+		f.query += strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return -1
+			}
+			return r
+		}, string(msg.Runes))
 	default:
 		return false
 	}
@@ -126,7 +134,7 @@ func (m Model) popupKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		p.offset = 0 // the rows changed under the window
 		return m, nil
 	}
-	if !p.find.typing && key.Matches(msg, m.keys.Filter) {
+	if key.Matches(msg, m.keys.Filter) {
 		p.find, p.offset = finder{typing: true}, 0
 		return m, nil
 	}
@@ -271,7 +279,8 @@ func (m Model) popupView() string {
 // blank, the rows indented, and a bottom line when there is one — that
 // the view centers in the body. The title is clamped to the content
 // width so a long one cannot widen the box past the frame; on a frame
-// too short for even one row under the chrome, the blank goes first.
+// too short for even one row under the chrome, the blank goes first,
+// then the border.
 func (m Model) box(title string, rows []string, bottom string) string {
 	w := m.boxWidth()
 	var b strings.Builder
@@ -289,7 +298,13 @@ func (m Model) box(title string, rows []string, bottom string) string {
 	if bottom != "" {
 		b.WriteString("\n " + m.styles.Clamp.MaxWidth(w+2).Render(bottom))
 	}
-	return m.styles.Popup.Render(b.String())
+	style := m.styles.Popup
+	if m.contentHeight() < boxChrome {
+		// Too short for the border to leave a row: the panel goes bare
+		// rather than showing a frame around nothing.
+		style = style.BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false)
+	}
+	return style.Render(b.String())
 }
 
 func scrollHint(from, to, total int) string {
