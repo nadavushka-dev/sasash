@@ -222,7 +222,12 @@ func renameLines(msg renameDoneMsg) []string {
 			"  (not written by sasash — rename them by hand, e)")
 	}
 	if msg.err != nil {
-		lines = append(lines, cleanLine(msg.err.Error()), "  (what did not move stays under "+msg.old+")")
+		// errors.Join separates the kept caches with a newline, which
+		// cleanLine would delete: one line per file, so each is named.
+		for _, l := range strings.Split(msg.err.Error(), "\n") {
+			lines = append(lines, cleanLine(l))
+		}
+		lines = append(lines, "  (what did not move stays under "+msg.old+")")
 	}
 	return append(lines, "",
 		"a running master is not restarted; with sasash's ControlPath (~/.ssh/cm/%C)",

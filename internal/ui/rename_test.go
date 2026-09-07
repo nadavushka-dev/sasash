@@ -343,6 +343,9 @@ func TestModel_Rename_Outcomes(t *testing.T) {
 		{name: "writer refusal is said verbatim", err: errors.New(`alias "srv.lan" already exists`), selected: "web", notice: `rename failed: alias "srv.lan" already exists`},
 		{name: "a kept cache is a renamed host", err: fmt.Errorf("%w: rename web.json srv.json: permission denied", ui.ErrCacheKept), selected: "srv",
 			notice: "state cache not renamed: rename web.json srv.json: permission denied"},
+		{name: "two kept caches get a line each", selected: "srv",
+			err:    fmt.Errorf("%w: s/srv.json exists: s/web.json left in place\ns/srv.stats.json exists: s/web.stats.json left in place", ui.ErrCacheKept),
+			notice: "s/srv.stats.json exists: s/web.stats.json left in place"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -356,6 +359,9 @@ func TestModel_Rename_Outcomes(t *testing.T) {
 			m = update(t, m, msgs[0])
 			if got := selectedAlias(t, m); got != tt.selected || !strings.Contains(m.View(), tt.notice) {
 				t.Errorf("Selected() = %q, want %q; notice want %q:\n%s", got, tt.selected, tt.notice, m.View())
+			}
+			if strings.Contains(m.View(), "left in places/") {
+				t.Errorf("the kept caches ran together on one line:\n%s", m.View())
 			}
 		})
 	}
