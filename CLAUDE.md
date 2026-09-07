@@ -34,7 +34,8 @@ other dependency requires explicit approval.
 
 ## The seams
 
-All outside-world access goes through injectable seams: `run.Runner` (processes),
+All outside-world access goes through injectable seams: `run.Runner` (processes that
+run to completion), `run.Spawner` (detached tunnel processes: spawn / alive / kill),
 `probe.Dialer` (network), and a clock where elapsed time matters. Nothing else touches
 the outside world — that is what makes the logic testable without a live SSH server.
 
@@ -56,7 +57,9 @@ the outside world — that is what makes the logic testable without a live SSH s
 - **Never infer location** from SSID, gateway, or `utun*` interfaces. Only a TCP
   connect is trusted.
 - **Tunnel state: reality wins.** Report three distinct states (`up` / `listening` /
-  `down`) from `-O check` + a local port dial; the state file is a cache, never truth.
+  `down`) from the recorded process's liveness + a local port dial; the state file
+  (set → spec → pid) is a cache, never truth. A forward is one detached `ssh -N -L`
+  process (SPEC §4, Model B); `-O` is for the interactive master only.
 
 ## Testing
 
@@ -69,8 +72,10 @@ Conventions (match exactly):
 - Names `TestType_Method_Case`; table tests as anonymous struct slices, `name` field
   first; `t.Errorf("Method() = %v, want %v", got, want)`; no assertion libraries.
 - Filesystem is never faked — `t.TempDir()` + real files.
-- Fakes: `fakerun` (stubs keyed on argv joined with spaces; unstubbed calls fail loudly)
-  and `fakedial` (keyed on full `host:port`).
+- Fakes: `fakerun` (stubs keyed on argv joined with spaces; unstubbed calls fail loudly),
+  `fakedial` (keyed on full `host:port`), and `fakespawn` (scripted pids whose ports follow
+  them on a wired `fakedial`). Every test that builds a real `tunnel.Engine` wires a
+  `Spawner` — a nil one is the real `OSSpawner`.
 - Coverage targets: `sshconf` ~100%, logic packages ≥95%, UI smoke-only — **no golden
   `View()` strings** (they break on cosmetic changes and catch nothing).
 - New `internal/sshconf/testdata/*.conf` fixtures automatically join the round-trip AND
