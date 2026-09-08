@@ -29,6 +29,8 @@ type KeyMap struct {
 	AddFwd      key.Binding
 	CancelFwd   key.Binding
 	EditFwd     key.Binding
+	DeclareFwd  key.Binding
+	DeleteFwd   key.Binding
 	Restart     key.Binding
 	Exit        key.Binding
 	Filter      key.Binding
@@ -66,6 +68,8 @@ func DefaultKeyMap() KeyMap {
 		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward")),
 		CancelFwd:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill forward")),
 		EditFwd:     key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit forward")),
+		DeclareFwd:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new forward set (declare)")),
+		DeleteFwd:   key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete forward set")),
 		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart master")),
 		Exit:        key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "kill all + exit master")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
@@ -145,6 +149,8 @@ func (t tunnelsKeys) ShortHelp() []key.Binding {
 		t.k.Toggle,
 		t.k.CancelFwd,
 		t.k.EditFwd,
+		t.k.DeclareFwd,
+		t.k.DeleteFwd,
 		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "host list (the cycle closes)")),
 	}
 }

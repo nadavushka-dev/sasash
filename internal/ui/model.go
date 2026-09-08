@@ -261,8 +261,9 @@ type Model struct {
 	tunnelFirst bool
 	// add new tunnel: the hook that writes the meta line, and the flow's
 	// collected answers.
-	saveForwardSet func(alias, name string, specs []string) error
-	tunnel         newTunnel
+	saveForwardSet   func(alias, name string, specs []string) error
+	removeForwardSet func(alias, name string) error
+	tunnel           newTunnel
 	// edit forward in place (E): the hook that rewrites the meta line,
 	// and the row being edited.
 	saveForwardEdit func(alias, set, old, new string) error
@@ -384,6 +385,11 @@ type Config struct {
 	// "add new tunnel" entry) — desire only, nothing is started; nil
 	// disables the entry. The cmd layer wires fwdset.Add on sasash.conf.
 	SaveForwardSet func(alias, name string, specs []string) error
+	// RemoveForwardSet deletes a host's declared forward set (the D key,
+	// SASASH.4.19) — removes exactly the one `# @sasash forwards` line;
+	// nil disables delete of declared sets. The cmd layer wires
+	// fwdset.Remove on sasash.conf.
+	RemoveForwardSet func(alias, name string) error
 	// SaveForwardEdit rewrites one spec of a declared set in place (the E
 	// key); nil makes E live-only. The cmd layer wires fwdset.Update.
 	SaveForwardEdit func(alias, set, old, new string) error
@@ -517,20 +523,21 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		actions:        cfg.Actions,
 		home:           cfg.Home,
 
-		saveForwardSet:  cfg.SaveForwardSet,
-		saveForwardEdit: cfg.SaveForwardEdit,
-		renameHost:      cfg.RenameHost,
-		clock:           clockOr(cfg.Clock),
-		hist:            make(map[string]*pathHist),
-		recordHandoff:   cfg.RecordHandoff,
-		pendingStamp:    make(map[string]func() error),
-		setPath:         cfg.SetPath,
-		pathBlock:       cfg.PathBlock,
-		recordSwitch:    cfg.RecordSwitch,
-		blocks:          make(map[string]pathBlock),
-		switching:       make(map[string]bool),
-		corruptSeen:     make(map[string]bool),
-		stateDir:        cfg.StateDir,
+		saveForwardSet:   cfg.SaveForwardSet,
+		removeForwardSet: cfg.RemoveForwardSet,
+		saveForwardEdit:  cfg.SaveForwardEdit,
+		renameHost:       cfg.RenameHost,
+		clock:            clockOr(cfg.Clock),
+		hist:             make(map[string]*pathHist),
+		recordHandoff:    cfg.RecordHandoff,
+		pendingStamp:     make(map[string]func() error),
+		setPath:          cfg.SetPath,
+		pathBlock:        cfg.PathBlock,
+		recordSwitch:     cfg.RecordSwitch,
+		blocks:           make(map[string]pathBlock),
+		switching:        make(map[string]bool),
+		corruptSeen:      make(map[string]bool),
+		stateDir:         cfg.StateDir,
 		spawn: spawnState{
 			mux:        cfg.Spawn.Mux,
 			herdrPane:  cfg.Spawn.HerdrPane,
@@ -757,6 +764,34 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.reloadCmd(false)
+
+	case fwdDeletedMsg:
+		delete(m.tinflight, msg.host)
+		switch {
+		case msg.removeErr != nil && msg.adhoc:
+			m.notice = "not forgotten: " + oneLine(msg.removeErr, msg.host)
+		case msg.removeErr != nil:
+			m.notice = "not deleted: " + oneLine(msg.removeErr, msg.host)
+		case msg.adhoc:
+			m.notice = "forgot " + msg.name + " on " + msg.host
+			if msg.killErr != nil {
+				m.notice = "forgot " + msg.name + " but the kill errored: " + oneLine(msg.killErr, msg.host)
+			}
+		default:
+			m.notice = "deleted " + msg.name + " from " + msg.host
+			if msg.killErr != nil {
+				m.notice = "deleted " + msg.name + " but the down errored: " + oneLine(msg.killErr, msg.host)
+			}
+		}
+		// A config change reloads the host list; an ad-hoc forget only
+		// touched the state cache, so re-poll the host to redraw the rows.
+		if msg.reconfig && m.loadHosts != nil {
+			return m, m.reloadCmd(false)
+		}
+		if host, ok := m.hostByAlias(msg.host); ok {
+			return m, m.tunnelStatusCmd(host)
+		}
+		return m, nil
 
 	case setupDoneMsg:
 		if msg.err != nil {
@@ -1288,6 +1323,23 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m.openEditFwd(host, row)
+			case key.Matches(msg, m.keys.DeclareFwd):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				return m.openDeclareFwd(m.tunnelHost(host))
+			case key.Matches(msg, m.keys.DeleteFwd):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				row, ok := m.highlighted(host)
+				if !ok {
+					m.notice = "no forward highlighted — l cycles to the tunnels pane"
+					return m, nil
+				}
+				return m.deleteFwd(host, row)
 			case key.Matches(msg, m.keys.Restart):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {

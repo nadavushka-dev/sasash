@@ -1027,3 +1027,161 @@ func TestModel_Update_AdhocTunnelOnVariantAttributesToParent(t *testing.T) {
 		t.Errorf("ad-hoc -N on a saved variant should target the parent ubuntu1:\n%s", view)
 	}
 }
+
+// --- SASASH.4.19 lifecycle: declare (n) + delete (D) ---
+
+func TestModel_Update_DeclareForwardSet(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
+	var saved [][]string
+	m = ui.WithSaveForwardSet(m, func(alias, name string, specs []string) error {
+		saved = append(saved, append([]string{alias, name}, specs...))
+		return nil
+	})
+	m = press(t, m, "l", "n") // focus tunnels, declare
+	if !ui.Prompting(m) || !strings.Contains(m.View(), "new set name") {
+		t.Fatalf("n should open the set-name prompt:\n%s", m.View())
+	}
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cache")})
+	m = press(t, m, "enter")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6379")}) // shorthand
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if want := [][]string{{"ubuntu", "cache", "6379:localhost:6379"}}; !reflect.DeepEqual(saved, want) {
+		t.Errorf("saveForwardSet = %v, want %v", saved, want)
+	}
+	if got := sp.Spawned(); len(got) != 0 {
+		t.Errorf("declare starts nothing, spawned %v", got)
+	}
+	if view := m.View(); !strings.Contains(view, "declared cache on ubuntu") {
+		t.Errorf("notice:\n%s", view)
+	}
+}
+
+func TestModel_Update_DeleteForwardSet_NotLive(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir()) // no state -> web is down
+	var removed [][]string
+	m = ui.WithRemoveForwardSet(m, func(alias, name string) error {
+		removed = append(removed, []string{alias, name})
+		return nil
+	})
+	m = press(t, m, "l") // web's first row highlighted
+	m = press(t, m, "D")
+	view := m.View()
+	if !ui.PopupOpen(m) || !strings.Contains(view, "delete web on ubuntu") || !strings.Contains(view, "@sasash forwards web") || !strings.Contains(view, specWeb0) || !strings.Contains(view, specWeb1) {
+		t.Fatalf("D should confirm with the exact line:\n%s", view)
+	}
+	if c := press(t, m, "esc"); ui.PopupOpen(c) || len(removed) != 0 || !strings.Contains(c.View(), "web kept") {
+		t.Errorf("esc cancels, removes nothing:\n%s", c.View())
+	}
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if want := [][]string{{"ubuntu", "web"}}; !reflect.DeepEqual(removed, want) {
+		t.Errorf("removeForwardSet = %v, want %v", removed, want)
+	}
+	if got := sp.Killed(); len(got) != 0 {
+		t.Errorf("a not-live delete kills nothing, killed %v", got)
+	}
+	if view := m.View(); !strings.Contains(view, "deleted web from ubuntu") {
+		t.Errorf("notice:\n%s", view)
+	}
+}
+
+func TestModel_Update_DeleteForwardSet_LiveIsTwoStep(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	sp := fakespawn.New().Dial(d).Live(41)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+	m := polledSpawn(t, r, sp, d, stateDir)
+	var removed [][]string
+	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed = append(removed, []string{alias, name}); return nil })
+	m = press(t, m, "l") // web0 highlighted, up
+	m = press(t, m, "D")
+	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "web is live") || !strings.Contains(view, "kill -TERM 41") || !strings.Contains(view, "@sasash forwards web") {
+		t.Fatalf("D on a live set previews down-then-delete:\n%s", view)
+	}
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{41}) {
+		t.Errorf("live delete KillSets pid 41, killed %v", got)
+	}
+	if want := [][]string{{"ubuntu", "web"}}; !reflect.DeepEqual(removed, want) {
+		t.Errorf("removeForwardSet = %v, want %v", removed, want)
+	}
+}
+
+func TestModel_Update_DeleteAdhoc_ForgetsNoConfig(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:8080", time.Millisecond)
+	sp := fakespawn.New().Dial(d).Live(55)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"","spec":"8080:localhost:8080","pid":55}]}`)
+	m := polledSpawn(t, r, sp, d, stateDir)
+	removeCalled := false
+	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
+	m = press(t, m, "l", "G") // last row = the ad-hoc 8080
+	m = press(t, m, "D")
+	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "forget ad-hoc on ubuntu") || !strings.Contains(view, "8080:localhost:8080") || !strings.Contains(view, "state only") {
+		t.Fatalf("D on an ad-hoc row confirms a forget:\n%s", view)
+	}
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{55}) {
+		t.Errorf("ad-hoc forget kills pid 55, killed %v", got)
+	}
+	if removeCalled {
+		t.Errorf("an ad-hoc forget must NOT write sasash.conf")
+	}
+	// The record is purged from the state cache.
+	if b, _ := os.ReadFile(filepath.Join(stateDir, "ubuntu.json")); strings.Contains(string(b), "8080") {
+		t.Errorf("the ad-hoc record should be forgotten, state = %s", b)
+	}
+	if view := m.View(); !strings.Contains(view, "forgot 8080:localhost:8080 on ubuntu") {
+		t.Errorf("notice:\n%s", view)
+	}
+}
+
+func TestModel_Update_LifecycleGuards(t *testing.T) {
+	t.Parallel()
+	t.Run("n and D need their hooks", func(t *testing.T) {
+		t.Parallel()
+		r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+		d := fakedial.New()
+		m := polledSpawn(t, r, fakespawn.New().Dial(d), d, t.TempDir()) // no hooks wired
+		if v := press(t, m, "l", "n").View(); !strings.Contains(v, "declaring forward sets is not available") {
+			t.Errorf("n without the hook:\n%s", v)
+		}
+		if v := press(t, m, "l", "D").View(); !strings.Contains(v, "deleting forward sets is not available") {
+			t.Errorf("D without the hook:\n%s", v)
+		}
+	})
+	t.Run("D on a recorded-but-undeclared set is not a delete", func(t *testing.T) {
+		t.Parallel()
+		r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+		d := fakedial.New().Up("127.0.0.1:9000", time.Millisecond)
+		sp := fakespawn.New().Dial(d).Live(70)
+		stateDir := t.TempDir()
+		// A named set recorded in state but NOT in sasash.conf (host.Forwards).
+		writeState(t, stateDir, `{"forwards":[{"set":"extra","spec":"9000:localhost:9000","pid":70}]}`)
+		m := polledSpawn(t, r, sp, d, stateDir)
+		removeCalled := false
+		m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
+		m = press(t, m, "l", "G", "D") // last row is the recorded extra set
+		if v := m.View(); ui.PopupOpen(m) || !strings.Contains(v, "extra is not declared on ubuntu") {
+			t.Errorf("D on an undeclared set should refuse, not confirm:\n%s", v)
+		}
+		if removeCalled {
+			t.Error("nothing should be removed for an undeclared set")
+		}
+	})
+}
