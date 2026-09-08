@@ -32,7 +32,6 @@ type KeyMap struct {
 	DeclareFwd  key.Binding
 	DeleteFwd   key.Binding
 	Restart     key.Binding
-	Exit        key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
 	Theme       key.Binding
@@ -69,9 +68,8 @@ func DefaultKeyMap() KeyMap {
 		CancelFwd:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill forward")),
 		EditFwd:     key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit forward")),
 		DeclareFwd:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new forward set (declare)")),
-		DeleteFwd:   key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "delete forward set")),
+		DeleteFwd:   key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete forward set")),
 		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart master")),
-		Exit:        key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "kill all + exit master")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),
 		Theme:       key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),

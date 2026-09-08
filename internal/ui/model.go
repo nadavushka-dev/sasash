@@ -1347,12 +1347,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, m.restartCmd(host)
-			case key.Matches(msg, m.keys.Exit):
-				host, ok := m.Selected()
-				if !ok || m.tunnels == nil {
-					return m, nil
-				}
-				return m, m.exitCmd(host)
 			case key.Matches(msg, m.keys.Edit):
 				if len(m.editor) == 0 || m.confPath == "" {
 					return m, nil

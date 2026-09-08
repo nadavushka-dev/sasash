@@ -102,8 +102,8 @@ func TestModel_Update_PopupNewestWinsAndProbesLand(t *testing.T) {
 	if !ui.PopupOpen(m) || ui.PopupTitle(m) != first {
 		t.Errorf("a status poll should not touch the popup: open %v, title %q", ui.PopupOpen(m), ui.PopupTitle(m))
 	}
-	if closed := press(t, m, "esc"); !strings.Contains(closed.View(), "● master up") {
-		t.Errorf("the poll that landed behind the popup should show once it closes:\n%s", closed.View())
+	if closed := press(t, m, "esc"); !ui.TunnelStatusKnown(closed, "ubuntu") {
+		t.Errorf("the poll that landed behind the popup should be retained once it closes:\n%s", closed.View())
 	}
 	// A second attention event replaces the open one and names it.
 	m = update(t, m, ui.TunnelStatus("spare", tunnel.HostStatus{Host: "spare", CorruptState: true}, nil))

@@ -216,13 +216,6 @@ func TestModel_View_TunnelStates(t *testing.T) {
 			if !strings.Contains(row, tt.wantGlyph) || !strings.HasSuffix(strings.TrimSpace(row), tt.wantWord) {
 				t.Errorf("web row = %q, want glyph %q and word %q", row, tt.wantGlyph, tt.wantWord)
 			}
-			wantMaster := "○ master down"
-			if tt.checkExit == 0 {
-				wantMaster = "● master up"
-			}
-			if !strings.Contains(view, wantMaster) {
-				t.Errorf("View() missing %q:\n%s", wantMaster, view)
-			}
 		})
 	}
 }
@@ -530,57 +523,26 @@ func TestModel_Update_SpaceNeedsHighlight(t *testing.T) {
 	}
 }
 
-func TestModel_Update_RestartAndExit(t *testing.T) {
+func TestModel_Update_RestartMaster(t *testing.T) {
 	t.Parallel()
+	// r exits the interactive control master; the next connect starts a
+	// fresh one, and the tunnels — their own processes — are not touched.
+	// X is delete now (SASASH.4.25), not kill-all: it never reaches here.
 	refused := fakerun.Reply{Result: run.Result{Code: 255, Stderr: []byte("Control socket connect: No such file")}}
 	tests := []struct {
 		name       string
-		key        string
-		checkExit  int // the poll's -O check: 0 = a master is up
 		exitReply  fakerun.Reply
-		wantCalls  []string
 		wantNotice string
 	}{
 		{
-			// M2: Exit only when the last poll saw a master. With none, X
-			// kills the tunnels and asks ssh nothing.
-			name:       "X with no master kills the tunnels only",
-			key:        "X",
-			checkExit:  255,
-			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
-			wantCalls:  []string{},
-			wantNotice: "tunnels killed",
-		},
-		{
-			// SPEC §5 "restart master": exit the interactive master; the
-			// next connect starts a fresh one. Tunnels are not touched.
 			name:       "r exits the interactive master",
-			key:        "r",
 			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
-			wantCalls:  []string{"ssh -O exit ubuntu"},
 			wantNotice: "master exited — a fresh one starts on the next connect",
 		},
 		{
 			name:       "r on a dead master says so",
-			key:        "r",
 			exitReply:  refused,
-			wantCalls:  []string{"ssh -O exit ubuntu"},
 			wantNotice: "restart: ",
-		},
-		{
-			// X: every tunnel process, then the master the poll saw up.
-			name:       "X kills the tunnels and exits the master",
-			key:        "X",
-			exitReply:  fakerun.Reply{Result: run.Result{Code: 0}},
-			wantCalls:  []string{"ssh -O exit ubuntu"},
-			wantNotice: "tunnels killed, master exited",
-		},
-		{
-			name:       "X failure shows ssh's message",
-			key:        "X",
-			exitReply:  refused,
-			wantCalls:  []string{"ssh -O exit ubuntu"},
-			wantNotice: "exit: ",
 		},
 	}
 	for _, tt := range tests {
@@ -588,29 +550,25 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 			t.Parallel()
 			r := fakerun.New().
 				Stub(tt.exitReply, "ssh", "-O", "exit", "ubuntu").
-				StubExit(tt.checkExit, "ssh", "-O", "check", "ubuntu")
+				StubExit(0, "ssh", "-O", "check", "ubuntu")
 			d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
 			sp := fakespawn.New().Dial(d).Live(41)
 			stateDir := t.TempDir()
 			writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
 			m := polledSpawn(t, r, sp, d, stateDir)
 			before := len(r.CallKeys())
-			next, cmd := m.Update(keyMsg(tt.key))
+			next, cmd := m.Update(keyMsg("r"))
 			m = next.(ui.Model)
 			if cmd == nil {
-				t.Fatalf("Update(%s) cmd = nil, want action cmd", tt.key)
+				t.Fatalf("Update(r) cmd = nil, want the master-exit cmd")
 			}
 			m = update(t, m, cmd())
-			if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, tt.wantCalls) {
-				t.Errorf("%s calls = %v, want %v", tt.key, got, tt.wantCalls)
+			if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O exit ubuntu"}) {
+				t.Errorf("r calls = %v, want the master exit", got)
 			}
-			// Only X ends the tunnel process; r leaves it alone.
-			wantKilled := []int(nil)
-			if tt.key == "X" {
-				wantKilled = []int{41}
-			}
-			if got := sp.Killed(); !reflect.DeepEqual(got, wantKilled) {
-				t.Errorf("%s killed = %v, want %v", tt.key, got, wantKilled)
+			// r never ends a tunnel process.
+			if got := sp.Killed(); got != nil {
+				t.Errorf("r killed %v, want nothing (tunnels are not the master)", got)
 			}
 			view := m.View()
 			if !strings.Contains(view, tt.wantNotice) {
@@ -618,9 +576,6 @@ func TestModel_Update_RestartAndExit(t *testing.T) {
 			}
 			if strings.HasSuffix(tt.wantNotice, ": ") && !strings.Contains(view, "No such file") {
 				t.Errorf("View() hides ssh's message:\n%s", view)
-			}
-			if tt.checkExit != 0 && strings.Contains(view, "master exited") {
-				t.Errorf("View() claims a master exited with none seen:\n%s", view)
 			}
 		})
 	}
@@ -671,14 +626,14 @@ func TestModel_Update_SelectionChangeFetchesStatus(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("Update(j) onto an unpolled host cmd = nil, want status cmd")
 	}
-	// Until it lands the master row is pending, never a guessed state.
-	if view := m.View(); !strings.Contains(view, "◌ master …") {
-		t.Errorf("View() before bare's status missing the pending master row:\n%s", view)
+	// Until it lands the status is pending, never a guessed state.
+	if ui.TunnelStatusKnown(m, "bare") {
+		t.Errorf("bare's status should be pending before its poll lands")
 	}
 	m = feed(t, m, cmd)
 	view := m.View()
-	if !strings.Contains(view, "○ master down") {
-		t.Errorf("View() after bare's status missing its master row:\n%s", view)
+	if !ui.TunnelStatusKnown(m, "bare") {
+		t.Errorf("bare's status should have landed after the poll")
 	}
 	if !strings.Contains(view, "$ ssh bare") {
 		t.Errorf("View() preview should be enter's ssh for the new host:\n%s", view)
@@ -691,8 +646,8 @@ func TestModel_Update_SelectionChangeFetchesStatus(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("Update(k) back onto ubuntu cmd = nil, want a re-poll")
 	}
-	if view := m.View(); !strings.Contains(view, "◌ master …") || strings.Contains(view, "● web") {
-		t.Errorf("View() shows ubuntu's stale status as live:\n%s", view)
+	if ui.TunnelStatusKnown(m, "ubuntu") || strings.Contains(m.View(), "● web") {
+		t.Errorf("View() shows ubuntu's stale status as live:\n%s", m.View())
 	}
 }
 
@@ -725,8 +680,8 @@ func TestModel_Update_OnePollInFlightPerHost(t *testing.T) {
 	}
 	// Once it lands the host polls again.
 	m = feed(t, m, first)
-	if view := m.View(); !strings.Contains(view, "○ master down") {
-		t.Errorf("View() after bare's poll landed missing its master row:\n%s", view)
+	if !ui.TunnelStatusKnown(m, "bare") {
+		t.Errorf("bare's status should have landed after its poll")
 	}
 	if _, cmd := m.Update(ui.RefreshTick()); cmd == nil {
 		t.Errorf("Update(tick) after the poll landed cmd = nil, want a re-poll")
@@ -819,7 +774,7 @@ func TestModel_View_HelpListsTunnelKeys(t *testing.T) {
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = press(t, m, "?")
 	view := m.View()
-	for _, want := range []string{"toggle set", "restart master", "exit master", "tunnels pane", "host list"} {
+	for _, want := range []string{"toggle set", "restart master", "delete forward set", "tunnels pane", "host list"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}
@@ -1073,7 +1028,7 @@ func TestModel_Update_DeleteForwardSet_NotLive(t *testing.T) {
 		return nil
 	})
 	m = press(t, m, "l") // web's first row highlighted
-	m = press(t, m, "D")
+	m = press(t, m, "X")
 	view := m.View()
 	if !ui.PopupOpen(m) || !strings.Contains(view, "delete web on ubuntu") || !strings.Contains(view, "@sasash forwards web") || !strings.Contains(view, specWeb0) || !strings.Contains(view, specWeb1) {
 		t.Fatalf("D should confirm with the exact line:\n%s", view)
@@ -1112,7 +1067,7 @@ func TestModel_Update_DeleteForwardSet_LiveIsTwoStep(t *testing.T) {
 	var removed [][]string
 	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed = append(removed, []string{alias, name}); return nil })
 	m = press(t, m, "l") // web0 highlighted, up
-	m = press(t, m, "D")
+	m = press(t, m, "X")
 	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "web is live") || !strings.Contains(view, "kill -TERM 41") || !strings.Contains(view, "@sasash forwards web") {
 		t.Fatalf("D on a live set previews down-then-delete:\n%s", view)
 	}
@@ -1137,7 +1092,7 @@ func TestModel_Update_DeleteAdhoc_ForgetsNoConfig(t *testing.T) {
 	removeCalled := false
 	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
 	m = press(t, m, "l", "G") // last row = the ad-hoc 8080
-	m = press(t, m, "D")
+	m = press(t, m, "X")
 	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "forget ad-hoc on ubuntu") || !strings.Contains(view, "8080:localhost:8080") || !strings.Contains(view, "state only") {
 		t.Fatalf("D on an ad-hoc row confirms a forget:\n%s", view)
 	}
@@ -1168,7 +1123,7 @@ func TestModel_Update_LifecycleGuards(t *testing.T) {
 		if v := press(t, m, "l", "n").View(); !strings.Contains(v, "declaring forward sets is not available") {
 			t.Errorf("n without the hook:\n%s", v)
 		}
-		if v := press(t, m, "l", "D").View(); !strings.Contains(v, "deleting forward sets is not available") {
+		if v := press(t, m, "l", "X").View(); !strings.Contains(v, "deleting forward sets is not available") {
 			t.Errorf("D without the hook:\n%s", v)
 		}
 	})
@@ -1183,7 +1138,7 @@ func TestModel_Update_LifecycleGuards(t *testing.T) {
 		m := polledSpawn(t, r, sp, d, stateDir)
 		removeCalled := false
 		m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
-		m = press(t, m, "l", "G", "D") // last row is the recorded extra set
+		m = press(t, m, "l", "G", "X") // last row is the recorded extra set
 		if v := m.View(); ui.PopupOpen(m) || !strings.Contains(v, "extra is not declared on ubuntu") {
 			t.Errorf("D on an undeclared set should refuse, not confirm:\n%s", v)
 		}
@@ -1204,7 +1159,7 @@ func TestModel_Update_DeleteAdhoc_SurvivorKeepsRecord(t *testing.T) {
 	stateDir := t.TempDir()
 	writeState(t, stateDir, `{"forwards":[{"set":"","spec":"8080:localhost:8080","pid":55}]}`)
 	m := polledSpawn(t, r, sp, d, stateDir)
-	m = press(t, m, "l", "G", "D")
+	m = press(t, m, "l", "G", "X")
 	next, cmd := m.Update(keyMsg("enter"))
 	m = update(t, next.(ui.Model), cmd())
 	// Forget was SKIPPED because the kill errored: the record is kept, never

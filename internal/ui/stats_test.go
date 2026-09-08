@@ -186,7 +186,7 @@ func TestModel_View_RunWords(t *testing.T) {
 	m = feed(t, m, m.Init())
 	clock.advance(12 * time.Minute)
 	view := m.View()
-	if !lineHas(view, "● master up 12m") || !lineHas(view, specWeb0, "up 12m") {
+	if !lineHas(view, specWeb0, "up 12m") {
 		t.Errorf("View() after 12 minutes up:\n%s", view)
 	}
 	if lineHas(view, specWeb1, "down 12m") || lineHas(view, specWeb1, "down 0s") {
@@ -199,7 +199,7 @@ func TestModel_View_RunWords(t *testing.T) {
 	m = feed(t, m, tick)
 	clock.advance(3 * time.Minute)
 	view = m.View()
-	if !lineHas(view, "○ master down 3m") || !lineHas(view, specWeb0, "down 3m") {
+	if !lineHas(view, specWeb0, "down 3m") {
 		t.Errorf("View() after the master died:\n%s", view)
 	}
 }

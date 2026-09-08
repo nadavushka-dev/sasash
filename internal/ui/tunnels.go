@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,7 +24,6 @@ type Tunneler interface {
 	KillSet(ctx context.Context, host, set string, specs []string) error
 	Spawn(ctx context.Context, host, set, spec string) error
 	Kill(ctx context.Context, host, spec string) error
-	KillAll(ctx context.Context, host string) error
 	// Adopt migrates a host's variant-keyed tunnel state into the host
 	// (SASASH.4.23); tunnels belong to the machine, not the path-alias.
 	Adopt(host string, variants []string) error
@@ -379,27 +377,6 @@ func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	})
 }
 
-// exitCmd is X: everything off — every tunnel process of the host, then
-// the interactive master (`ssh -O exit`) when the last poll saw one. A
-// master that is not running is not asked to exit.
-func (m Model) exitCmd(host hostmodel.Host) tea.Cmd {
-	host = m.tunnelHost(host)
-	eng, alias := m.tunnels, host.Alias
-	ts, known := m.tstatus[alias]
-	master := known && ts.err == nil && ts.status.Master
-	done := "tunnels killed"
-	if master {
-		done += ", master exited"
-	}
-	return m.tunnelActionCmd(alias, "exit", done, func(ctx context.Context) error {
-		err := eng.KillAll(ctx, alias)
-		if master {
-			err = errors.Join(err, eng.Exit(ctx, alias))
-		}
-		return err
-	})
-}
-
 // tunnelsView renders the section under paths: the interactive master
 // (an indicator for connection reuse, never a forward's verdict), then
 // one row per forward with its verbatim three-state status — glyph AND
@@ -412,19 +389,9 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 
 	ts, known := m.tstatus[host.Alias]
 	now := m.clock.Now()
-	glyph, word := m.styles.StatusWait.Render("◌"), "…"
-	if known && ts.err == nil {
-		glyph, word = m.styles.StatusDown.Render("○"), "down"
-		if ts.status.Master {
-			glyph, word = m.styles.StatusUp.Render("●"), "up"
-		}
-		// The observed run, when the store has seen one: "up 12m" /
-		// "down 3m"; nothing when unknown — never a made-up zero.
-		if run := runWord(now, ts.status.MasterSince, ts.status.MasterDownSince); run != "" && strings.HasPrefix(run, word) {
-			word = run
-		}
-	}
-	b.WriteString("\n   " + glyph + " " + m.styles.PathName.Render("master") + " " + m.styles.PathExtra.Render(word))
+	// The interactive control master is NOT a tunnel (Model B: forwards are
+	// their own processes, they never ride it), so it is not a row here
+	// (SASASH.4.25). A poll that could not run at all is still surfaced.
 	if known && ts.err != nil {
 		b.WriteString("\n   " + m.styles.Notice.Render("! status: "+ts.err.Error()))
 		return b.String()
