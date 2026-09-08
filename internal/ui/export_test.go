@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
@@ -251,6 +252,11 @@ var (
 var (
 	HerdrCommand = herdrCommand
 )
+
+// PaneGap and ListPaneWidth expose the column geometry for the gap pin.
+const PaneGap = paneGap
+
+func ListPaneWidth(m Model) int { return lipgloss.Width(m.list.View()) }
 
 // ExpandSpec exposes the shorthand expansion for its table test.
 var ExpandSpec = expandSpec

@@ -1477,6 +1477,12 @@ func (m Model) halfPage() int {
 	return 1
 }
 
+// paneGap is the blank band between the host list and the detail pane.
+// The list block is only as wide as its longest alias, so this band is
+// the whole visual separation between the two columns (SASASH.4.28); the
+// frame clamp keeps a narrow terminal from scrolling sideways.
+const paneGap = 6
+
 // listWidth gives the left pane roughly a third of the terminal, clamped
 // so short lists stay narrow and tiny terminals stay usable.
 func (m Model) listWidth() int {
@@ -1596,7 +1602,7 @@ func (m Model) View() string {
 			// detail side names the fix key.
 			right = m.styles.Empty.Render("no hosts match — esc to clear the filter")
 		}
-		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), "  ", right)
+		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), strings.Repeat(" ", paneGap), right)
 		// A long alias + hostname can outgrow the terminal; truncate every
 		// line so the frame never wraps and pushes the alt screen around.
 		panes = m.styles.Clamp.MaxWidth(m.width).Render(panes)
@@ -1772,7 +1778,7 @@ func (m Model) detailView() string {
 				tail = " " + r + tail
 			}
 			lineSoFar := lipgloss.Width(strings.TrimLeft(b.String()[strings.LastIndex(b.String(), "\n")+1:], "\n"))
-			room := m.width - m.listWidth() - 2 - lineSoFar - lipgloss.Width(tail) - 2
+			room := m.width - m.listWidth() - paneGap - lineSoFar - lipgloss.Width(tail) - 2
 			// The tail is whole or absent: a count cut by the frame clamp
 			// would read as a smaller, plausible number.
 			if room >= 0 {
