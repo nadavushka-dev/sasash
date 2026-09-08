@@ -1478,7 +1478,7 @@ func (m Model) halfPage() int {
 }
 
 // paneGap is the blank band between the host list and the detail pane.
-// The list block is only as wide as its longest alias, so this band is
+// The list block is only as wide as its longest row, so this band is
 // the whole visual separation between the two columns (SASASH.4.28); the
 // frame clamp keeps a narrow terminal from scrolling sideways.
 const paneGap = 6
