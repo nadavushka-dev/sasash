@@ -85,7 +85,7 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 		if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", spec)}; !reflect.DeepEqual(got, want) || len(r.CallKeys()) != before {
 			t.Errorf("spawned = %v (runner %v), want %v", got, r.CallKeys()[before:], want)
 		}
-		if ui.PromptingSave(m) || ui.PopupOpen(m) || after == nil || !strings.Contains(m.View(), "added "+spec+" on ubuntu") {
+		if ui.PromptingSave(m) || ui.PopupOpen(m) || after == nil || !strings.Contains(m.View(), "session-only tunnel up: "+spec+" on ubuntu") {
 			t.Errorf("after the tunnel: save prompt %v (want none), popup %v, view:\n%s", ui.PromptingSave(m), ui.PopupOpen(m), m.View())
 		}
 		// The regression: the re-poll finds the recorded ad-hoc forward,
@@ -100,8 +100,8 @@ func TestModel_Update_ConnectDefaultsToSelectedHost(t *testing.T) {
 				row = l
 			}
 		}
-		if row == "" || !strings.Contains(row, "ad-hoc") {
-			t.Errorf("View() after the re-poll should list the forward as an ad-hoc row (got %q):\n%s", row, m.View())
+		if row == "" || !strings.Contains(row, "unsaved") {
+			t.Errorf("View() after the re-poll should list the forward as an unsaved row (got %q):\n%s", row, m.View())
 		}
 	})
 	t.Run("handoff to the selection offers no save; a typed target still does", func(t *testing.T) {

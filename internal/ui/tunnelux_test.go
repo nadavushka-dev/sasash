@@ -171,7 +171,7 @@ func TestModel_Update_AdhocTunnelSaveFirst(t *testing.T) {
 		if got := r.CallKeys()[before:]; len(got) != 0 {
 			t.Errorf("the flow ran %v through the runner, want nothing", got)
 		}
-		if view := m.View(); !strings.Contains(view, "added "+spec+" on edge") || ui.PopupOpen(m) || ui.Prompting(m) {
+		if view := m.View(); !strings.Contains(view, "session-only tunnel up: "+spec+" on edge") || ui.PopupOpen(m) || ui.Prompting(m) {
 			t.Errorf("View() after the engine flow (popup %v, prompting %v):\n%s", ui.PopupOpen(m), ui.Prompting(m), view)
 		}
 	})
@@ -672,7 +672,7 @@ func TestModel_Update_EditForwardAdhocRow(t *testing.T) {
 	m, _, sp := adhocRowModel(t, r, true, &calls)
 	m = press(t, m, "l", "G", "E") // the ad-hoc row is last
 	view := m.View()
-	if !strings.Contains(view, "edit ad-hoc on ubuntu: 9000:localhost:9000") || strings.Contains(view, "sasash.conf:") {
+	if !strings.Contains(view, "edit unsaved on ubuntu: 9000:localhost:9000") || strings.Contains(view, "sasash.conf:") {
 		t.Fatalf("E on a live ad-hoc row: want the prompt and a surgery-only plan:\n%s", view)
 	}
 	for range len("9000:localhost:9000") {
@@ -702,7 +702,7 @@ func TestModel_Update_EditForwardAdhocRow(t *testing.T) {
 	m = feed(t, m, after)
 	var rows []string
 	for _, l := range strings.Split(m.View(), "\n") {
-		if strings.Contains(l, "ad-hoc") {
+		if strings.Contains(l, "unsaved") {
 			rows = append(rows, l)
 		}
 	}
@@ -771,7 +771,7 @@ func TestModel_View_EditPlanStaysOnItsRow(t *testing.T) {
 	_, tick := m.Update(ui.RefreshTick())
 	m = feed(t, m, tick) // the ad-hoc row is gone; the highlight clamps onto api
 	view := m.View()
-	if !ui.Prompting(m) || !strings.Contains(view, "edit ad-hoc on ubuntu: 9000:localhost:9000") {
+	if !ui.Prompting(m) || !strings.Contains(view, "edit unsaved on ubuntu: 9000:localhost:9000") {
 		t.Fatalf("the prompt should stay bound to the ad-hoc spec:\n%s", view)
 	}
 	if strings.Contains(view, "-O cancel") || strings.Contains(view, "-O forward") || strings.Contains(view, "sasash.conf:") {

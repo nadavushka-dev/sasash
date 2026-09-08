@@ -447,11 +447,11 @@ func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
 	if len(specs) == 1 {
 		if port, _ := localPort(specs[0]); port != "" {
 			m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
-			return m, m.addForwardCmd(alias, specs[0], port)
+			return m, m.forwardCheckCmd(alias, specs[0], port, true, "unsaved, X forgets it")
 		}
 	}
 	eng := m.tunnels
-	done := "tunnel up on " + alias + ": " + strings.Join(specs, " ") + " — ad-hoc, in the tunnels pane"
+	done := "tunnel up on " + alias + ": " + strings.Join(specs, " ") + " — session-only (unsaved), in the tunnels pane"
 	m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
 	return m, m.tunnelActionCmd(alias, "tunnel", done, func(ctx context.Context) error {
 		return eng.SpawnSet(ctx, alias, "", specs)

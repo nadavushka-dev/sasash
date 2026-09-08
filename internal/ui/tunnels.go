@@ -228,7 +228,7 @@ func (m Model) setSpecs(host hostmodel.Host, set string) (specs []string, allUp 
 // setLabel names a set in notices and rows; the ad-hoc set has no name.
 func setLabel(set string) string {
 	if set == "" {
-		return "ad-hoc"
+		return "unsaved"
 	}
 	return set
 }

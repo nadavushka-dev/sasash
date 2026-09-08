@@ -758,8 +758,8 @@ func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
 			row = line
 		}
 	}
-	if !strings.Contains(row, "ad-hoc") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
-		t.Errorf("recorded ad-hoc row = %q, want an ad-hoc row marked down", row)
+	if !strings.Contains(row, "unsaved") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
+		t.Errorf("recorded ad-hoc row = %q, want an unsaved row marked down", row)
 	}
 	// It is the last row: l then G reaches it, and space would spawn it.
 	m = press(t, m, "l", "G")
@@ -1093,7 +1093,7 @@ func TestModel_Update_DeleteAdhoc_ForgetsNoConfig(t *testing.T) {
 	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
 	m = press(t, m, "l", "G") // last row = the ad-hoc 8080
 	m = press(t, m, "X")
-	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "forget ad-hoc on ubuntu") || !strings.Contains(view, "8080:localhost:8080") || !strings.Contains(view, "state only") {
+	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "forget unsaved on ubuntu") || !strings.Contains(view, "8080:localhost:8080") || !strings.Contains(view, "state only") {
 		t.Fatalf("D on an ad-hoc row confirms a forget:\n%s", view)
 	}
 	next, cmd := m.Update(keyMsg("enter"))

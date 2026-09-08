@@ -24,7 +24,21 @@ const forwardCheckTimeout = 5 * time.Second
 
 // forwardConflictMsg reports that the asked local port is held; next is
 // the first free port above it, "" when none within portSearch.
-type forwardConflictMsg struct{ host, spec, port, next string }
+type forwardConflictMsg struct {
+	host, spec, port, next string
+	ephemeral              bool
+}
+
+// forwardProceedMsg: the local port is free, the add can go ahead. persist
+// opens the set-name prompt; ephemeral connects a session-only forward now.
+type forwardProceedMsg struct{ host, spec string }
+
+// fwdDeclaredMsg reports the persist-by-default outcome: the declaration
+// write (saveErr) and the live connect (connErr).
+type fwdDeclaredMsg struct {
+	host, name, spec string
+	saveErr, connErr error
+}
 
 // expandSpec turns the two port shorthands into canonical three-part
 // specs BEFORE anything downstream sees them (SASASH.4.9): "3000" is
@@ -84,7 +98,7 @@ func (m Model) openForward(host hostmodel.Host, value string) (Model, tea.Cmd) {
 	m.mode = promptForward
 	m.fwdHost = m.tunnelHost(host).Alias // the tunnel is the machine's, not the variant's
 	m.prompt.Reset()
-	m.prompt.Placeholder = "local:host:port  e.g. 8080:localhost:80"
+	m.prompt.Placeholder = "local:host:port  (! prefix = session-only, unsaved)"
 	m.prompt.SetValue(value)
 	m.prompt.CursorEnd()
 	return m, m.prompt.Focus()
@@ -94,7 +108,12 @@ func (m Model) openForward(host hostmodel.Host, value string) (Model, tea.Cmd) {
 // local port the check can dial; then the check-and-add runs off the
 // UI thread against the bound host.
 func (m Model) submitForward() (Model, tea.Cmd) {
-	spec, _ := expandSpec(m.prompt.Value())
+	raw := strings.TrimSpace(m.prompt.Value())
+	ephemeral := strings.HasPrefix(raw, "!")
+	if ephemeral {
+		raw = strings.TrimSpace(raw[1:])
+	}
+	spec, _ := expandSpec(raw)
 	port, _ := localPort(spec)
 	if port == "" {
 		m.notice = "no local port in " + strconv.Quote(spec) + " — want local:host:port"
@@ -108,27 +127,95 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 		m.notice = "host " + m.fwdHost + " is gone — nothing added"
 		return m, nil
 	}
-	return m, m.addForwardCmd(host.Alias, spec, port)
+	// The persist default needs a sasash.conf block to declare into; an
+	// unmanaged host has none, so + there is session-only, with a hint to
+	// save the host first to persist (SASASH.4.21 — never fail after two
+	// prompts).
+	note := "unsaved, X forgets it"
+	if !ephemeral && !m.managed(host) {
+		ephemeral = true
+		note = host.Alias + " not managed — save it (o) to persist"
+	}
+	return m, m.forwardCheckCmd(host.Alias, spec, port, ephemeral, note)
 }
 
-// addForwardCmd dials 127.0.0.1:<port> through the probe seam first
-// (SPEC §4: never silently remap): held means a conflict comes back with
-// the next free port offered; free means one spawned process for the spec
-// as an ad-hoc forward. Something can still take the port between the
-// check and the add — the engine's own refusal then comes back as the
-// action error.
-func (m Model) addForwardCmd(alias, spec, port string) tea.Cmd {
+// forwardCheckCmd dials 127.0.0.1:<port> through the probe seam first (SPEC
+// §4: never silently remap): held means a conflict comes back with the next
+// free port offered; free means the add proceeds — to the set-name prompt
+// (persist by default, SASASH.4.21) or, with the ! opt-in, straight to a
+// session-only connect. The engine's own refusal still catches a port taken
+// between the check and the spawn.
+func (m Model) forwardCheckCmd(alias, spec, port string, ephemeral bool, sessionNote string) tea.Cmd {
 	eng, prober := m.tunnels, m.prober
 	m.tinflight[alias] = true // the add writes the caches: no poll meanwhile
 	return func() tea.Msg {
 		cctx, ccancel := context.WithTimeout(context.Background(), forwardCheckTimeout)
 		defer ccancel()
 		if held(cctx, prober, port) {
-			return forwardConflictMsg{host: alias, spec: spec, port: port, next: nextFreePort(cctx, prober, port)}
+			return forwardConflictMsg{host: alias, spec: spec, port: port, next: nextFreePort(cctx, prober, port), ephemeral: ephemeral}
+		}
+		if ephemeral {
+			// The ! opt-in: one session-only process (the old inject),
+			// recorded so x/X can still end it, but NOT in sasash.conf.
+			actx, acancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
+			defer acancel()
+			done := "session-only tunnel up: " + spec + " on " + alias + " — " + sessionNote
+			return tunnelDoneMsg{host: alias, label: "add", done: done, err: eng.SpawnSet(actx, alias, "", []string{spec})}
+		}
+		// Persist by default: on to the set-name prompt, then declare + connect.
+		return forwardProceedMsg{host: alias, spec: spec}
+	}
+}
+
+// openForwardName is the persist path's set-name step: the default is the
+// local port, prefilled so enter accepts it. fwdset.Add then writes the
+// declaration and Engine.Up connects it — persisted AND live.
+func (m Model) openForwardName(host hostmodel.Host, spec string) (Model, tea.Cmd) {
+	if m.saveForwardSet == nil {
+		m.notice = "declaring is not available here — retry with a leading ! for a session-only tunnel"
+		return m, nil
+	}
+	port, _ := localPort(spec)
+	m.fwdHost = host.Alias
+	m.fwdSpec = spec
+	m.mode = promptForwardName
+	m.prompt.Reset()
+	m.prompt.Placeholder = "set name — enter saves as " + port
+	m.prompt.SetValue(port)
+	m.prompt.CursorEnd()
+	return m, m.prompt.Focus()
+}
+
+// submitForwardName declares the set (fwdset.Add) and connects it live.
+func (m Model) submitForwardName() (Model, tea.Cmd) {
+	name := strings.TrimSpace(m.prompt.Value())
+	if name == "" || strings.ContainsAny(name, " \t#") {
+		m.notice = "set name: want a single word"
+		return m, nil
+	}
+	alias, spec := m.fwdHost, m.fwdSpec
+	m.mode = promptNone
+	m.prompt.Blur()
+	if _, ok := m.hostByAlias(alias); !ok {
+		m.notice = "host " + alias + " is gone — nothing added"
+		return m, nil
+	}
+	return m, m.declareAndConnectCmd(alias, name, spec)
+}
+
+// declareAndConnectCmd is the persist-by-default action: write the
+// `# @sasash forwards` line, then bring it up (SpawnSet). The declaration
+// lands even if the connect fails — desire is persisted, space retries.
+func (m Model) declareAndConnectCmd(alias, name, spec string) tea.Cmd {
+	eng, save := m.tunnels, m.saveForwardSet
+	m.tinflight[alias] = true
+	return func() tea.Msg {
+		if err := save(alias, name, []string{spec}); err != nil {
+			return fwdDeclaredMsg{host: alias, name: name, spec: spec, saveErr: err}
 		}
 		actx, acancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 		defer acancel()
-		return tunnelDoneMsg{host: alias, label: "add", done: "added " + spec + " on " + alias, err: eng.SpawnSet(actx, alias, "", []string{spec})}
+		return fwdDeclaredMsg{host: alias, name: name, spec: spec, connErr: eng.SpawnSet(actx, alias, name, []string{spec})}
 	}
 }
 
@@ -183,6 +270,9 @@ func (m Model) forwardConflict(msg forwardConflictMsg) (Model, tea.Cmd) {
 	if !ok {
 		m.notice = "host " + msg.host + " is gone — nothing added"
 		return m, nil
+	}
+	if msg.ephemeral {
+		offer = "!" + offer
 	}
 	m, cmd := m.openForward(host, offer)
 	m.notice = notice
