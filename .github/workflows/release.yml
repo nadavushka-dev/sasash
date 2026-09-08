@@ -1,0 +1,39 @@
+# Release (SASASH.8): on a v* tag, build all four targets with GoReleaser and
+# publish a GitHub Release (tarballs + checksums.txt). See docs/releasing.md.
+#
+# Secrets:
+#   GITHUB_TOKEN               automatic; contents:write below is all it needs.
+#   HOMEBREW_TAP_GITHUB_TOKEN  optional; a PAT with contents:write on
+#                              nadavushka-dev/homebrew-tap. Unset => the formula
+#                              is rendered but not pushed (see .goreleaser.yaml).
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # GoReleaser needs the full history + tags for the changelog, and
+          # `go build` needs the tag to stamp the version into the binary.
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gate
+        run: make check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -1,0 +1,53 @@
+# CI (SASASH.8): the repo gate on every push and PR.
+#   check: gofmt + make check (vet, linux cross-build, race, coverage) + make build,
+#          on Linux and macOS (both are first-class targets; public repo, so both are free).
+#   dist:  the distribution infra — shellcheck, actionlint, goreleaser check,
+#          and the no-network install.sh end-to-end test.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: make check
+      - run: make build
+
+  dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: shellcheck
+        run: shellcheck install.sh scripts/*.sh
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+      - name: install.sh end-to-end (file:// release, no network)
+        run: scripts/test-install.sh

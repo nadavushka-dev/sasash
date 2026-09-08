@@ -1,0 +1,91 @@
+# GoReleaser config (SASASH.8): prebuilt releases for macOS + Linux.
+#
+# Local proof, no push:   make snapshot   (== goreleaser release --snapshot --clean)
+# Real release:           git tag vX.Y.Z && git push origin vX.Y.Z  -> .github/workflows/release.yml
+#
+# Version: none injected. cmd/sasash/version.go reads runtime/debug.ReadBuildInfo,
+# and Go >= 1.24 stamps the main module version from the git tag at build time,
+# so a binary built at tag v0.1.0 prints v0.1.0 (a snapshot prints a pseudo-version).
+version: 2
+
+project_name: sasash
+
+builds:
+  - id: sasash
+    main: ./cmd/sasash
+    binary: sasash
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: tarball
+    ids:
+      - sasash
+    formats:
+      - tar.gz
+    # install.sh derives this name: sasash_<version-without-v>_<os>_<arch>.tar.gz.
+    # Change it there too if you change it here.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  # install.sh downloads exactly this name next to the tarball.
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+
+release:
+  github:
+    owner: nadavushka-dev
+    name: sasash
+  # v0.1.0-rc1 style tags become pre-releases automatically.
+  prerelease: auto
+
+# Homebrew tap (macOS only: Homebrew casks do not exist on Linux, where curl|sh is
+# the path). Prerequisite: the repo github.com/nadavushka-dev/homebrew-tap exists and
+# the release workflow has a HOMEBREW_TAP_GITHUB_TOKEN secret (a fine-grained PAT with
+# contents:write on that tap repo). Without the secret the cask is still rendered
+# into dist/ but not pushed, so a release never fails on a missing tap.
+# `brews` (a formula that installs a prebuilt binary) is deprecated upstream in
+# favour of casks. See docs/releasing.md.
+homebrew_casks:
+  - name: sasash
+    ids:
+      - tarball
+    binaries:
+      - sasash
+    repository:
+      owner: nadavushka-dev
+      name: homebrew-tap
+      token: "{{ envOrDefault \"HOMEBREW_TAP_GITHUB_TOKEN\" \"\" }}"
+    skip_upload: "{{ if envOrDefault \"HOMEBREW_TAP_GITHUB_TOKEN\" \"\" }}false{{ else }}true{{ end }}"
+    directory: Casks
+    homepage: https://github.com/nadavushka-dev/sasash
+    description: "Terminal UI over ssh_config: hosts, live path status, one keypress to connect"
+    caveats: "Run `sasash setup` once to add the Include line to ~/.ssh/config."
+    # Binaries are not signed or notarized yet (SASASH.8 non-goal), so Gatekeeper
+    # would quarantine the download; strip the bit as upstream recommends.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sasash"]
+          end

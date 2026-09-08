@@ -1,4 +1,4 @@
-.PHONY: test race cover fuzz vet fmt check build demo integration linux
+.PHONY: test race cover fuzz vet fmt check build demo integration linux snapshot check-dist
 
 test:
 	go test ./...
@@ -48,3 +48,18 @@ demo: build
 # no sshd binary is installed (brew install openssh).
 integration:
 	go test -tags integration -count=1 -timeout 120s -v ./internal/integration
+
+# Distribution (SASASH.8). Both need brew-installed tools (goreleaser, shellcheck,
+# actionlint); ci.yml runs the same on every push. Neither is part of `check`.
+# snapshot: build all four release targets into dist/ exactly as a tag would,
+# without a tag or a push.
+snapshot:
+	goreleaser release --snapshot --clean
+
+# check-dist: lint the release config, the workflows and the installer, then run
+# the installer end-to-end against a file:// release (no network).
+check-dist:
+	shellcheck install.sh scripts/*.sh
+	actionlint
+	goreleaser check
+	scripts/test-install.sh
