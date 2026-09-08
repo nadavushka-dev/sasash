@@ -39,6 +39,10 @@ func TestHerdrPlan_ExactArgv(t *testing.T) {
 			wantSteps: [][]string{{"tmux", "split-window", "-h", "-d", "herdr", "--remote", "web"}}, wantWhere: "tmux split"},
 		{name: "tmux session", cfg: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "workspace"},
 			wantSteps: [][]string{{"tmux", "new-session", "-d", "-n", "web", "herdr", "--remote", "web"}}, wantWhere: "tmux session"},
+		// A tmux started inside a herdr pane carries HERDR_ENV: --remote
+		// would nest there too, so plain ssh, as inside herdr.
+		{name: "tmux inside herdr", cfg: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "tab", HerdrEnv: true},
+			wantSteps: [][]string{{"tmux", "new-window", "-d", "-n", "web", "ssh", "web"}}, wantWhere: "tmux window"},
 		// No multiplexer: nothing to open beside the TUI — a window template
 		// bakes its own ssh in and cannot carry H's command.
 		{name: "no multiplexer", cfg: ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: darwinWindow}},

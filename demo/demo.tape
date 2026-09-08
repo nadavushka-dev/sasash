@@ -4,6 +4,10 @@
 # NOTE: vhs resolves Screenshot by frame index into the recorded frame stream,
 # so which frame lands in a PNG is approximate — hence the neutral frame-* names.
 # The gif and the demo.txt frame dump are the trustworthy artifacts.
+#
+# Never press a key that spawns (enter on a host, H): the render runs in
+# whatever terminal renders it, and inside herdr or tmux those open REAL
+# tabs/windows on the recorder's multiplexer (it happened once).
 
 Output demo/out/demo.gif
 Output demo/out/demo.txt

@@ -55,7 +55,7 @@ func DefaultKeyMap() KeyMap {
 		HalfUp:      key.NewBinding(key.WithKeys("ctrl+u", "pgup"), key.WithHelp("ctrl+u", "½ page up")),
 		Connect:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "spawn ssh")),
 		Handoff:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "ssh here")),
-		Herdr:       key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "herdr")),
+		Herdr:       key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "herdr session beside")),
 		PickPath:    key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pick path")),
 		CopyAddr:    key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank host")),
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),

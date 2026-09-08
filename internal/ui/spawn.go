@@ -40,9 +40,13 @@ const DefaultSpawnTarget = "tab"
 // SpawnConfig is the cmd layer's wiring for enter (SASASH.4.10).
 type SpawnConfig struct {
 	// Mux is what DetectMux found; HerdrPane is HERDR_PANE_ID, the pane a
-	// herdr split is made from ("" splits the current pane).
+	// herdr split is made from ("" splits the current pane). HerdrEnv is
+	// HERDR_ENV being set at all: herdr's own nesting guard reads it, and
+	// a tmux started inside a herdr pane inherits it, so H under that tmux
+	// must not run herdr --remote either (SASASH.4.22).
 	Mux       Mux
 	HerdrPane string
+	HerdrEnv  bool
 	// WindowTemplate is the OS-window command outside any multiplexer,
 	// with actions.toml placeholders ({host} is the alias); "" means
 	// nothing to spawn into, so enter hands off with a notice.
@@ -85,6 +89,7 @@ func SpawnTargetIndex(name string) (int, bool) {
 type spawnState struct {
 	mux        Mux
 	herdrPane  string
+	herdrEnv   bool
 	window     string
 	windowPath string
 	target     string
@@ -231,11 +236,15 @@ const herdrNests = "herdr --remote would nest inside herdr"
 // a new tab/pane/window per the spawn target, the TUI staying up — the
 // same road as enter, never a handoff. Under tmux the command is `herdr
 // --remote <alias>`. Inside herdr that command nests, which herdr
-// refuses, and herdr has no primitive that opens a remote in a tab; so
-// the tab runs plain `ssh <alias>` — the session, without the nesting —
-// and the plan says why. Without a multiplexer there is nothing to open
-// beside the TUI: nil, and the caller says so (the OS-window template
-// bakes its own ssh command in, so it cannot carry H's).
+// refuses (its guard reads HERDR_ENV — and a tmux started inside a herdr
+// pane inherits it, so the same holds there), and herdr has no primitive
+// that opens a remote in a tab; so the tab or window runs plain `ssh
+// <alias>` — the session, without the nesting — and the plan says why.
+// sasash never overrides herdr's guard (experimental.allow_nested is the
+// user's setting; the fallback stands either way). Without a multiplexer
+// there is nothing to open beside the TUI: nil, and the caller says so
+// (the OS-window template bakes its own ssh command in — {host} is its
+// only placeholder — so it cannot carry H's command).
 func (s spawnState) herdrPlanFor(alias string) *spawnPlan {
 	target := s.target
 	if _, ok := SpawnTargetIndex(target); !ok {
@@ -248,6 +257,11 @@ func (s spawnState) herdrPlanFor(alias string) *spawnPlan {
 			herdrRunArgv(panePlaceholder, sshCommand(alias)),
 		}}
 	case MuxTmux:
+		if s.herdrEnv {
+			// This tmux runs inside a herdr pane and carries HERDR_ENV:
+			// herdr --remote would nest here too. Plain ssh, said.
+			return &spawnPlan{where: s.where(target), note: herdrNests, what: sshCommand(alias), steps: [][]string{tmuxArgv(target, alias, sshCommand(alias))}}
+		}
 		return &spawnPlan{where: s.where(target), what: herdrCommand(alias), steps: [][]string{tmuxArgv(target, alias, herdrCommand(alias))}}
 	}
 	return nil

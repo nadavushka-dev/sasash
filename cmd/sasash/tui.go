@@ -342,6 +342,7 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 	return ui.SpawnConfig{
 		Mux:            mux,
 		HerdrPane:      pane,
+		HerdrEnv:       getenv("HERDR_ENV") != "",
 		WindowTemplate: tmpl,
 		WindowPath:     windowPath,
 		Target:         target,

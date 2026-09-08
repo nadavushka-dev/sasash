@@ -529,6 +529,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		spawn: spawnState{
 			mux:        cfg.Spawn.Mux,
 			herdrPane:  cfg.Spawn.HerdrPane,
+			herdrEnv:   cfg.Spawn.HerdrEnv,
 			window:     cfg.Spawn.WindowTemplate,
 			windowPath: cfg.Spawn.WindowPath,
 			target:     cfg.Spawn.Target,

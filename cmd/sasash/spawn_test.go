@@ -18,8 +18,16 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 		t.Parallel()
 		home := t.TempDir()
 		cfg := spawnConfig(home, getenv)
-		if cfg.Mux != ui.MuxHerdr || cfg.HerdrPane != "w24:p16" || cfg.Target != ui.DefaultSpawnTarget {
-			t.Errorf("spawnConfig() = mux %v, pane %q, target %q", cfg.Mux, cfg.HerdrPane, cfg.Target)
+		if cfg.Mux != ui.MuxHerdr || cfg.HerdrPane != "w24:p16" || !cfg.HerdrEnv || cfg.Target != ui.DefaultSpawnTarget {
+			t.Errorf("spawnConfig() = mux %v, pane %q, herdrEnv %v, target %q", cfg.Mux, cfg.HerdrPane, cfg.HerdrEnv, cfg.Target)
+		}
+		// tmux started inside a herdr pane: tmux wins, the herdr signal stays.
+		both := func(k string) string { return map[string]string{"TMUX": "/tmp/tmux-501/x,1,0", "HERDR_ENV": "1"}[k] }
+		if c := spawnConfig(home, both); c.Mux != ui.MuxTmux || !c.HerdrEnv {
+			t.Errorf("spawnConfig(tmux inside herdr) = mux %v, herdrEnv %v; want tmux, true", c.Mux, c.HerdrEnv)
+		}
+		if c := spawnConfig(home, func(string) string { return "" }); c.HerdrEnv {
+			t.Errorf("spawnConfig(no env).HerdrEnv = true, want false")
 		}
 		if cfg.WindowTemplate != defaultWindowTemplate(runtime.GOOS, getenv) {
 			t.Errorf("WindowTemplate without a file = %q, want this OS's default", cfg.WindowTemplate)
