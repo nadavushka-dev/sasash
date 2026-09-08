@@ -243,8 +243,8 @@ type Model struct {
 	tstatus     map[string]tunnelState
 	tinflight   map[string]bool // a Status poll is running for the alias
 	fwdIdx      int
-	fwdHost     string // the host the forward prompt is bound to
-	fwdSpec     string // the persist path's pending spec between the + prompts
+	fwdHost     string   // the host the forward prompt is bound to
+	fwdSpecs    []string // the persist path's pending specs between the + prompts
 
 	actions []string // actions.toml entry names, listed in the full help
 
@@ -747,6 +747,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case forwardConflictMsg:
 		return m.forwardConflict(msg)
 
+	case forwardSetConflictMsg:
+		return m.forwardSetConflict(msg)
+
 	case forwardProceedMsg:
 		delete(m.tinflight, msg.host) // the held check is done; the action re-gates
 		host, ok := m.hostByAlias(msg.host)
@@ -754,7 +757,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "host " + msg.host + " is gone — nothing added"
 			return m, nil
 		}
-		return m.openForwardName(host, msg.spec)
+		return m.openForwardName(host, msg.specs)
 
 	case fwdDeclaredMsg:
 		delete(m.tinflight, msg.host)
@@ -767,7 +770,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.connErr != nil:
 			m.notice = "declared " + msg.name + " on " + msg.host + " but connect failed: " + oneLine(msg.connErr, msg.host)
 		default:
-			m.notice = "added " + msg.spec + " on " + msg.host + " as " + msg.name + " — persisted, space toggles it"
+			m.notice = "added " + strings.Join(msg.specs, " ") + " on " + msg.host + " as " + msg.name + " — persisted, space toggles it"
 		}
 		// The declaration changed the config: reload the host list (which
 		// re-polls), so the new set renders.

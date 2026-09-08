@@ -149,8 +149,22 @@ func (m Model) promptExpansion() string {
 	}
 	switch m.mode {
 	case promptForward:
-		if full, expanded := expandSpec(strings.TrimSpace(strings.TrimPrefix(v, "!"))); expanded {
-			return full
+		// Multi-spec (SASASH.4.27): each whitespace-separated token expands
+		// independently; the line shows the whole set enter will create,
+		// whenever there is more than one token or a shorthand expanded.
+		fields := strings.Fields(strings.TrimPrefix(v, "!"))
+		out := make([]string, 0, len(fields))
+		changed := len(fields) > 1
+		for _, s := range fields {
+			full, expanded := expandSpec(s)
+			if port, _ := localPort(full); port == "" {
+				return "" // enter will refuse this token; promise nothing
+			}
+			changed = changed || expanded
+			out = append(out, full)
+		}
+		if changed {
+			return strings.Join(out, " ")
 		}
 	case promptEditFwd:
 		if full, expanded := expandSpec(v); expanded {
