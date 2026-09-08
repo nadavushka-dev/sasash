@@ -295,8 +295,9 @@ var herdrPaneEnv = []string{"HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR
 // herdr snapshots its environment for life, so under a GUI restarted
 // since they name a socket and a pane that are gone. Without them the
 // CLI finds the running GUI through its default socket link and spawns
-// into the active window.
-var weztermStaleEnv = []string{"WEZTERM_UNIX_SOCKET", "WEZTERM_PANE"}
+// into the active window. TMUX and TMUX_PANE go the same way: a tmux
+// started inside herdr lands here too, and a cmd-t tab has neither.
+var weztermStaleEnv = []string{"WEZTERM_UNIX_SOCKET", "WEZTERM_PANE", "TMUX", "TMUX_PANE"}
 
 // emulatorTabArgv is H's one-step spawn: the command in a new tab of the
 // outer emulator, exact per emulator. wezterm and kitty take argv
@@ -382,10 +383,12 @@ func (s spawnState) herdrPlanFor(alias string) *spawnPlan {
 		}
 		return &spawnPlan{where: s.where(target), what: command, steps: [][]string{tmuxArgv(target, alias, command)}}
 	}
-	if s.emulator == EmuNone {
+	argv := emulatorTabArgv(s.emulator, alias, command)
+	if len(argv) == 0 {
+		// EmuNone, or a value the argv switch does not know: one list.
 		return nil
 	}
-	return &spawnPlan{where: s.emulator.where(), what: command, steps: [][]string{emulatorTabArgv(s.emulator, alias, command)}}
+	return &spawnPlan{where: s.emulator.where(), what: command, steps: [][]string{argv}}
 }
 
 // preview is the plan as the bottom line shows it: the steps joined the
@@ -445,7 +448,7 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s: %w", argv[0], err)}
 			}
 			if !res.OK() {
-				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s failed: %s", strings.Join(argv[:min(3, len(argv))], " "), failureText(res))}
+				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s failed: %s", argvHead(argv), failureText(res))}
 			}
 			if needsPane && paneID == "" {
 				id, err := herdrPaneID(res.Stdout)
@@ -457,6 +460,21 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 		}
 		return spawnDoneMsg{alias: alias, where: p.where, what: strings.Join(p.what, " ")}
 	}
+}
+
+// argvHead names the tool a failed step ran, for the one-line notice:
+// the first three words, past a leading `env -u NAME ...` prefix, which
+// is the scrub and not the tool.
+func argvHead(argv []string) string {
+	i := 0
+	if len(argv) > 0 && argv[0] == "env" {
+		i = 1
+		for i+1 < len(argv) && argv[i] == "-u" {
+			i += 2
+		}
+	}
+	rest := argv[i:]
+	return strings.Join(rest[:min(3, len(rest))], " ")
 }
 
 // failureText is a failed step's reason for the notice: herdr's reply

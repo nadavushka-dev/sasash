@@ -1730,9 +1730,9 @@ func (m Model) previewView() string {
 					v += seg
 				}
 			}
-			// H's command per mux (4.22) and where it opens — the wrapper
-			// step is enter's, on the $ line already; inside herdr the
-			// reason plain ssh stands in.
+			// H's command (4.22) and where it opens: the outer emulator's
+			// tab inside herdr, a tmux window otherwise; the wrapper argv
+			// is the failure popup's, not the footer's.
 			hseg := "no terminal tab to open here (shows the command)"
 			if plan := m.spawn.herdrPlanFor(host.Alias); plan != nil {
 				hseg = strings.Join(plan.what, " ") + " (" + plan.where + ")"

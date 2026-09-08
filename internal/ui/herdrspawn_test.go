@@ -18,7 +18,7 @@ import (
 // (wezterm's CLI forwards its environment into the new pane), wezterm's
 // own stale ones dropped, no mux server auto-started.
 var weztermTab = []string{"env", "-u", "HERDR_ENV", "-u", "HERDR_PANE_ID", "-u", "HERDR_TAB_ID", "-u", "HERDR_WORKSPACE_ID", "-u", "HERDR_SOCKET_PATH",
-	"-u", "WEZTERM_UNIX_SOCKET", "-u", "WEZTERM_PANE", "wezterm", "cli", "--no-auto-start", "spawn", "--", "herdr", "--remote", "web"}
+	"-u", "WEZTERM_UNIX_SOCKET", "-u", "WEZTERM_PANE", "-u", "TMUX", "-u", "TMUX_PANE", "wezterm", "cli", "--no-auto-start", "spawn", "--", "herdr", "--remote", "web"}
 
 func TestDetectEmulator_Table(t *testing.T) {
 	t.Parallel()
@@ -98,6 +98,8 @@ func TestHerdrPlan_ExactArgv(t *testing.T) {
 		{name: "herdr, no emulator", cfg: ui.SpawnConfig{Mux: ui.MuxHerdr, HerdrEnv: true, Target: "tab"}},
 		{name: "tmux inside herdr, no emulator", cfg: ui.SpawnConfig{Mux: ui.MuxTmux, HerdrEnv: true, Target: "tab"}},
 		{name: "nothing at all", cfg: ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: darwinWindow}},
+		// An emulator the argv switch does not know is no emulator: nil, not a plan with an empty step.
+		{name: "unknown emulator value", cfg: ui.SpawnConfig{Mux: ui.MuxHerdr, HerdrEnv: true, Target: "tab", Emulator: ui.Emulator(99)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -192,6 +194,11 @@ func TestModel_Update_HSpawnsBesideTheTUI(t *testing.T) {
 		m = update(t, next.(ui.Model), cmd())
 		if !ui.PopupOpen(m) || !strings.Contains(m.View(), "spawn failed for web") || !strings.Contains(m.View(), "failed to connect to Socket") || ui.HandoffHost(m) != "" {
 			t.Errorf("a failed H spawn should open the popup (handoff %q):\n%s", ui.HandoffHost(m), m.View())
+		}
+		// The one-line reason names the tool, not the env scrub in front of it.
+		m = press(t, m, "esc")
+		if view := m.View(); !strings.Contains(view, "wezterm cli --no-auto-start failed: failed to connect to Socket") || strings.Contains(view, "env -u HERDR_ENV failed") {
+			t.Errorf("View() notice should blame wezterm, not env:\n%s", view)
 		}
 	})
 }
