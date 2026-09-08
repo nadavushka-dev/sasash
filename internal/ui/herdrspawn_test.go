@@ -113,6 +113,23 @@ func TestModel_Update_HSpawnsBesideTheTUI(t *testing.T) {
 			t.Errorf("View() should report the spawn:\n%s", view)
 		}
 	})
+	t.Run("under a tmux inside herdr: the window runs plain ssh and says why", func(t *testing.T) {
+		// Through ui.New, so the HerdrEnv wiring itself is pinned — the
+		// argv table proves herdrPlanFor, not the model's spawnState.
+		t.Parallel()
+		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
+			StubExit(0, "tmux", "new-window", "-d", "-n", "web", "ssh", "web")
+		m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxTmux, Target: "tab", HerdrEnv: true}, nil)
+		before := len(r.CallKeys())
+		next, cmd := m.Update(keyMsg("H"))
+		m = update(t, next.(ui.Model), cmd())
+		if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"tmux new-window -d -n web ssh web"}) {
+			t.Errorf("calls = %v, want the plain ssh window — never herdr --remote under a tmux that carries HERDR_ENV", got)
+		}
+		if view := m.View(); !strings.Contains(view, "spawned ssh web → tmux window — herdr --remote would nest inside herdr") {
+			t.Errorf("View() should report the fallback and why:\n%s", view)
+		}
+	})
 	t.Run("a failed step opens the spawn popup, nothing hands off", func(t *testing.T) {
 		t.Parallel()
 		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
