@@ -100,6 +100,25 @@ func TestModel_Update_FilterSurfacesVariantsExplicitly(t *testing.T) {
 	}
 }
 
+func TestModel_Update_FilterSurfacedVariantIsARealHost(t *testing.T) {
+	t.Parallel()
+	// A folded variant is a real host once a filter surfaces it: enter
+	// hands off to ssh under the variant's own alias. With v retired
+	// (SASASH.4.23) the naming filter is the only way in, so the promise
+	// is pinned here.
+	m := foldModel(t)
+	m = press(t, m, "/", "w", "e", "b", ".", "o", "f", "f", "i", "c", "e", "enter")
+	if host, _ := m.Selected(); host.Alias != "web.office" {
+		t.Fatalf("Selected() after /web.office = %q, want web.office", host.Alias)
+	}
+	if view := m.View(); !strings.Contains(view, "$ ssh web.office") {
+		t.Errorf("View() preview should ssh the surfaced variant:\n%s", view)
+	}
+	if _, cmd := m.Update(keyMsg("enter")); cmd == nil {
+		t.Errorf("enter on the surfaced variant cmd = nil, want the ssh handoff")
+	}
+}
+
 func TestModel_Update_ReloadRefolds(t *testing.T) {
 	t.Parallel()
 	// The first p press generates the variants: the reload that follows
