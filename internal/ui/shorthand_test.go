@@ -58,7 +58,7 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 		sp := fakespawn.New().Dial(d)
 		m := polledSpawn(t, r, sp, d, t.TempDir())
 		m = press(t, m, "+")
-		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8080")})
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!8080")})
 		if view := m.View(); !strings.Contains(view, "→ 8080:localhost:8080") {
 			t.Errorf("View() missing the expansion beside the field:\n%s", view)
 		}
@@ -67,7 +67,7 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 		if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", "8080:localhost:8080")}) {
 			t.Errorf("spawned = %v", got)
 		}
-		if view := m.View(); !strings.Contains(view, "added 8080:localhost:8080 on ubuntu") {
+		if view := m.View(); !strings.Contains(view, "session-only tunnel up: 8080:localhost:8080 on ubuntu") {
 			t.Errorf("View() outcome:\n%s", view)
 		}
 	})
@@ -150,7 +150,7 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 		sp := fakespawn.New().Dial(d)
 		m := polledSpawn(t, r, sp, d, t.TempDir())
 		m = press(t, m, "+")
-		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(sock)})
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!" + sock)})
 		if view := m.View(); strings.Contains(view, "→ ") {
 			t.Errorf("View() offers an expansion for a canonical spec:\n%s", view)
 		}
@@ -219,7 +219,7 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 		m := polled(t, r, fakedial.New())
 		m = press(t, m, "+")
-		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8080")})
+		m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!8080")})
 		for _, h := range []int{6, 5, 4} {
 			v := update(t, m, tea.WindowSizeMsg{Width: 80, Height: h}).View()
 			if got := strings.Count(v, "\n") + 1; got > max(h, 5) {

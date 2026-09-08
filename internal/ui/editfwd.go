@@ -148,7 +148,11 @@ func (m Model) promptExpansion() string {
 		return ""
 	}
 	switch m.mode {
-	case promptForward, promptEditFwd:
+	case promptForward:
+		if full, expanded := expandSpec(strings.TrimSpace(strings.TrimPrefix(v, "!"))); expanded {
+			return full
+		}
+	case promptEditFwd:
 		if full, expanded := expandSpec(v); expanded {
 			return full
 		}

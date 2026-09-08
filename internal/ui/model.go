@@ -243,6 +243,7 @@ type Model struct {
 	tinflight map[string]bool // a Status poll is running for the alias
 	fwdIdx    int
 	fwdHost   string // the host the forward prompt is bound to
+	fwdSpec   string // the persist path's pending spec between the + prompts
 
 	actions []string // actions.toml entry names, listed in the full help
 
@@ -444,9 +445,10 @@ const (
 	promptNone promptMode = iota
 	promptConnect
 	promptAlias
-	promptForward // `+`: an ad-hoc forward spec for the selected host
-	promptNewConn // settings: a target to save first, then offer to connect
-	promptOffer   // settings: "connect now?" after the save
+	promptForward     // `+`: a forward spec for the selected host (persist by default)
+	promptForwardName // `+`: the set name for the persist-by-default declaration
+	promptNewConn     // settings: a target to save first, then offer to connect
+	promptOffer       // settings: "connect now?" after the save
 	promptTunnelHost
 	promptTunnelName
 	promptTunnelSpecs
@@ -743,6 +745,38 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case forwardConflictMsg:
 		return m.forwardConflict(msg)
+
+	case forwardProceedMsg:
+		delete(m.tinflight, msg.host) // the held check is done; the action re-gates
+		host, ok := m.hostByAlias(msg.host)
+		if !ok {
+			m.notice = "host " + msg.host + " is gone — nothing added"
+			return m, nil
+		}
+		return m.openForwardName(host, msg.spec)
+
+	case fwdDeclaredMsg:
+		delete(m.tinflight, msg.host)
+		switch {
+		case msg.saveErr != nil:
+			m.notice = "not declared: " + oneLine(msg.saveErr, msg.host)
+			return m, nil // nothing written, nothing to reload
+		case msg.connErr != nil && tunnel.StateWriteOnly(msg.connErr):
+			m.notice = "added " + msg.name + " on " + msg.host + " — persisted; warning: " + oneLine(msg.connErr, msg.host)
+		case msg.connErr != nil:
+			m.notice = "declared " + msg.name + " on " + msg.host + " but connect failed: " + oneLine(msg.connErr, msg.host)
+		default:
+			m.notice = "added " + msg.spec + " on " + msg.host + " as " + msg.name + " — persisted, space toggles it"
+		}
+		// The declaration changed the config: reload the host list (which
+		// re-polls), so the new set renders.
+		if m.loadHosts != nil {
+			return m, m.reloadCmd(false)
+		}
+		if host, ok := m.hostByAlias(msg.host); ok {
+			return m, m.tunnelStatusCmd(host)
+		}
+		return m, nil
 
 	case setupStatusMsg:
 		if m.settings.pane == settingsSetup {
@@ -1124,6 +1158,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.mode {
 				case promptForward:
 					return m.submitForward()
+				case promptForwardName:
+					return m.submitForwardName()
 				case promptNewConn:
 					return m.submitNewConn()
 				case promptOffer:
@@ -1567,6 +1603,8 @@ func (m Model) View() string {
 			label = "save as:"
 		case promptForward:
 			label = "forward " + m.fwdHost + ":"
+		case promptForwardName:
+			label = "name the set on " + m.fwdHost + ":"
 		case promptNewConn:
 			label = "new connection:"
 		case promptOffer:

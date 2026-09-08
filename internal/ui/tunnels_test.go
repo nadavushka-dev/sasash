@@ -758,8 +758,8 @@ func TestModel_View_RecordedAdhocForwardRow(t *testing.T) {
 			row = line
 		}
 	}
-	if !strings.Contains(row, "ad-hoc") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
-		t.Errorf("recorded ad-hoc row = %q, want an ad-hoc row marked down", row)
+	if !strings.Contains(row, "unsaved") || !strings.HasSuffix(strings.TrimSpace(row), "down") {
+		t.Errorf("recorded ad-hoc row = %q, want an unsaved row marked down", row)
 	}
 	// It is the last row: l then G reaches it, and space would spawn it.
 	m = press(t, m, "l", "G")

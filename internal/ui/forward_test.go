@@ -90,7 +90,7 @@ func typeSpec(t *testing.T, m ui.Model, spec string) (ui.Model, tea.Cmd) {
 	if view := m.View(); !strings.Contains(view, "forward ubuntu:") || !strings.Contains(view, "enter add") {
 		t.Fatalf("View() missing the forward prompt or its help:\n%s", view)
 	}
-	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(spec)})
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!" + spec)})
 	next, cmd := m.Update(keyMsg("enter"))
 	return next.(ui.Model), cmd
 }
@@ -114,7 +114,7 @@ func TestModel_Update_AddForwardFree(t *testing.T) {
 	if got := r.CallKeys()[before:]; len(got) != 0 {
 		t.Errorf("add ran %v through the runner, want nothing", got)
 	}
-	if view := m.View(); !strings.Contains(view, "added 8080:localhost:80") {
+	if view := m.View(); !strings.Contains(view, "session-only tunnel up: 8080:localhost:80") {
 		t.Errorf("View() missing the added notice:\n%s", view)
 	}
 }
@@ -155,7 +155,7 @@ func TestModel_Update_AddForwardConflictOffersNext(t *testing.T) {
 				t.Fatalf("Prompting() = false after a conflict, want the prompt reopened")
 			}
 			view := m.View()
-			if !strings.Contains(view, "forward ubuntu: "+tt.wantSpec) {
+			if !strings.Contains(view, "forward ubuntu: !"+tt.wantSpec) {
 				t.Errorf("View() prompt should hold %q:\n%s", tt.wantSpec, view)
 			}
 			for _, w := range tt.wantNote {
@@ -177,7 +177,7 @@ func TestModel_Update_AddForwardConflictOffersNext(t *testing.T) {
 			if got, want := sp.Spawned(), []string{spawnArgv("ubuntu", tt.wantSpec)}; !reflect.DeepEqual(got, want) {
 				t.Errorf("add spawned = %v, want %v", got, want)
 			}
-			if view := m.View(); !strings.Contains(view, "added "+tt.wantSpec) {
+			if view := m.View(); !strings.Contains(view, "session-only tunnel up: "+tt.wantSpec) {
 				t.Errorf("View() missing the added notice:\n%s", view)
 			}
 		})
@@ -356,7 +356,7 @@ func TestModel_Update_ConflictBindsToItsHost(t *testing.T) {
 	next, _ := m.Update(check())
 	m = next.(ui.Model)
 	view := m.View()
-	if !ui.Prompting(m) || !strings.Contains(view, "forward ubuntu: 8081:localhost:80") {
+	if !ui.Prompting(m) || !strings.Contains(view, "forward ubuntu: !8081:localhost:80") {
 		t.Fatalf("View() should reopen the prompt bound to ubuntu:\n%s", view)
 	}
 	before := len(r.CallKeys())
@@ -372,7 +372,7 @@ func TestModel_Update_ConflictBindsToItsHost(t *testing.T) {
 	if got := r.CallKeys()[before:]; len(got) != 0 {
 		t.Errorf("add ran %v through the runner, want nothing", got)
 	}
-	if view := m.View(); !strings.Contains(view, "added 8081:localhost:80 on ubuntu") {
+	if view := m.View(); !strings.Contains(view, "session-only tunnel up: 8081:localhost:80 on ubuntu") {
 		t.Errorf("View() notice should name the host:\n%s", view)
 	}
 }
@@ -548,5 +548,71 @@ func TestModel_View_HelpListsForwardKeys(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}
+	}
+}
+
+// TestModel_Update_AddForwardPersistsByDefault pins SASASH.4.21: + on a
+// managed host declares the set (fwdset.Add — persisted in sasash.conf) AND
+// connects it live (Engine.Up), in one flow with a set-name step defaulting
+// to the local port.
+func TestModel_Update_AddForwardPersistsByDefault(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
+	var saved [][]string
+	m = ui.WithSaveForwardSet(m, func(alias, name string, specs []string) error {
+		saved = append(saved, append([]string{alias, name}, specs...))
+		return nil
+	})
+	m = press(t, m, "+")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("9090:localhost:90")})
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd()) // held check -> proceed -> the set-name prompt
+	if !ui.Prompting(m) || !strings.Contains(m.View(), "name the set on ubuntu") {
+		t.Fatalf("the persist path should open the set-name prompt:\n%s", m.View())
+	}
+	if got := ui.PromptValue(m); got != "9090" {
+		t.Fatalf("default set name = %q, want the local port 9090", got)
+	}
+	next, cmd = m.Update(keyMsg("enter")) // accept the default -> declare + connect
+	m = update(t, next.(ui.Model), cmd())
+	if want := [][]string{{"ubuntu", "9090", "9090:localhost:90"}}; !reflect.DeepEqual(saved, want) {
+		t.Errorf("saveForwardSet = %v, want the declaration %v (persisted)", saved, want)
+	}
+	if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", "9090:localhost:90")}) {
+		t.Errorf("connect spawned = %v, want the process up", got)
+	}
+	if view := m.View(); !strings.Contains(view, "persisted") {
+		t.Errorf("the notice should say it persisted:\n%s", view)
+	}
+}
+
+// TestModel_Update_AddForwardEphemeralWritesNoConfig pins the ! opt-in:
+// session-only, one process, and NO config write — never a declaration.
+func TestModel_Update_AddForwardEphemeralWritesNoConfig(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
+	saved := false
+	m = ui.WithSaveForwardSet(m, func(string, string, []string) error { saved = true; return nil })
+	m = press(t, m, "+")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("!7070:localhost:70")})
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd()) // held check -> direct session-only spawn (no name step)
+	if saved {
+		t.Error("an ephemeral (!) add must NOT write config")
+	}
+	if ui.Prompting(m) {
+		t.Errorf("ephemeral add should not open a set-name prompt:\n%s", m.View())
+	}
+	if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", "7070:localhost:70")}) {
+		t.Errorf("ephemeral spawned = %v, want the one process", got)
+	}
+	if view := m.View(); !strings.Contains(view, "session-only") || !strings.Contains(view, "unsaved") {
+		t.Errorf("the notice should mark it session-only / unsaved:\n%s", view)
 	}
 }
