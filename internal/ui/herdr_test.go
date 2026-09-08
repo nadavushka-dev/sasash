@@ -26,12 +26,12 @@ func TestHerdrCommand_ExactStrings(t *testing.T) {
 
 func TestModel_Update_HerdrKeyGuards(t *testing.T) {
 	t.Parallel()
-	// No multiplexer around: H has nothing to open beside the TUI and says
-	// so — it never hands off (4.22).
+	// No emulator sasash can drive: H shows the command to run yourself
+	// — it never hands off, never runs anything (4.22).
 	m := probedModel(t, fakerun.New())
 	next, cmd := m.Update(keyMsg("H"))
-	if cmd != nil || !strings.Contains(next.(ui.Model).View(), "H: nothing to open beside the TUI without herdr or tmux — S connects here") {
-		t.Errorf("Update(H) without a multiplexer: cmd %v, view:\n%s", cmd != nil, next.(ui.Model).View())
+	if view := next.(ui.Model).View(); cmd != nil || !ui.PopupOpen(next.(ui.Model)) || !strings.Contains(view, "H: no terminal tab to open here") || !strings.Contains(view, "herdr --remote web") {
+		t.Errorf("Update(H) without an emulator: cmd %v, view:\n%s", cmd != nil, view)
 	}
 	// No host, nothing.
 	empty := sized(t, nil)
@@ -51,12 +51,12 @@ func TestModel_View_HerdrPreview(t *testing.T) {
 	// previews space alone.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	m := polled(t, r, fakedial.New())
-	// Without a multiplexer the H segment says where H works.
-	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H opens beside the TUI only inside herdr or tmux") {
+	// Without an emulator the H segment says H will show the command.
+	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H no terminal tab to open here (shows the command)") {
 		t.Errorf("View() missing the H segment beside enter's:\n%s", view)
 	}
 	m = press(t, m, "l")
-	if view := m.View(); strings.Contains(view, "H opens beside") {
+	if view := m.View(); strings.Contains(view, "H no terminal tab") {
 		t.Errorf("View() with a forward highlighted still previews H:\n%s", view)
 	}
 }

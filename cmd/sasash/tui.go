@@ -343,6 +343,7 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 		Mux:            mux,
 		HerdrPane:      pane,
 		HerdrEnv:       getenv("HERDR_ENV") != "",
+		Emulator:       ui.DetectEmulator(getenv),
 		WindowTemplate: tmpl,
 		WindowPath:     windowPath,
 		Target:         target,

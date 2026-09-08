@@ -269,7 +269,7 @@ func SpawnTargetOf(m Model) string { return m.spawnTarget() }
 // HerdrPlan exposes H's spawn plan for exact-argv tests: the steps and
 // where they open; nil steps when H has nothing to open beside the TUI.
 func HerdrPlan(cfg SpawnConfig, alias string) (steps [][]string, where string) {
-	s := spawnState{mux: cfg.Mux, herdrPane: cfg.HerdrPane, herdrEnv: cfg.HerdrEnv, window: cfg.WindowTemplate, target: cfg.Target}
+	s := spawnState{mux: cfg.Mux, herdrPane: cfg.HerdrPane, herdrEnv: cfg.HerdrEnv, emulator: cfg.Emulator, window: cfg.WindowTemplate, target: cfg.Target}
 	p := s.herdrPlanFor(alias)
 	if p == nil {
 		return nil, ""

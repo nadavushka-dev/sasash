@@ -26,8 +26,13 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 		if c := spawnConfig(home, both); c.Mux != ui.MuxTmux || !c.HerdrEnv {
 			t.Errorf("spawnConfig(tmux inside herdr) = mux %v, herdrEnv %v; want tmux, true", c.Mux, c.HerdrEnv)
 		}
-		if c := spawnConfig(home, func(string) string { return "" }); c.HerdrEnv {
-			t.Errorf("spawnConfig(no env).HerdrEnv = true, want false")
+		if c := spawnConfig(home, func(string) string { return "" }); c.HerdrEnv || c.Emulator != ui.EmuNone {
+			t.Errorf("spawnConfig(no env) = herdrEnv %v, emulator %v; want false, none", c.HerdrEnv, c.Emulator)
+		}
+		// The outer emulator rides along, for H's tab.
+		wez := func(k string) string { return map[string]string{"HERDR_ENV": "1", "WEZTERM_PANE": "3"}[k] }
+		if c := spawnConfig(home, wez); c.Emulator != ui.EmuWezTerm {
+			t.Errorf("spawnConfig(herdr in wezterm).Emulator = %v, want wezterm", c.Emulator)
 		}
 		if cfg.WindowTemplate != defaultWindowTemplate(runtime.GOOS, getenv) {
 			t.Errorf("WindowTemplate without a file = %q, want this OS's default", cfg.WindowTemplate)
