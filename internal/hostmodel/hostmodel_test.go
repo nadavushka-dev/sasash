@@ -44,7 +44,8 @@ Host ubuntu
 			{Name: "lan", Host: "192.0.2.10"},
 			{Name: "ts", Host: "198.51.100.20", Port: "2222"},
 		},
-		Tags: []string{"dev", "tlv"},
+		HostName: "192.0.2.10",
+		Tags:     []string{"dev", "tlv"},
 		Forwards: []hostmodel.ForwardSet{
 			{Name: "web", Specs: []string{"3000:localhost:3000", "3001:localhost:3001"}},
 		},
@@ -77,9 +78,10 @@ Host nas
 		t.Fatalf("Build(ubuntu) errs = %v, want none", errs)
 	}
 	wantUbuntu := hostmodel.Host{
-		Alias:   "ubuntu",
-		Paths:   []probe.Path{{Name: "lan", Host: "192.0.2.10"}},
-		HasMeta: true,
+		Alias:    "ubuntu",
+		Paths:    []probe.Path{{Name: "lan", Host: "192.0.2.10"}},
+		HostName: "192.0.2.10",
+		HasMeta:  true,
 	}
 	if !reflect.DeepEqual(ubuntu, wantUbuntu) {
 		t.Errorf("Build(ubuntu) = %+v, want %+v", ubuntu, wantUbuntu)
@@ -92,6 +94,7 @@ Host nas
 	wantNas := hostmodel.Host{
 		Alias:    "nas",
 		Paths:    []probe.Path{{Name: "vpn", Host: "198.51.100.20"}},
+		HostName: "198.51.100.20",
 		Tags:     []string{"storage"},
 		Forwards: []hostmodel.ForwardSet{{Name: "web", Specs: []string{"8080:localhost:80"}}},
 		HasMeta:  true,

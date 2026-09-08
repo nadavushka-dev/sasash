@@ -24,6 +24,11 @@ type Host struct {
 	// preference (SPEC §3). Never empty: a host without @sasash path meta
 	// gets one path derived from its HostName.
 	Paths []probe.Path
+	// HostName is the block's HostName directive verbatim ("" when the
+	// block has none, so ssh resolves the alias itself). It is the address
+	// ssh ACTUALLY dials, so the UI marks the path whose address equals it
+	// as active — never first-reachable (SASASH.7.2).
+	HostName string
 	// Tags come from "# @sasash tags a,b"; nil when none.
 	Tags []string
 	// Forwards are named forward sets from "# @sasash forwards <name>
@@ -56,6 +61,7 @@ func Build(h *sshconf.Host) (Host, []error) {
 		out.File = f.Path
 	}
 	out.HasMeta = len(h.OwnMeta()) > 0
+	out.HostName, _ = h.Get("HostName")
 	for _, m := range h.OwnMetaVerb("hide") {
 		// Bare verb only: an argument is a typo for some other line, and a
 		// typo must not silently hide a host.
@@ -103,8 +109,8 @@ func Build(h *sshconf.Host) (Host, []error) {
 
 	if len(out.Paths) == 0 {
 		addr := out.Alias
-		if v, ok := h.Get("HostName"); ok {
-			addr = v
+		if out.HostName != "" {
+			addr = out.HostName
 		}
 		out.Paths = []probe.Path{{Host: addr, Port: defaultPort}}
 	}

@@ -1597,13 +1597,12 @@ func (m Model) detailView() string {
 	// The marker names the first alive path — what ssh reaches through
 	// this config — except under the paths focus, where it names the
 	// block's HostName row: the thing enter changes.
-	active := -1
-	for i, s := range sts {
-		if s.Alive() {
-			active = i
-			break
-		}
-	}
+	// The active marker points at the path ssh ACTUALLY dials — the one
+	// whose address is the block HostName — never first-reachable, so a
+	// HostName out of sync with a reachable path reads honestly (SASASH.7.2:
+	// the reason tunnels to a drifted HostName silently timed out). In the
+	// paths focus the block is re-read fresh.
+	active := activeMark(host.Paths, m.effectiveHostName(host))
 	if m.focus == focusPaths {
 		active = m.activePath(host)
 	}

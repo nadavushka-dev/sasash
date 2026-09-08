@@ -649,30 +649,34 @@ func TestModel_Update_PathsFocusRowGoneBeforeEnter(t *testing.T) {
 
 func TestModel_View_PathsFocusActiveIsTheBlocksRow(t *testing.T) {
 	t.Parallel()
-	// Under the focus, ← active names the block's HostName row — the
-	// thing enter changes — even when another path is the first alive
-	// one; outside it, the pane's usual first-alive marker returns.
+	// ← active names the path ssh ACTUALLY dials — the block's HostName row
+	// — in AND out of the focus, even when a DIFFERENT path is the first
+	// reachable one (SASASH.7.2: the marker must never claim ssh goes to a
+	// reachable path it will not; that lie was why tunnels to a drifted
+	// HostName silently timed out). Here HostName is ts's address, so ts is
+	// active though it is DOWN and lan is the reachable path.
 	m, _ := pickerModel(t, fakerun.New()) // lan up, ts down
 	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
 		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "198.51.100.5", true }, nil)
-	if view := m.View(); !strings.Contains(view, "● lan 192.0.2.10:22 5ms ← active") {
-		t.Fatalf("View() before p should mark the first alive path:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "○ ts  198.51.100.5:2222 down ← active") || strings.Contains(view, "lan 192.0.2.10:22 5ms ← active") || strings.Count(view, "← active") != 1 {
+		t.Fatalf("View() should mark the HostName row (ts, down) active, not the reachable lan:\n%s", view)
 	}
 	m = press(t, m, "p")
 	view := m.View()
 	if !strings.Contains(view, "› ○ ts  198.51.100.5:2222 down ← active") || strings.Count(view, "← active") != 1 || !strings.Contains(view, "already active") {
 		t.Errorf("View() under p should mark the block's HostName row as active:\n%s", view)
 	}
-	if view := press(t, m, "esc").View(); !strings.Contains(view, "● lan 192.0.2.10:22 5ms ← active") {
-		t.Errorf("View() after esc should mark the first alive path again:\n%s", view)
+	if view := press(t, m, "esc").View(); !strings.Contains(view, "○ ts  198.51.100.5:2222 down ← active") || strings.Contains(view, "lan 192.0.2.10:22 5ms ← active") {
+		t.Errorf("View() after esc should still mark the HostName row (ts) active, not the reachable lan:\n%s", view)
 	}
-	// A hand-edited HostName that matches nothing: no active marker, the
-	// plan says so, the mark starts on the first row.
+	// A HostName that matches no path: no active marker in the focus, the
+	// plan says so, the mark starts on the first row. (p evicts the block
+	// cache, so the fresh HostName drives it.)
 	m = ui.WithSwitcher(m, func(string, string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
 		func(string) ([]probe.Path, string, bool) { return []probe.Path{pathLAN, pathTS}, "203.0.113.99", true }, nil)
 	view = press(t, m, "esc", "p").View()
 	if strings.Contains(view, "← active") || !strings.Contains(view, "› ● lan") || !strings.Contains(view, "(HostName 203.0.113.99 matches no named path)") {
-		t.Errorf("View() with a hand-edited HostName:\n%s", view)
+		t.Errorf("View() with a HostName matching no path:\n%s", view)
 	}
 }
 
@@ -739,5 +743,44 @@ func TestModel_Update_PathsFocusShrinkClamp(t *testing.T) {
 	cmd()
 	if !reflect.DeepEqual(*switched, []string{"dual ts"}) || ui.PathsFocused(next.(ui.Model)) {
 		t.Errorf("switched %v (want [dual ts]), focused %v", *switched, ui.PathsFocused(next.(ui.Model)))
+	}
+}
+
+// TestModel_View_ActiveIsHostNameNotFirstReachable is SASASH.7.2's core
+// regression: ssh dials the block HostName, so the ← active marker is the
+// path whose address equals it — even when that path is DOWN and another is
+// reachable. The old first-reachable marker lied, and `ssh <alias>` (every
+// tunnel included) then silently timed out against the drifted HostName.
+func TestModel_View_ActiveIsHostNameNotFirstReachable(t *testing.T) {
+	t.Parallel()
+	hosts := []hostmodel.Host{{
+		Alias:    "ubuntu1",
+		HostName: "203.0.113.5", // the tailscale address — and it is down
+		Paths: []probe.Path{
+			{Name: "office", Host: "192.0.2.10"},
+			{Name: "tailscale", Host: "203.0.113.5"},
+		},
+	}}
+	d := fakedial.New().Up("192.0.2.10:22", 5*time.Millisecond).Down("203.0.113.5:22")
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = feed(t, m, m.Init())
+	view := m.View()
+	if !strings.Contains(view, "tailscale") || !strings.Contains(view, "down ← active") {
+		t.Errorf("the down HostName path (tailscale) must be marked active:\n%s", view)
+	}
+	if strings.Contains(view, "5ms ← active") {
+		t.Errorf("the reachable non-HostName path (office) must NOT be active:\n%s", view)
+	}
+	if n := strings.Count(view, "← active"); n != 1 {
+		t.Errorf("exactly one active path, got %d:\n%s", n, view)
+	}
+	// A HostName matching no path marks NONE active — never a lie.
+	hosts[0].HostName = "198.51.100.99"
+	m2 := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
+	m2 = update(t, m2, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m2 = feed(t, m2, m2.Init())
+	if view := m2.View(); strings.Contains(view, "← active") {
+		t.Errorf("a HostName matching no path must mark none active:\n%s", view)
 	}
 }

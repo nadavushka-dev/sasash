@@ -388,8 +388,8 @@ func TestSaveHostTo_RoundTripsThroughHostmodel(t *testing.T) {
 	}
 	declaring := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
 	want := []hostmodel.Host{
-		{Alias: "edge", Paths: []probe.Path{{Host: "192.0.2.99", Port: "2222"}}, Forwards: []hostmodel.ForwardSet{{Name: "adhoc", Specs: []string{"8080:localhost:80"}}}, File: declaring, HasMeta: true},
-		{Alias: "spare", Paths: []probe.Path{{Host: "192.0.2.98"}}, Forwards: []hostmodel.ForwardSet{{Name: "adhoc", Specs: []string{"5432:127.0.0.1:5432"}}}, File: declaring, HasMeta: true},
+		{Alias: "edge", HostName: "192.0.2.99", Paths: []probe.Path{{Host: "192.0.2.99", Port: "2222"}}, Forwards: []hostmodel.ForwardSet{{Name: "adhoc", Specs: []string{"8080:localhost:80"}}}, File: declaring, HasMeta: true},
+		{Alias: "spare", HostName: "192.0.2.98", Paths: []probe.Path{{Host: "192.0.2.98"}}, Forwards: []hostmodel.ForwardSet{{Name: "adhoc", Specs: []string{"5432:127.0.0.1:5432"}}}, File: declaring, HasMeta: true},
 	}
 	if !reflect.DeepEqual(hosts, want) {
 		t.Errorf("Load() = %+v, want %+v", hosts, want)

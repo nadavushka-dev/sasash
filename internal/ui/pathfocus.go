@@ -44,6 +44,32 @@ func pathRows(host hostmodel.Host, b pathBlock) (rows []probe.Path, at []int) {
 	return rows, at
 }
 
+// activeMark is the path ssh ACTUALLY dials among all rendered rows: the one
+// whose address is hostName (the block's HostName directive), never
+// first-reachable (SASASH.7.2 — a HostName out of sync with a reachable path
+// must read honestly). A single-path host has one route, always it; when
+// hostName matches no path none is active, so the marker never claims ssh
+// goes to a path it will not. Host.Paths space — the render's own order.
+func activeMark(paths []probe.Path, hostName string) int {
+	if len(paths) == 1 {
+		return 0
+	}
+	return activeIndex(paths, hostName)
+}
+
+// effectiveHostName is the address ssh will dial for host: the block's
+// current HostName when the switcher hook can read it (fresh, reflecting an
+// out-of-band edit), else the HostName captured at load. "" means ssh
+// resolves the alias itself and no probed path is the dial target.
+func (m Model) effectiveHostName(host hostmodel.Host) string {
+	if m.pathBlock != nil {
+		if b := m.block(host.Alias); b.hostName != "" {
+			return b.hostName
+		}
+	}
+	return host.HostName
+}
+
 // activeIndex is the row the block's HostName makes active: the LAST
 // named path whose host matches (the switcher's own rule when several
 // share a host), -1 when none does (a hand-edited HostName).

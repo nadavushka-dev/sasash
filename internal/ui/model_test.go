@@ -137,7 +137,7 @@ func TestModel_Update_Quit(t *testing.T) {
 func TestModel_Update_ProbeFlow(t *testing.T) {
 	t.Parallel()
 	hosts := []hostmodel.Host{
-		{Alias: "web", Paths: []probe.Path{
+		{Alias: "web", HostName: "198.51.100.5", Paths: []probe.Path{
 			{Name: "lan", Host: "192.0.2.10"},
 			{Name: "ts", Host: "198.51.100.5"},
 		}},
@@ -165,9 +165,9 @@ func TestModel_Update_ProbeFlow(t *testing.T) {
 	}
 
 	view := m.View()
-	// Selected host is web: lan down, ts up 20ms and therefore the first
-	// alive path in config order — the active one. Addresses render as the
-	// full dial target, port included (parity with `sasash status`).
+	// Selected host is web: HostName is ts's address, so ts is the active
+	// path (SASASH.7.2 — ssh's actual target), and it is also up at 20ms.
+	// Addresses render as the full dial target, port included.
 	for _, want := range []string{"web", "db", "○", "down", "●", "20ms", "← active", "$", "ssh web", "198.51.100.5:22"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() after probe missing %q\nview:\n%s", want, view)
