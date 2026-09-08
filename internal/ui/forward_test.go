@@ -211,7 +211,7 @@ func TestModel_Update_AddForwardRejectsBadSpec(t *testing.T) {
 	if cmd != nil || !ui.Prompting(m) {
 		t.Errorf("enter on a bad spec: cmd %v, prompting %v; want no cmd and the prompt kept", cmd != nil, ui.Prompting(m))
 	}
-	if view := m.View(); !strings.Contains(view, `no local port in "nonsense" — want local:host:port`) {
+	if view := m.View(); !strings.Contains(view, `spec "nonsense": no local port — want local:host:port`) {
 		t.Errorf("View() missing the rejection:\n%s", view)
 	}
 	if got := r.CallKeys()[before:]; len(got) != 0 {
@@ -649,5 +649,123 @@ func TestModel_Update_AddForwardUnmanagedIsSessionOnly(t *testing.T) {
 	}
 	if view := m.View(); !strings.Contains(view, "not managed") || !strings.Contains(view, "save it") {
 		t.Errorf("the notice should say it is session-only and how to persist:\n%s", view)
+	}
+}
+
+// managedForwardModel builds a model on a MANAGED ubuntu (so + persists) with
+// a wired spawner, and installs a saveForwardSet capture. Used by the
+// SASASH.4.27 multi-spec tests.
+func managedForwardModel(t *testing.T, d *fakedial.Fake, saved *[][]string) (ui.Model, *fakespawn.Fake) {
+	t.Helper()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	sp := fakespawn.New().Dial(d)
+	hosts := []hostmodel.Host{{Alias: "ubuntu", HasMeta: true, Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}}}
+	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
+	m = update(t, m, tea.WindowSizeMsg{Width: 160, Height: 30})
+	m = feed(t, m, m.Init())
+	m = ui.WithSaveForwardSet(m, func(alias, name string, specs []string) error {
+		*saved = append(*saved, append([]string{alias, name}, specs...))
+		return nil
+	})
+	return m, sp
+}
+
+// TestModel_Update_AddForwardMultiSpecPersists pins SASASH.4.27: whitespace-
+// separated specs become ONE set with N forwards, each expanded via the 4.9
+// shorthand, declared and connected together. The default set name is the
+// first forward's local port.
+func TestModel_Update_AddForwardMultiSpecPersists(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  []string // expanded specs, in order
+	}{
+		{name: "three shorthand ports", input: "4011 4012 4013", want: []string{"4011:localhost:4011", "4012:localhost:4012", "4013:localhost:4013"}},
+		{name: "mixed shorthand and full", input: "3000 2000:3000 5000:localhost:50", want: []string{"3000:localhost:3000", "2000:localhost:3000", "5000:localhost:50"}},
+		{name: "tabs separate too", input: "7001\t7002", want: []string{"7001:localhost:7001", "7002:localhost:7002"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var saved [][]string
+			m, sp := managedForwardModel(t, fakedial.New(), &saved)
+			m = press(t, m, "+")
+			m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.input)})
+			next, cmd := m.Update(keyMsg("enter"))
+			m = update(t, next.(ui.Model), cmd()) // every port free -> set-name prompt
+			if !ui.Prompting(m) || !strings.Contains(m.View(), "name the set on ubuntu") {
+				t.Fatalf("a multi-spec add should open the set-name prompt:\n%s", m.View())
+			}
+			firstPort := strings.SplitN(tt.want[0], ":", 2)[0]
+			if got := ui.PromptValue(m); got != firstPort {
+				t.Fatalf("default set name = %q, want the first local port %q", got, firstPort)
+			}
+			next, cmd = m.Update(keyMsg("enter")) // accept -> declare + connect the whole set
+			m = update(t, next.(ui.Model), cmd())
+			wantSaved := [][]string{append([]string{"ubuntu", firstPort}, tt.want...)}
+			if !reflect.DeepEqual(saved, wantSaved) {
+				t.Errorf("saveForwardSet = %v, want one set with every spec %v", saved, wantSaved)
+			}
+			var wantSpawn []string
+			for _, s := range tt.want {
+				wantSpawn = append(wantSpawn, spawnArgv("ubuntu", s))
+			}
+			if got := sp.Spawned(); !reflect.DeepEqual(got, wantSpawn) {
+				t.Errorf("spawned = %v, want one process per spec %v", got, wantSpawn)
+			}
+		})
+	}
+}
+
+// TestModel_Update_AddForwardMultiSpecRejectsWholeSet pins all-or-nothing: a
+// single malformed token names itself and adds NONE — the prompt stays open.
+func TestModel_Update_AddForwardMultiSpecRejectsWholeSet(t *testing.T) {
+	t.Parallel()
+	var saved [][]string
+	m, sp := managedForwardModel(t, fakedial.New(), &saved)
+	m = press(t, m, "+")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4011 nonsense 4012")})
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(ui.Model)
+	if cmd != nil {
+		t.Errorf("a malformed token must not run any check cmd (nothing async should start)")
+	}
+	if !ui.Prompting(m) {
+		t.Errorf("the prompt should stay open to fix the bad token:\n%s", m.View())
+	}
+	if len(saved) != 0 || len(sp.Spawned()) != 0 {
+		t.Errorf("all-or-nothing: nothing saved (%v) or spawned (%v)", saved, sp.Spawned())
+	}
+	if view := m.View(); !strings.Contains(view, `spec "nonsense"`) {
+		t.Errorf("the rejection should name the bad token:\n%s", view)
+	}
+}
+
+// TestModel_Update_AddForwardMultiSpecConflictRefusesSet pins the per-spec
+// conflict check: one held port refuses the WHOLE set (never a partial add),
+// names it with its next-free port, and reopens the prompt with the set.
+func TestModel_Update_AddForwardMultiSpecConflictRefusesSet(t *testing.T) {
+	t.Parallel()
+	var saved [][]string
+	d := fakedial.New().Up("127.0.0.1:4012", time.Millisecond) // 4012 is held
+	m, sp := managedForwardModel(t, d, &saved)
+	m = press(t, m, "+")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4011 4012 4013")})
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd()) // held check -> set conflict, nothing runs
+	if len(saved) != 0 || len(sp.Spawned()) != 0 {
+		t.Errorf("all-or-nothing on conflict: saved %v, spawned %v, want none", saved, sp.Spawned())
+	}
+	if !ui.Prompting(m) {
+		t.Fatalf("the prompt should reopen with the set to edit:\n%s", m.View())
+	}
+	view := m.View()
+	if !strings.Contains(view, "4012") || !strings.Contains(view, "none added") {
+		t.Errorf("the notice should name the held port and refuse the set:\n%s", view)
+	}
+	if !strings.Contains(view, "4011:localhost:4011") {
+		t.Errorf("the prompt should reoffer the expanded set:\n%s", view)
 	}
 }

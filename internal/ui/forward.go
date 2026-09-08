@@ -29,15 +29,33 @@ type forwardConflictMsg struct {
 	ephemeral              bool
 }
 
-// forwardProceedMsg: the local port is free, the add can go ahead. persist
+// forwardProceedMsg: every local port is free, the add can go ahead. persist
 // opens the set-name prompt; ephemeral connects a session-only forward now.
-type forwardProceedMsg struct{ host, spec string }
+// specs is the whole set (SASASH.4.27: one or many, created together).
+type forwardProceedMsg struct {
+	host  string
+	specs []string
+}
+
+// forwardPortConflict is one held local port in a multi-spec set and the
+// first free port above it (next == "" when none within portSearch).
+type forwardPortConflict struct{ port, next string }
+
+// forwardSetConflictMsg: a multi-spec add where at least one local port is
+// held. The whole set is refused (all-or-nothing); every conflict is named,
+// and reoffer is the input to reopen so nothing typed is lost (SASASH.4.27).
+type forwardSetConflictMsg struct {
+	host, reoffer string
+	held          []forwardPortConflict
+}
 
 // fwdDeclaredMsg reports the persist-by-default outcome: the declaration
-// write (saveErr) and the live connect (connErr).
+// write (saveErr) and the live connect (connErr). specs is the whole set.
 type fwdDeclaredMsg struct {
-	host, name, spec string
-	saveErr, connErr error
+	host, name string
+	specs      []string
+	saveErr    error
+	connErr    error
 }
 
 // expandSpec turns the two port shorthands into canonical three-part
@@ -98,7 +116,7 @@ func (m Model) openForward(host hostmodel.Host, value string) (Model, tea.Cmd) {
 	m.mode = promptForward
 	m.fwdHost = m.tunnelHost(host).Alias // the tunnel is the machine's, not the variant's
 	m.prompt.Reset()
-	m.prompt.Placeholder = "local:host:port  (! prefix = session-only, unsaved)"
+	m.prompt.Placeholder = "local:host:port [more…]  (! prefix = session-only, unsaved)"
 	m.prompt.SetValue(value)
 	m.prompt.CursorEnd()
 	return m, m.prompt.Focus()
@@ -113,11 +131,29 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 	if ephemeral {
 		raw = strings.TrimSpace(raw[1:])
 	}
-	spec, _ := expandSpec(raw)
-	port, _ := localPort(spec)
-	if port == "" {
-		m.notice = "no local port in " + strconv.Quote(spec) + " — want local:host:port"
-		return m, nil // stay in the prompt for correction
+	// Whitespace-separated specs → one set with N forwards (SASASH.4.27); a
+	// single spec is the N=1 case. The whole set is validated all-or-nothing
+	// BEFORE anything runs: a malformed or duplicate token names itself and
+	// adds none, keeping the input in the prompt to fix.
+	fields := strings.Fields(raw)
+	if len(fields) == 0 {
+		m.notice = "no spec — want local:host:port [more…]"
+		return m, nil
+	}
+	specs := make([]string, 0, len(fields))
+	seen := make(map[string]bool, len(fields))
+	for _, tok := range fields {
+		full, _ := expandSpec(tok)
+		if port, _ := localPort(full); port == "" {
+			m.notice = "spec " + strconv.Quote(tok) + ": no local port — want local:host:port"
+			return m, nil // stay in the prompt; nothing added
+		}
+		if seen[full] {
+			m.notice = "spec " + strconv.Quote(full) + " repeated — the set adds none"
+			return m, nil
+		}
+		seen[full] = true
+		specs = append(specs, full)
 	}
 	host, ok := m.hostByAlias(m.fwdHost)
 	m.mode = promptNone
@@ -136,7 +172,7 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 		ephemeral = true
 		note = host.Alias + " not managed — save it (o) to persist"
 	}
-	return m, m.forwardCheckCmd(host.Alias, spec, port, ephemeral, note)
+	return m, m.forwardCheckCmd(host.Alias, specs, ephemeral, note)
 }
 
 // forwardCheckCmd dials 127.0.0.1:<port> through the probe seam first (SPEC
@@ -145,39 +181,58 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 // (persist by default, SASASH.4.21) or, with the ! opt-in, straight to a
 // session-only connect. The engine's own refusal still catches a port taken
 // between the check and the spawn.
-func (m Model) forwardCheckCmd(alias, spec, port string, ephemeral bool, sessionNote string) tea.Cmd {
+func (m Model) forwardCheckCmd(alias string, specs []string, ephemeral bool, sessionNote string) tea.Cmd {
 	eng, prober := m.tunnels, m.prober
 	m.tinflight[alias] = true // the add writes the caches: no poll meanwhile
 	return func() tea.Msg {
 		cctx, ccancel := context.WithTimeout(context.Background(), forwardCheckTimeout)
 		defer ccancel()
-		if held(cctx, prober, port) {
-			return forwardConflictMsg{host: alias, spec: spec, port: port, next: nextFreePort(cctx, prober, port), ephemeral: ephemeral}
+		// Every spec's local port is dialled: a held one is a conflict.
+		var conflicts []forwardPortConflict
+		for _, spec := range specs {
+			port, _ := localPort(spec)
+			if held(cctx, prober, port) {
+				conflicts = append(conflicts, forwardPortConflict{port: port, next: nextFreePort(cctx, prober, port)})
+			}
+		}
+		if len(conflicts) > 0 {
+			// N=1 keeps the single-port remap offer (unchanged UX); a
+			// multi-spec set is refused whole and every conflict named.
+			if len(specs) == 1 {
+				return forwardConflictMsg{host: alias, spec: specs[0], port: conflicts[0].port, next: conflicts[0].next, ephemeral: ephemeral}
+			}
+			reoffer := strings.Join(specs, " ")
+			if ephemeral {
+				reoffer = "!" + reoffer
+			}
+			return forwardSetConflictMsg{host: alias, reoffer: reoffer, held: conflicts}
 		}
 		if ephemeral {
-			// The ! opt-in: one session-only process (the old inject),
-			// recorded so x/X can still end it, but NOT in sasash.conf.
+			// The ! opt-in: session-only processes (the old inject),
+			// recorded so x/X can still end them, but NOT in sasash.conf.
 			actx, acancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 			defer acancel()
-			done := "session-only tunnel up: " + spec + " on " + alias + " — " + sessionNote
-			return tunnelDoneMsg{host: alias, label: "add", done: done, err: eng.SpawnSet(actx, alias, "", []string{spec})}
+			done := "session-only tunnel up: " + strings.Join(specs, " ") + " on " + alias + " — " + sessionNote
+			return tunnelDoneMsg{host: alias, label: "add", done: done, err: eng.SpawnSet(actx, alias, "", specs)}
 		}
 		// Persist by default: on to the set-name prompt, then declare + connect.
-		return forwardProceedMsg{host: alias, spec: spec}
+		return forwardProceedMsg{host: alias, specs: specs}
 	}
 }
 
 // openForwardName is the persist path's set-name step: the default is the
 // local port, prefilled so enter accepts it. fwdset.Add then writes the
 // declaration and Engine.Up connects it — persisted AND live.
-func (m Model) openForwardName(host hostmodel.Host, spec string) (Model, tea.Cmd) {
+func (m Model) openForwardName(host hostmodel.Host, specs []string) (Model, tea.Cmd) {
 	if m.saveForwardSet == nil {
 		m.notice = "declaring is not available here — retry with a leading ! for a session-only tunnel"
 		return m, nil
 	}
-	port, _ := localPort(spec)
+	// The default set name is the first spec's local port (SASASH.4.27: a
+	// multi-spec set names itself after its first forward).
+	port, _ := localPort(specs[0])
 	m.fwdHost = host.Alias
-	m.fwdSpec = spec
+	m.fwdSpecs = specs
 	m.mode = promptForwardName
 	m.prompt.Reset()
 	m.prompt.Placeholder = "set name — enter saves as " + port
@@ -193,29 +248,29 @@ func (m Model) submitForwardName() (Model, tea.Cmd) {
 		m.notice = "set name: want a single word"
 		return m, nil
 	}
-	alias, spec := m.fwdHost, m.fwdSpec
+	alias, specs := m.fwdHost, m.fwdSpecs
 	m.mode = promptNone
 	m.prompt.Blur()
 	if _, ok := m.hostByAlias(alias); !ok {
 		m.notice = "host " + alias + " is gone — nothing added"
 		return m, nil
 	}
-	return m, m.declareAndConnectCmd(alias, name, spec)
+	return m, m.declareAndConnectCmd(alias, name, specs)
 }
 
 // declareAndConnectCmd is the persist-by-default action: write the
 // `# @sasash forwards` line, then bring it up (SpawnSet). The declaration
 // lands even if the connect fails — desire is persisted, space retries.
-func (m Model) declareAndConnectCmd(alias, name, spec string) tea.Cmd {
+func (m Model) declareAndConnectCmd(alias, name string, specs []string) tea.Cmd {
 	eng, save := m.tunnels, m.saveForwardSet
 	m.tinflight[alias] = true
 	return func() tea.Msg {
-		if err := save(alias, name, []string{spec}); err != nil {
-			return fwdDeclaredMsg{host: alias, name: name, spec: spec, saveErr: err}
+		if err := save(alias, name, specs); err != nil {
+			return fwdDeclaredMsg{host: alias, name: name, specs: specs, saveErr: err}
 		}
 		actx, acancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 		defer acancel()
-		return fwdDeclaredMsg{host: alias, name: name, spec: spec, connErr: eng.SpawnSet(actx, alias, name, []string{spec})}
+		return fwdDeclaredMsg{host: alias, name: name, specs: specs, connErr: eng.SpawnSet(actx, alias, name, specs)}
 	}
 }
 
@@ -275,6 +330,35 @@ func (m Model) forwardConflict(msg forwardConflictMsg) (Model, tea.Cmd) {
 		offer = "!" + offer
 	}
 	m, cmd := m.openForward(host, offer)
+	m.notice = notice
+	return m, cmd
+}
+
+// forwardSetConflict answers a multi-spec add where at least one local port
+// is held: the whole set is refused (all-or-nothing), every conflict named
+// with its next-free port, and the prompt reopens with the input so nothing
+// typed is lost. If the keyboard is busy, it degrades to a notice.
+func (m Model) forwardSetConflict(msg forwardSetConflictMsg) (Model, tea.Cmd) {
+	delete(m.tinflight, msg.host) // nothing was written: the gate opens
+	parts := make([]string, 0, len(msg.held))
+	for _, c := range msg.held {
+		if c.next != "" {
+			parts = append(parts, "port "+c.port+" ("+c.next+" free)")
+		} else {
+			parts = append(parts, "port "+c.port+" (none free near)")
+		}
+	}
+	notice := "in use on " + msg.host + ": " + strings.Join(parts, ", ") + " — none added, edit and retry"
+	if m.popup.open() || m.mode != promptNone || m.settings.pane != settingsOff || m.focus == focusPaths || m.list.FilterState() == list.Filtering {
+		m.notice = notice
+		return m, nil
+	}
+	host, ok := m.hostByAlias(msg.host)
+	if !ok {
+		m.notice = "host " + msg.host + " is gone — nothing added"
+		return m, nil
+	}
+	m, cmd := m.openForward(host, msg.reoffer)
 	m.notice = notice
 	return m, cmd
 }
