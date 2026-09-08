@@ -1001,3 +1001,29 @@ func TestModel_Update_CancelForwardOnVariantKeysTheParent(t *testing.T) {
 		t.Errorf("x on the variant killed = %v, want the parent's pid [77]", got)
 	}
 }
+
+// TestModel_Update_AdhocTunnelOnVariantAttributesToParent pins that an
+// ad-hoc `-N -L` typed against a saved variant in the connect prompt records
+// under the canonical parent, not the path-forcing alias (SASASH.4.24).
+func TestModel_Update_AdhocTunnelOnVariantAttributesToParent(t *testing.T) {
+	t.Parallel()
+	hosts := []hostmodel.Host{
+		{Alias: "ubuntu1", Paths: []probe.Path{{Name: "office", Host: "192.0.2.10"}, {Name: "vpn", Host: "198.51.100.5"}}},
+		{Alias: "ubuntu1.office", Paths: []probe.Path{{Host: "192.0.2.10"}}},
+	}
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu1")
+	d := fakedial.New()
+	eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+	m = press(t, m, "a")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ubuntu1.office -N -L 8080:localhost:80")})
+	m = press(t, m, "enter")
+	// The engine flow names the parent machine in its spawn plan, never the
+	// path-variant: if it read "…8080:localhost:80 ubuntu1.office" the tunnel
+	// would be keyed to the variant again.
+	if view := m.View(); strings.Contains(view, "ubuntu1.office") || !strings.Contains(view, "8080:localhost:80 ubuntu1") {
+		t.Errorf("ad-hoc -N on a saved variant should target the parent ubuntu1:\n%s", view)
+	}
+}

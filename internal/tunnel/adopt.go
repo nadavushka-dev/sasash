@@ -37,7 +37,13 @@ func (e Engine) Adopt(host string, variants []string) error {
 		if _, err := os.Stat(path); err != nil {
 			continue // no record under this variant
 		}
-		st, _ := e.loadState(v)
+		st, corrupt := e.loadState(v)
+		if corrupt {
+			// Unreadable: its forwards cannot be migrated and its file must
+			// not be destroyed — a live pid it holds would become unkillable.
+			// Leave it for a human (or a next-boot rewrite) to resolve.
+			continue
+		}
 		moved = append(moved, st.Forwards...)
 		files = append(files, path)
 	}

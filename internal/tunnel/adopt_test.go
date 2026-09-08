@@ -52,13 +52,35 @@ func TestEngine_Adopt_SurfacesVariantTunnelsUnderTheParent(t *testing.T) {
 func TestEngine_Adopt_NoVariantStateWritesNothing(t *testing.T) {
 	t.Parallel()
 	e := engine(t, fakespawn.New(), fakedial.New())
+	// Non-canonical bytes (extra spaces): any spurious rewrite normalizes
+	// them, so a byte-identical file proves Adopt did not touch it — the
+	// property that makes calling Adopt on every poll cheap.
+	seed := `{"forwards":[ {"set":"web","spec":"3000:localhost:3000","pid":41} ]}`
+	writeState(t, e, "ubuntu1", seed)
+	if err := e.Adopt("ubuntu1", []string{"ubuntu1.office"}); err != nil {
+		t.Fatalf("Adopt() err = %v", err)
+	}
+	if got := readState(t, e, "ubuntu1"); got != seed {
+		t.Errorf("Adopt with no variant files rewrote the parent: got %s, want it untouched", got)
+	}
+}
+
+func TestEngine_Adopt_SkipsCorruptVariantFile(t *testing.T) {
+	t.Parallel()
+	e := engine(t, fakespawn.New(), fakedial.New())
 	writeState(t, e, "ubuntu1", `{"forwards":[{"set":"web","spec":"3000:localhost:3000","pid":41}]}`)
+	writeState(t, e, "ubuntu1.office", `{ this is not json`)
 	before := readState(t, e, "ubuntu1")
 	if err := e.Adopt("ubuntu1", []string{"ubuntu1.office"}); err != nil {
 		t.Fatalf("Adopt() err = %v", err)
 	}
+	// The corrupt variant file is preserved (not destroyed), and the parent
+	// is untouched — nothing was migrated from an unreadable file.
+	if got := readState(t, e, "ubuntu1.office"); got != `{ this is not json` {
+		t.Errorf("corrupt variant file should be left alone, got %s", got)
+	}
 	if got := readState(t, e, "ubuntu1"); got != before {
-		t.Errorf("Adopt with no variant files rewrote the parent: %s", got)
+		t.Errorf("parent rewritten from a corrupt variant: %s", got)
 	}
 }
 

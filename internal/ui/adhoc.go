@@ -428,6 +428,12 @@ func (m Model) startTunnelOnly(t adhocTarget) (Model, tea.Cmd) {
 // it and x/X can end it. A -N with no -L has nothing to start: tunnels
 // are per-port, and the interactive master is the next connect's.
 func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
+	// Tunnels belong to the machine (SASASH.4.24): a saved variant target
+	// (`ubuntu1.office -L …`) records under the canonical parent, exactly as
+	// `+` does, so the tunnel is never keyed to the path-forcing alias.
+	if h, ok := m.hostByAlias(alias); ok {
+		alias = m.tunnelHost(h).Alias
+	}
 	if m.tunnels == nil {
 		m.notice = "tunnels are not available here — nothing started"
 		return m, nil
