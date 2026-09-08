@@ -9,3 +9,6 @@ coverage.out
 
 # nested git worktrees for parallel agent lanes
 .worktrees/
+
+# runtime state from demo fixture runs
+demo/home/.local/
