@@ -250,11 +250,7 @@ var (
 // construction site of its process.
 var (
 	HerdrCommand = herdrCommand
-	HerdrExec    = herdrExec
 )
-
-// HerdrExit replays the terminal returning from herdr.
-func HerdrExit(err error) tea.Msg { return herdrExitMsg{err: err} }
 
 // ExpandSpec exposes the shorthand expansion for its table test.
 var ExpandSpec = expandSpec
@@ -263,14 +259,23 @@ var ExpandSpec = expandSpec
 // string tests; HerdrPaneID for the reply parser.
 var (
 	HerdrCreateArgv = herdrCreateArgv
-	HerdrRunArgv    = herdrRunArgv
-	TmuxArgv        = tmuxArgv
 	WindowArgv      = windowArgv
 	HerdrPaneID     = herdrPaneID
 )
 
 // SpawnTargetOf reports the live spawn target.
 func SpawnTargetOf(m Model) string { return m.spawnTarget() }
+
+// HerdrPlan exposes H's spawn plan for exact-argv tests: the steps and
+// where they open; nil steps when H has nothing to open beside the TUI.
+func HerdrPlan(cfg SpawnConfig, alias string) (steps [][]string, where string) {
+	s := spawnState{mux: cfg.Mux, herdrPane: cfg.HerdrPane, window: cfg.WindowTemplate, target: cfg.Target}
+	p := s.herdrPlanFor(alias)
+	if p == nil {
+		return nil, ""
+	}
+	return p.steps, p.where
+}
 
 // LocalPort and WithLocalPort expose the forward-spec port rule so it can
 // be pinned to the engine's and to exact rewrites.
@@ -325,3 +330,8 @@ func Inflight(m Model, alias string) bool { return m.tinflight[alias] }
 
 // TunnelStatusKnown reports a tstatus entry for alias.
 func TunnelStatusKnown(m Model, alias string) bool { _, ok := m.tstatus[alias]; return ok }
+
+// TmuxArgv and HerdrRunArgv are enter's builders as the argv tests knew
+// them: the ssh command in the created window/pane (H passes its own).
+func TmuxArgv(target, alias string) []string     { return tmuxArgv(target, alias, sshCommand(alias)) }
+func HerdrRunArgv(paneID, alias string) []string { return herdrRunArgv(paneID, sshCommand(alias)) }

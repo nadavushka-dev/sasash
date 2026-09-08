@@ -147,7 +147,7 @@ func TestModel_Update_EnterSpawnsHerdr(t *testing.T) {
 	// The line previews both steps, the pane still a placeholder, and
 	// names S as the plain handoff.
 	view := m.View()
-	for _, want := range []string{"$ herdr tab create --label web --no-focus ; herdr pane run <pane> ssh web", "S ssh web", "H herdr --remote web"} {
+	for _, want := range []string{"$ herdr tab create --label web --no-focus ; herdr pane run <pane> ssh web", "S ssh web", "H ssh web (herdr tab; --remote nests)"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() missing %q:\n%s", want, view)
 		}

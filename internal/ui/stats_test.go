@@ -244,7 +244,8 @@ func TestModel_View_CorruptStats(t *testing.T) {
 
 func TestModel_Update_HandoffIsRecorded(t *testing.T) {
 	t.Parallel()
-	// enter and H remember the managed alias they hand off to; when the
+	// enter remembers the managed alias it hands off to (H spawns, 4.22,
+	// and stamps through the spawn's own outcome); when the
 	// terminal comes back the stamp rides a fresh status poll (one writer
 	// per host) and the render that follows can show it.
 	tests := []struct {
@@ -255,7 +256,6 @@ func TestModel_Update_HandoffIsRecorded(t *testing.T) {
 		wantNote string
 	}{
 		{name: "enter", key: "enter", exit: ui.SSHExit},
-		{name: "H", key: "H", exit: ui.HerdrExit},
 		{name: "a failed stamp is a notice", key: "enter", exit: ui.SSHExit, hookErr: errors.New("read-only"), wantNote: "stats not recorded: read-only"},
 	}
 	for _, tt := range tests {

@@ -130,20 +130,12 @@ func (m Model) handoff(alias string) (tea.Model, tea.Cmd) {
 	})
 }
 
-// herdrCommand is the argv `H` hands the terminal to (SPEC §5/§6): herdr
-// reads ssh_config itself, so it needs no actions.toml template.
+// herdrCommand is the argv `H` opens beside the TUI (SPEC §5/§6): herdr
+// reads ssh_config itself, so it needs no actions.toml template. It runs
+// in a tmux window; inside herdr it would nest (see herdrPlanFor).
 func herdrCommand(alias string) []string {
 	return []string{"herdr", "--remote", alias}
 }
-
-// herdrExec is the ONE construction site of the herdr handoff process.
-func herdrExec(alias string) *exec.Cmd {
-	return execCommand(herdrCommand(alias))
-}
-
-// herdrExitMsg arrives when the terminal comes back from herdr. err
-// reports only a failure to start; herdr's own exit code is not news.
-type herdrExitMsg struct{ err error }
 
 // editorArgv is the exact invocation `e` hands the terminal to.
 func editorArgv(editor []string, confPath string) []string {
@@ -800,14 +792,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case herdrExitMsg:
-		var exitErr *exec.ExitError
-		started := msg.err == nil || errors.As(msg.err, &exitErr)
-		if !started {
-			m.notice = "herdr: " + msg.err.Error()
-		}
-		return m.handoffReturned(started)
-
 	case spawnDoneMsg:
 		if msg.err != nil {
 			m.notice = cleanLine(msg.err.Error())
@@ -825,7 +809,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.show("spawn failed for "+msg.alias, lines...)
 			return m, nil
 		}
-		m.notice = "spawned ssh " + msg.alias + " → " + msg.where
+		m.notice = "spawned " + msg.what + " → " + msg.where
+		if msg.note != "" {
+			m.notice += " — " + msg.note
+		}
 		// A spawn is a connection: it counts as the last one made.
 		m, stamp := m.stampHandoff(msg.alias)
 		return m, stamp
@@ -1180,14 +1167,20 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.focusPathsOn(host), nil
 			case key.Matches(msg, m.keys.Herdr):
+				// H spawns beside the TUI like enter (4.22), never a
+				// handoff: herdr's remote session in a new tab/pane/window,
+				// or — inside herdr, where --remote would nest — the same
+				// tab with plain ssh.
 				host, ok := m.Selected()
 				if !ok {
 					return m, nil
 				}
-				m.handoffHost = host.Alias
-				return m, tea.ExecProcess(herdrExec(host.Alias), func(err error) tea.Msg {
-					return herdrExitMsg{err: err}
-				})
+				plan := m.spawn.herdrPlanFor(host.Alias)
+				if plan == nil {
+					m.notice = "H: nothing to open beside the TUI without herdr or tmux — S connects here"
+					return m, nil
+				}
+				return m, spawnCmd(m.runner, host.Alias, plan)
 			case key.Matches(msg, m.keys.CopyAddr):
 				host, ok := m.Selected()
 				if !ok {
@@ -1725,7 +1718,18 @@ func (m Model) previewView() string {
 					v += seg
 				}
 			}
-			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
+			// H's command per mux (4.22) and where it opens — the wrapper
+			// step is enter's, on the $ line already; inside herdr the
+			// reason plain ssh stands in.
+			hseg := "opens beside the TUI only inside herdr or tmux"
+			if plan := m.spawn.herdrPlanFor(host.Alias); plan != nil {
+				hseg = strings.Join(plan.what, " ") + " (" + plan.where
+				if plan.note != "" {
+					hseg += "; --remote nests"
+				}
+				hseg += ")"
+			}
+			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(hseg)
 			if lipgloss.Width(v+seg) <= m.width {
 				v += seg
 			}

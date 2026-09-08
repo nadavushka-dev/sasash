@@ -98,6 +98,8 @@ type spawnState struct {
 type spawnPlan struct {
 	where string     // "herdr tab", "tmux window", "window" — for the notice
 	steps [][]string // exact argv, in order
+	what  []string   // the command the steps open (ssh, or herdr --remote), for the notice
+	note  string     // why this command and not another (H inside herdr), for the notice
 	err   error      // a template that cannot expand; steps is nil then
 }
 
@@ -148,9 +150,10 @@ func herdrCreateArgv(target, alias, fromPane string) []string {
 	return []string{"herdr", "tab", "create", "--label", alias, "--no-focus"}
 }
 
-// herdrRunArgv is step two: ssh into the created pane.
-func herdrRunArgv(paneID, alias string) []string {
-	return append([]string{"herdr", "pane", "run", paneID}, sshCommand(alias)...)
+// herdrRunArgv is step two: the command — ssh, or H's — into the
+// created pane.
+func herdrRunArgv(paneID string, command []string) []string {
+	return append([]string{"herdr", "pane", "run", paneID}, command...)
 }
 
 // tmuxArgv is the one-step tmux spawn per target. -d keeps the current
@@ -160,7 +163,7 @@ func herdrRunArgv(paneID, alias string) []string {
 // there, so those become '_' in the NAME only; the ssh argv keeps the
 // real alias. A session is named by its window rather than -s: session
 // names must be unique, and a second shell to the same host is normal.
-func tmuxArgv(target, alias string) []string {
+func tmuxArgv(target, alias string, command []string) []string {
 	var head []string
 	switch target {
 	case "pane":
@@ -170,7 +173,7 @@ func tmuxArgv(target, alias string) []string {
 	default:
 		head = []string{"tmux", "new-window", "-d", "-n", tmuxName(alias)}
 	}
-	return append(head, sshCommand(alias)...)
+	return append(head, command...)
 }
 
 // tmuxName is an alias as a tmux window name.
@@ -204,12 +207,12 @@ func (s spawnState) planFor(alias string) *spawnPlan {
 	}
 	switch s.mux {
 	case MuxHerdr:
-		return &spawnPlan{where: s.where(target), steps: [][]string{
+		return &spawnPlan{where: s.where(target), what: sshCommand(alias), steps: [][]string{
 			herdrCreateArgv(target, alias, s.herdrPane),
-			herdrRunArgv(panePlaceholder, alias),
+			herdrRunArgv(panePlaceholder, sshCommand(alias)),
 		}}
 	case MuxTmux:
-		return &spawnPlan{where: s.where(target), steps: [][]string{tmuxArgv(target, alias)}}
+		return &spawnPlan{where: s.where(target), what: sshCommand(alias), steps: [][]string{tmuxArgv(target, alias, sshCommand(alias))}}
 	}
 	if s.window == "" {
 		return nil
@@ -218,7 +221,36 @@ func (s spawnState) planFor(alias string) *spawnPlan {
 	if err != nil {
 		return &spawnPlan{where: "window", err: err}
 	}
-	return &spawnPlan{where: "window", steps: [][]string{argv}}
+	return &spawnPlan{where: "window", what: sshCommand(alias), steps: [][]string{argv}}
+}
+
+// herdrNests is why H cannot run `herdr --remote` from inside herdr.
+const herdrNests = "herdr --remote would nest inside herdr"
+
+// herdrPlanFor builds H's plan (SASASH.4.22): herdr's remote session in
+// a new tab/pane/window per the spawn target, the TUI staying up — the
+// same road as enter, never a handoff. Under tmux the command is `herdr
+// --remote <alias>`. Inside herdr that command nests, which herdr
+// refuses, and herdr has no primitive that opens a remote in a tab; so
+// the tab runs plain `ssh <alias>` — the session, without the nesting —
+// and the plan says why. Without a multiplexer there is nothing to open
+// beside the TUI: nil, and the caller says so (the OS-window template
+// bakes its own ssh command in, so it cannot carry H's).
+func (s spawnState) herdrPlanFor(alias string) *spawnPlan {
+	target := s.target
+	if _, ok := SpawnTargetIndex(target); !ok {
+		target = DefaultSpawnTarget
+	}
+	switch s.mux {
+	case MuxHerdr:
+		return &spawnPlan{where: s.where(target), note: herdrNests, what: sshCommand(alias), steps: [][]string{
+			herdrCreateArgv(target, alias, s.herdrPane),
+			herdrRunArgv(panePlaceholder, sshCommand(alias)),
+		}}
+	case MuxTmux:
+		return &spawnPlan{where: s.where(target), what: herdrCommand(alias), steps: [][]string{tmuxArgv(target, alias, herdrCommand(alias))}}
+	}
+	return nil
 }
 
 // preview is the plan as the bottom line shows it: the steps joined the
@@ -246,6 +278,8 @@ const spawnTimeout = 10 * time.Second
 type spawnDoneMsg struct {
 	alias string
 	where string
+	what  string   // the command that was opened, for the notice
+	note  string   // the plan's reason for it, when there is one
 	argv  []string // the step that failed, for the popup
 	err   error
 }
@@ -287,7 +321,7 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 				paneID = id
 			}
 		}
-		return spawnDoneMsg{alias: alias, where: p.where}
+		return spawnDoneMsg{alias: alias, where: p.where, what: strings.Join(p.what, " "), note: p.note}
 	}
 }
 
