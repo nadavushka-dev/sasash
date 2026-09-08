@@ -128,7 +128,7 @@ func spawnModel(t *testing.T, r *fakerun.Fake, cfg ui.SpawnConfig, rec func(stri
 	eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Spawn: cfg, Tunnels: eng, RecordHandoff: rec})
 	m = update(t, m, tea.WindowSizeMsg{Width: 140, Height: 24})
-	return feed(t, m, m.Init())
+	return ui.WithPreviewShown(feed(t, m, m.Init()))
 }
 
 func herdrCfg(target string) ui.SpawnConfig {

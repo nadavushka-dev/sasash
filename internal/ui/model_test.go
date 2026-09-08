@@ -35,7 +35,7 @@ func testHosts(n int) []hostmodel.Host {
 func sized(t *testing.T, hosts []hostmodel.Host) ui.Model {
 	t.Helper()
 	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
-	return update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	return ui.WithPreviewShown(update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24}))
 }
 
 // update runs one Update and asserts the model type is preserved.
@@ -148,7 +148,7 @@ func TestModel_Update_ProbeFlow(t *testing.T) {
 		Up("198.51.100.5:22", 20*time.Millisecond).
 		Up("192.0.2.30:22", 5*time.Millisecond)
 	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
-	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = ui.WithPreviewShown(update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24}))
 
 	if view := m.View(); !strings.Contains(view, "◌") {
 		t.Errorf("View() before probe = %q, want pending glyph ◌", view)
@@ -194,7 +194,7 @@ func TestModel_Update_RefreshTick(t *testing.T) {
 	addr := hosts[0].Paths[0].Addr()
 	dialer := fakedial.New().Down(addr)
 	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
-	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = ui.WithPreviewShown(update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24}))
 
 	next, rearm := m.Update(m.Init()())
 	m = next.(ui.Model)
@@ -348,5 +348,32 @@ func TestModel_View_NoHosts(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Errorf("Update(q) cmd() = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestModel_Update_PreviewHiddenByDefaultUntilToggled(t *testing.T) {
+	t.Parallel()
+	// SASASH.4.26 decision (3): the command-preview footer is off by
+	// default; `$` toggles it. A raw model (no WithPreviewShown) proves
+	// the default. The toggle-on notice takes the line until the next
+	// keypress, so a benign k clears it and the preview returns.
+	m := ui.New(testHosts(2), probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+	if view := m.View(); strings.Contains(view, "$ ssh host0") {
+		t.Errorf("the command preview must be hidden by default:\n%s", view)
+	}
+	m = press(t, m, "$")
+	if view := m.View(); !strings.Contains(view, "command line shown") {
+		t.Errorf("$ should announce the preview is shown:\n%s", view)
+	}
+	m = press(t, m, "k")
+	if view := m.View(); !strings.Contains(view, "$ ssh host0") {
+		t.Errorf("after $, the command preview should render:\n%s", view)
+	}
+	m = press(t, m, "$")
+	m = press(t, m, "k")
+	if view := m.View(); strings.Contains(view, "$ ssh host0") {
+		t.Errorf("$ again should hide the command preview:\n%s", view)
 	}
 }

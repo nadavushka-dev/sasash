@@ -458,11 +458,6 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 			}
 		}
 	}
-	// After every row (and any edit plan under it): what the store
-	// remembers about this host.
-	if known && ts.err == nil {
-		b.WriteString(m.lastSeenLine(ts.status, now))
-	}
 	return b.String()
 }
 

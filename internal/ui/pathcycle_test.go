@@ -119,7 +119,7 @@ func switcherModelReads(t *testing.T, r *fakerun.Fake, res pathswitch.Result, sw
 			return nil, "", false // spare: in the host model, not in sasash.conf
 		},
 		func(alias, path string) error { stamped = append(stamped, []string{alias, path}); return nil })
-	return m, &switched, &stamped, &reads
+	return ui.WithPreviewShown(m), &switched, &stamped, &reads
 }
 
 func TestModel_View_SwitchPlan(t *testing.T) {
@@ -456,7 +456,7 @@ func pickerModel(t *testing.T, r *fakerun.Fake) (ui.Model, *[]string) {
 			}
 			return nil, "", false
 		}, nil)
-	return press(t, m, "G"), &switched
+	return ui.WithPreviewShown(press(t, m, "G")), &switched
 }
 
 func TestModel_View_PathsFocus(t *testing.T) {

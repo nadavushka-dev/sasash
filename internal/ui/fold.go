@@ -18,8 +18,9 @@ import (
 // rows, and a filter term that names one is the only way to surface it
 // (SASASH.4.23 retired the v toggle and the pinned-variants line).
 type foldState struct {
-	variants map[string]string
-	hidden   map[string]bool // "# @sasash hide" hosts: out of the rows unless named
+	variants    map[string]string
+	hidden      map[string]bool // "# @sasash hide" hosts: out of the rows unless named
+	showAmbient bool            // the `.` toggle: reveal the other-ssh_config-entries tier
 }
 
 // hiddenSet collects the hosts that asked to be left out of listings.
@@ -129,6 +130,11 @@ func foldFilter(fold *foldState) list.FilterFunc {
 // listedHosts are the rows outside a filter: the non-variant hosts
 // (generated variants always fold). The header tally counts these.
 func (m Model) listedHosts() []hostmodel.Host {
+	// Ambient (other ssh_config entries) hide by default (SASASH.4.26) — but
+	// only when there is at least one managed host to show instead; a list
+	// with nothing else would just be empty. A filter term still finds them
+	// (listRows shows every host filtered), and `.` reveals the tier.
+	hideAmbient := !m.fold.showAmbient && m.hasManaged()
 	var out []hostmodel.Host
 	for _, h := range m.hosts {
 		if m.fold.hidden[h.Alias] {
@@ -137,9 +143,29 @@ func (m Model) listedHosts() []hostmodel.Host {
 		if _, variant := m.fold.variants[h.Alias]; variant {
 			continue
 		}
+		if hideAmbient && !m.managed(h) {
+			continue
+		}
 		out = append(out, h)
 	}
 	return out
+}
+
+// hasManaged reports whether any listable (not hidden, not a variant) host
+// is sasash-managed — the condition under which the ambient tier hides.
+func (m Model) hasManaged() bool {
+	for _, h := range m.hosts {
+		if m.fold.hidden[h.Alias] {
+			continue
+		}
+		if _, variant := m.fold.variants[h.Alias]; variant {
+			continue
+		}
+		if m.managed(h) {
+			return true
+		}
+	}
+	return false
 }
 
 // listRows are the items the list holds right now: every host while a

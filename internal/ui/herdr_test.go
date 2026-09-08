@@ -66,7 +66,7 @@ func TestModel_View_HerdrPreviewFitsOrGoes(t *testing.T) {
 	// A long alias at a narrow width: the H segment must vanish whole,
 	// never render as a clipped command.
 	hosts := []hostmodel.Host{{Alias: "build-eu-west-bastion-01", Paths: []probe.Path{{Host: "192.0.2.10"}}}}
-	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{Spawn: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "tab"}})
+	m := ui.WithPreviewShown(ui.New(hosts, probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{Spawn: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "tab"}}))
 	wide := update(t, m, tea.WindowSizeMsg{Width: 180, Height: 24}).View()
 	if !strings.Contains(wide, "H herdr --remote build-eu-west-bastion-01 (tmux window)") {
 		t.Errorf("View() at 180 cols missing the whole H segment:\n%s", wide)

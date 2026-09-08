@@ -153,7 +153,7 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 			if tt.noEditor {
 				editor = nil
 			}
-			m := ui.WithEditor(sized(t, tt.hosts), editor, "", renameConf)
+			m := ui.WithEditor(ui.WithAmbientShown(sized(t, tt.hosts)), editor, "", renameConf)
 			if tt.hook {
 				m = ui.WithRenameHost(m, h.rename)
 			}

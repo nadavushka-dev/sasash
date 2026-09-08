@@ -45,7 +45,7 @@ func cycleModel(t *testing.T) (ui.Model, *[]string) {
 			}
 			return nil, "", false
 		}, nil)
-	return press(t, m, "G"), &switched // both is last in the list
+	return ui.WithPreviewShown(press(t, m, "G")), &switched // both is last in the list
 }
 
 func TestModel_Update_FocusCycle(t *testing.T) {

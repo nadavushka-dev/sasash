@@ -544,9 +544,11 @@ func TestModel_View_LastSeenAfterEditPlan(t *testing.T) {
 	m = ui.WithSaveForwardEdit(m, func(string, string, string, string) error { return nil })
 	m = press(t, m, "l", "G", "E")
 	view := m.View()
+	// The last-seen line is host history above the tunnels section now
+	// (SASASH.4.26), so it precedes the edit plan; both are present.
 	plan, seen := strings.Index(view, "sasash.conf: forwards api"), strings.Index(view, "last connected")
-	if plan < 0 || seen < 0 || plan > seen {
-		t.Errorf("edit plan (%d) should precede the last-seen line (%d):\n%s", plan, seen, view)
+	if plan < 0 || seen < 0 || seen > plan {
+		t.Errorf("the last-seen line (%d) is host history above the edit plan (%d):\n%s", seen, plan, view)
 	}
 }
 
@@ -636,5 +638,28 @@ func TestModel_View_PathTailIsWholeOrAbsent(t *testing.T) {
 		if w := lipgloss.Width(line); w > 60 {
 			t.Errorf("line wider than the frame (%d): %q", w, line)
 		}
+	}
+}
+
+func TestModel_View_LastSeenAboveTunnelsSection(t *testing.T) {
+	t.Parallel()
+	// SASASH.4.26 decision (1): the last-connected/last-switch line is host
+	// history, not a tunnel — it renders under the paths, ABOVE the tunnels
+	// section, never inside it.
+	clock := &fakeClock{t: t0}
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	m, store := statsModelOurs(t, r, fakedial.New(), clock, true)
+	if err := store.RecordHandoff("ubuntu"); err != nil {
+		t.Fatalf("RecordHandoff: %v", err)
+	}
+	m = feed(t, m, m.Init())
+	_, tick := m.Update(ui.RefreshTick())
+	m = feed(t, m, tick)
+	view := m.View()
+	// The panes join horizontally, so anchor on the first tunnel row: the
+	// last-seen line must render above it, i.e. outside the tunnels section.
+	seen, row := strings.Index(view, "last connected"), strings.Index(view, "web 3000:localhost:3000")
+	if seen < 0 || row < 0 || seen > row {
+		t.Errorf("last-seen (%d) must render above the tunnel rows (%d):\n%s", seen, row, view)
 	}
 }

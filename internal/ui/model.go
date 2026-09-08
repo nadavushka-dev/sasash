@@ -236,14 +236,15 @@ type Model struct {
 	// tstatus is the last Status per alias; fwdIdx is the highlighted
 	// forward row while the tunnels pane holds focus, -1 otherwise (then
 	// the preview is enter's ssh).
-	focus     paneFocus
-	focusHost string // the alias the tunnels focus was taken on
-	tunnels   Tunneler
-	tstatus   map[string]tunnelState
-	tinflight map[string]bool // a Status poll is running for the alias
-	fwdIdx    int
-	fwdHost   string // the host the forward prompt is bound to
-	fwdSpec   string // the persist path's pending spec between the + prompts
+	focus       paneFocus
+	focusHost   string // the alias the tunnels focus was taken on
+	tunnels     Tunneler
+	showPreview bool // the `$` toggle: the command-preview footer line (off by default, SASASH.4.26)
+	tstatus     map[string]tunnelState
+	tinflight   map[string]bool // a Status poll is running for the alias
+	fwdIdx      int
+	fwdHost     string // the host the forward prompt is bound to
+	fwdSpec     string // the persist path's pending spec between the + prompts
 
 	actions []string // actions.toml entry names, listed in the full help
 
@@ -1366,6 +1367,20 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m.openDeclareFwd(m.tunnelHost(host))
+			case key.Matches(msg, m.keys.ShowAmbient):
+				m.fold.showAmbient = !m.fold.showAmbient
+				m.notice = "other ssh_config entries hidden"
+				if m.fold.showAmbient {
+					m.notice = "other ssh_config entries shown"
+				}
+				return m, m.setRows(m.listRows())
+			case key.Matches(msg, m.keys.ShowPreview):
+				m.showPreview = !m.showPreview
+				m.notice = "command line hidden — c copies it, prompts and popups still show commands"
+				if m.showPreview {
+					m.notice = "command line shown"
+				}
+				return m, nil
 			case key.Matches(msg, m.keys.DeleteFwd):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {
@@ -1590,7 +1605,10 @@ func (m Model) View() string {
 	// On a very short terminal the panes can outgrow their slot.
 	body = clampHeight(body, m.contentHeight())
 
-	preview := m.previewView()
+	preview := ""
+	if m.showPreview {
+		preview = m.previewView()
+	}
 	if m.settings.pane != settingsOff {
 		preview = "" // the panel's own footer says what enter does
 	}
@@ -1764,6 +1782,12 @@ func (m Model) detailView() string {
 				b.WriteString(m.styles.PathExtra.Render(tail))
 			}
 		}
+	}
+	// Host history (last connected / last switch) is host-level, not a
+	// tunnel — a subtle line under the paths, never inside the tunnels
+	// section (SASASH.4.26). It reads the machine's poll (the parent's).
+	if ts, ok := m.tstatus[m.tunnelHost(host).Alias]; ok && ts.err == nil {
+		b.WriteString(m.lastSeenLine(ts.status, m.clock.Now()))
 	}
 	if m.tunnels != nil {
 		b.WriteString(m.tunnelsView(host))

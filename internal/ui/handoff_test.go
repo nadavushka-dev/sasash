@@ -103,7 +103,7 @@ func probedModel(t *testing.T, runner *fakerun.Fake) ui.Model {
 		Up("192.0.2.30:22", 5*time.Millisecond)
 	m := ui.New(hosts, probe.Prober{Dialer: dialer, Timeout: 50 * time.Millisecond}, runner, ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	return update(t, m, m.Init()())
+	return ui.WithPreviewShown(update(t, m, m.Init()()))
 }
 
 func TestModel_Update_CopyFloorSanitizesValue(t *testing.T) {

@@ -35,7 +35,7 @@ func tierModel(t *testing.T, hosts []hostmodel.Host) ui.Model {
 	t.Helper()
 	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{ConfPath: confPath, Editor: []string{"vi"}})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	return update(t, m, m.Init()())
+	return ui.WithPreviewShown(ui.WithAmbientShown(update(t, m, m.Init()())))
 }
 
 func TestModel_IsManaged_Facts(t *testing.T) {
@@ -267,7 +267,7 @@ func TestModel_Update_CrossingTheDividerFetchesStatus(t *testing.T) {
 	}
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: time.Millisecond}, r, ui.Config{ConfPath: confPath, Tunnels: tunnelEngine(t, r, d)})
 	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
-	m = feed(t, m, m.Init())
+	m = ui.WithAmbientShown(feed(t, m, m.Init()))
 	before := len(r.CallKeys())
 	next, cmd := m.Update(keyMsg("j"))
 	m = next.(ui.Model)
@@ -324,5 +324,26 @@ func TestModel_Update_ReloadClampOntoDividerPolls(t *testing.T) {
 	}
 	if got := r.CallKeys()[before:]; !reflect.DeepEqual(got, []string{"ssh -O check " + h.Alias}) {
 		t.Errorf("calls after the reload = %v, want the landed host's poll (%s)", got, h.Alias)
+	}
+}
+
+func TestModel_Update_AmbientHiddenByDefaultUntilToggled(t *testing.T) {
+	t.Parallel()
+	// SASASH.4.26 decision (2): the ambient (other ssh_config entries) tier
+	// hides by default when managed hosts exist; `.` reveals it and toggles
+	// it back. A raw model (no WithAmbientShown) proves the default.
+	m := ui.New(tierHosts(), probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{ConfPath: confPath})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = update(t, m, m.Init()())
+	if view := m.View(); strings.Contains(view, "office") {
+		t.Errorf("ambient hosts hide by default while managed hosts exist:\n%s", view)
+	}
+	m = press(t, m, ".")
+	if view := m.View(); !strings.Contains(view, "office") {
+		t.Errorf(". should reveal the ambient tier:\n%s", view)
+	}
+	m = press(t, m, ".")
+	if view := m.View(); strings.Contains(view, "office") {
+		t.Errorf(". again should hide the ambient tier:\n%s", view)
 	}
 }

@@ -60,7 +60,7 @@ func tunnelModelSpawn(t *testing.T, r *fakerun.Fake, sp *fakespawn.Fake, d *fake
 	t.Helper()
 	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: stateDir, Timeout: 50 * time.Millisecond}
 	m := ui.New(tunnelHosts(), probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
-	return update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	return ui.WithPreviewShown(update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30}))
 }
 
 // writeState pre-writes the engine's cache for ubuntu as a previous

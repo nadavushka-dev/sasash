@@ -31,6 +31,8 @@ type KeyMap struct {
 	EditFwd     key.Binding
 	DeclareFwd  key.Binding
 	DeleteFwd   key.Binding
+	ShowAmbient key.Binding
+	ShowPreview key.Binding
 	Restart     key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
@@ -69,6 +71,8 @@ func DefaultKeyMap() KeyMap {
 		EditFwd:     key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit forward")),
 		DeclareFwd:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new forward set (declare)")),
 		DeleteFwd:   key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete forward set")),
+		ShowAmbient: key.NewBinding(key.WithKeys("."), key.WithHelp(".", "show other ssh_config entries")),
+		ShowPreview: key.NewBinding(key.WithKeys("$"), key.WithHelp("$", "command line")),
 		Restart:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart master")),
 		Filter:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		ClearFilter: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear filter / back")),

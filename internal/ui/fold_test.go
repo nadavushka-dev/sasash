@@ -36,7 +36,7 @@ func foldModel(t *testing.T) ui.Model {
 	t.Helper()
 	m := ui.New(foldHosts(), probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{})
 	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
-	return feed(t, m, m.Init())
+	return ui.WithPreviewShown(feed(t, m, m.Init()))
 }
 
 func TestModel_View_VariantsFoldByDefault(t *testing.T) {

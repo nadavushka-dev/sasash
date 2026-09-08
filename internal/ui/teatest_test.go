@@ -95,6 +95,7 @@ func TestModel_Program_KeyRoutingToList(t *testing.T) {
 	t.Parallel()
 	tm := newProgram(t)
 	waitFor(t, tm, "alpha")
+	tm.Type("$") // reveal the command-preview line (off by default, SASASH.4.26)
 	tm.Type("j")
 	waitFor(t, tm, "ssh bravo") // preview follows the selection
 	tm.Type("k")
@@ -130,6 +131,7 @@ func TestModel_Program_FilterByTagThenConnectPreview(t *testing.T) {
 	t.Parallel()
 	tm := newProgram(t)
 	waitFor(t, tm, "alpha")
+	tm.Type("$") // reveal the command-preview line (off by default, SASASH.4.26)
 	// Move off alpha first: bubbletea repaints diffs, so the preview
 	// asserting the tag match must actually CHANGE to be re-emitted.
 	tm.Type("j")

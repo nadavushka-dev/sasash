@@ -291,6 +291,21 @@ func TunnelsFocused(m Model) bool { return m.focus == focusTunnels }
 func SettingsOpen(m Model) bool { return m.settings.pane != settingsOff }
 
 // WithRemoveForwardSet swaps the set-delete hook so tests can observe it.
+// WithPreviewShown reveals the command-preview footer (the `$` toggle) so a
+// test can assert its content; it is off by default (SASASH.4.26).
+func WithPreviewShown(m Model) Model {
+	m.showPreview = true
+	return m
+}
+
+// WithAmbientShown reveals the other-ssh_config-entries tier (the `.` toggle)
+// so a test can select an ambient host; hidden by default (SASASH.4.26).
+func WithAmbientShown(m Model) Model {
+	m.fold.showAmbient = true
+	m.setRows(m.listRows()) // rebuild the list so the ambient tier appears now
+	return m
+}
+
 func WithRemoveForwardSet(m Model, f func(alias, name string) error) Model {
 	m.removeForwardSet = f
 	return m

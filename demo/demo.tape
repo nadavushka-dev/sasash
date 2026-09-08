@@ -26,7 +26,16 @@ Sleep 1.5s
 Show
 
 Sleep 1s
+# SASASH.4.26 — the clean default: ambient "other ssh_config entries" and the
+# command-preview footer are both hidden. This is the first thing seen.
 Screenshot demo/out/frame-a.png
+# `.` reveals the ambient tier (web/db under the divider); `$` reveals the
+# command-preview footer. The rest of the demo runs with both on.
+Type "."
+Sleep 800ms
+Type "$"
+Sleep 800ms
+Screenshot demo/out/frame-toggles.png
 Type "j"
 Sleep 1s
 Screenshot demo/out/frame-b.png
