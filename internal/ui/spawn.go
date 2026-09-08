@@ -40,9 +40,17 @@ const DefaultSpawnTarget = "tab"
 // SpawnConfig is the cmd layer's wiring for enter (SASASH.4.10).
 type SpawnConfig struct {
 	// Mux is what DetectMux found; HerdrPane is HERDR_PANE_ID, the pane a
-	// herdr split is made from ("" splits the current pane).
+	// herdr split is made from ("" splits the current pane). HerdrEnv is
+	// HERDR_ENV being set at all: herdr's own nesting guard reads it, and
+	// a tmux started inside a herdr pane inherits it, so H under that tmux
+	// must not run herdr --remote either (SASASH.4.22).
 	Mux       Mux
 	HerdrPane string
+	HerdrEnv  bool
+	// Emulator is the outer terminal emulator DetectEmulator found: where
+	// H opens its tab (SASASH.4.22), since a tab of the emulator is a
+	// fresh top-level process outside herdr.
+	Emulator Emulator
 	// WindowTemplate is the OS-window command outside any multiplexer,
 	// with actions.toml placeholders ({host} is the alias); "" means
 	// nothing to spawn into, so enter hands off with a notice.
@@ -85,6 +93,8 @@ func SpawnTargetIndex(name string) (int, bool) {
 type spawnState struct {
 	mux        Mux
 	herdrPane  string
+	herdrEnv   bool
+	emulator   Emulator
 	window     string
 	windowPath string
 	target     string
@@ -98,6 +108,7 @@ type spawnState struct {
 type spawnPlan struct {
 	where string     // "herdr tab", "tmux window", "window" — for the notice
 	steps [][]string // exact argv, in order
+	what  []string   // the command the steps open (ssh, or herdr --remote), for the notice
 	err   error      // a template that cannot expand; steps is nil then
 }
 
@@ -148,9 +159,10 @@ func herdrCreateArgv(target, alias, fromPane string) []string {
 	return []string{"herdr", "tab", "create", "--label", alias, "--no-focus"}
 }
 
-// herdrRunArgv is step two: ssh into the created pane.
-func herdrRunArgv(paneID, alias string) []string {
-	return append([]string{"herdr", "pane", "run", paneID}, sshCommand(alias)...)
+// herdrRunArgv is step two: the command — ssh, or H's — into the
+// created pane.
+func herdrRunArgv(paneID string, command []string) []string {
+	return append([]string{"herdr", "pane", "run", paneID}, command...)
 }
 
 // tmuxArgv is the one-step tmux spawn per target. -d keeps the current
@@ -160,7 +172,7 @@ func herdrRunArgv(paneID, alias string) []string {
 // there, so those become '_' in the NAME only; the ssh argv keeps the
 // real alias. A session is named by its window rather than -s: session
 // names must be unique, and a second shell to the same host is normal.
-func tmuxArgv(target, alias string) []string {
+func tmuxArgv(target, alias string, command []string) []string {
 	var head []string
 	switch target {
 	case "pane":
@@ -170,7 +182,7 @@ func tmuxArgv(target, alias string) []string {
 	default:
 		head = []string{"tmux", "new-window", "-d", "-n", tmuxName(alias)}
 	}
-	return append(head, sshCommand(alias)...)
+	return append(head, command...)
 }
 
 // tmuxName is an alias as a tmux window name.
@@ -204,12 +216,12 @@ func (s spawnState) planFor(alias string) *spawnPlan {
 	}
 	switch s.mux {
 	case MuxHerdr:
-		return &spawnPlan{where: s.where(target), steps: [][]string{
+		return &spawnPlan{where: s.where(target), what: sshCommand(alias), steps: [][]string{
 			herdrCreateArgv(target, alias, s.herdrPane),
-			herdrRunArgv(panePlaceholder, alias),
+			herdrRunArgv(panePlaceholder, sshCommand(alias)),
 		}}
 	case MuxTmux:
-		return &spawnPlan{where: s.where(target), steps: [][]string{tmuxArgv(target, alias)}}
+		return &spawnPlan{where: s.where(target), what: sshCommand(alias), steps: [][]string{tmuxArgv(target, alias, sshCommand(alias))}}
 	}
 	if s.window == "" {
 		return nil
@@ -218,7 +230,165 @@ func (s spawnState) planFor(alias string) *spawnPlan {
 	if err != nil {
 		return &spawnPlan{where: "window", err: err}
 	}
-	return &spawnPlan{where: "window", steps: [][]string{argv}}
+	return &spawnPlan{where: "window", what: sshCommand(alias), steps: [][]string{argv}}
+}
+
+// Emulator is the outer terminal emulator sasash runs inside — the
+// window around herdr or tmux — as detected from the environment.
+type Emulator int
+
+const (
+	EmuNone     Emulator = iota // none sasash can drive: H shows the command instead
+	EmuWezTerm                  // WEZTERM_PANE set, or TERM_PROGRAM=WezTerm
+	EmuKitty                    // KITTY_WINDOW_ID set
+	EmuITerm                    // TERM_PROGRAM=iTerm.app
+	EmuTerminal                 // TERM_PROGRAM=Apple_Terminal
+)
+
+// DetectEmulator reads the outer terminal emulator off the environment.
+// The emulators' own variables come first: tmux resets TERM_PROGRAM to
+// "tmux", but WEZTERM_PANE / KITTY_WINDOW_ID survive it and herdr alike
+// (both pass the environment down).
+func DetectEmulator(getenv func(string) string) Emulator {
+	switch {
+	case getenv("WEZTERM_PANE") != "":
+		return EmuWezTerm
+	case getenv("KITTY_WINDOW_ID") != "":
+		return EmuKitty
+	}
+	switch getenv("TERM_PROGRAM") {
+	case "WezTerm":
+		return EmuWezTerm
+	case "iTerm.app":
+		return EmuITerm
+	case "Apple_Terminal":
+		return EmuTerminal
+	}
+	return EmuNone
+}
+
+// where names what an emulator opens for H, as the notice and footer
+// say it: a tab everywhere but Terminal.app, whose scripting can open a
+// window but not a tab.
+func (e Emulator) where() string {
+	switch e {
+	case EmuWezTerm:
+		return "wezterm tab"
+	case EmuKitty:
+		return "kitty tab"
+	case EmuITerm:
+		return "iTerm2 tab"
+	case EmuTerminal:
+		return "Terminal window"
+	}
+	return ""
+}
+
+// herdrPaneEnv is what herdr sets in every pane it runs. wezterm's CLI
+// forwards its own environment into the pane it spawns, so left in place
+// these would follow H's command into the new tab and make herdr's
+// nesting guard fire on a process that is not nested at all; the
+// scrubbed tab is what cmd-t gives. HERDR_ENV is the guard's variable.
+var herdrPaneEnv = []string{"HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_SOCKET_PATH"}
+
+// weztermStaleEnv are wezterm's own per-pane variables, also dropped:
+// herdr snapshots its environment for life, so under a GUI restarted
+// since they name a socket and a pane that are gone. Without them the
+// CLI finds the running GUI through its default socket link and spawns
+// into the active window. TMUX and TMUX_PANE go the same way: a tmux
+// started inside herdr lands here too, and a cmd-t tab has neither.
+var weztermStaleEnv = []string{"WEZTERM_UNIX_SOCKET", "WEZTERM_PANE", "TMUX", "TMUX_PANE"}
+
+// emulatorTabArgv is H's one-step spawn: the command in a new tab of the
+// outer emulator, exact per emulator. wezterm and kitty take argv
+// directly; the two AppleScript-driven apps get one shell line, passed
+// as a script argument (never spliced into the script) and shell-quoted
+// per word, since the new tab's shell will parse it. --no-auto-start
+// keeps wezterm's CLI from daemonizing a mux server when no GUI answers.
+// kitty needs allow_remote_control; a refusal comes back as the failure
+// popup, which names this argv.
+func emulatorTabArgv(emu Emulator, alias string, command []string) []string {
+	switch emu {
+	case EmuWezTerm:
+		argv := []string{"env"}
+		for _, v := range herdrPaneEnv {
+			argv = append(argv, "-u", v)
+		}
+		for _, v := range weztermStaleEnv {
+			argv = append(argv, "-u", v)
+		}
+		argv = append(argv, "wezterm", "cli", "--no-auto-start", "spawn", "--")
+		return append(argv, command...)
+	case EmuKitty:
+		return append([]string{"kitten", "@", "launch", "--type=tab", "--tab-title", alias}, command...)
+	case EmuITerm:
+		// iTerm2's own scripting example: the created tab becomes current.
+		return []string{"osascript",
+			"-e", "on run argv",
+			"-e", `tell application "iTerm2"`,
+			"-e", "tell current window",
+			"-e", "create tab with default profile",
+			"-e", "tell current session to write text (item 1 of argv)",
+			"-e", "end tell",
+			"-e", "end tell",
+			"-e", "end run",
+			shellJoin(command)}
+	case EmuTerminal:
+		return []string{"osascript",
+			"-e", "on run argv",
+			"-e", `tell application "Terminal" to do script (item 1 of argv)`,
+			"-e", "end run",
+			shellJoin(command)}
+	}
+	return nil
+}
+
+// shellJoin renders argv as one POSIX shell line: words made only of
+// safe characters stay bare, anything else is single-quoted.
+func shellJoin(argv []string) string {
+	words := make([]string, len(argv))
+	for i, a := range argv {
+		if a != "" && !strings.ContainsFunc(a, func(r rune) bool { return !shellSafe(r) }) {
+			words[i] = a
+			continue
+		}
+		words[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	return strings.Join(words, " ")
+}
+
+func shellSafe(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_@%+=:,./-", r)
+}
+
+// herdrPlanFor builds H's plan (SASASH.4.22): `herdr --remote <alias>`
+// beside the TUI, the TUI staying up — the spawn road, never a handoff.
+// The HERDR_ENV gate comes FIRST (part B): set in this process's
+// environment, herdr is somewhere above us — the pane itself, or a tmux
+// started from one (a tmux server snapshots its env for life) — and
+// neither a herdr tab nor a tmux window will do, since both inherit the
+// variable herdr's nesting guard reads. So the command goes up and out,
+// into a new tab of the OUTER terminal emulator: a fresh top-level
+// process, not a child of herdr, where herdr --remote starts clean. Only
+// a tmux with no herdr above gets a tmux window. Without any multiplexer,
+// the emulator tab again. nil when no emulator sasash can drive is
+// around; the caller then shows the command for the user to run — never
+// plain ssh, never a herdr tab, never a handoff.
+func (s spawnState) herdrPlanFor(alias string) *spawnPlan {
+	command := herdrCommand(alias)
+	if s.mux == MuxTmux && !s.herdrEnv {
+		target := s.target
+		if _, ok := SpawnTargetIndex(target); !ok {
+			target = DefaultSpawnTarget
+		}
+		return &spawnPlan{where: s.where(target), what: command, steps: [][]string{tmuxArgv(target, alias, command)}}
+	}
+	argv := emulatorTabArgv(s.emulator, alias, command)
+	if len(argv) == 0 {
+		// EmuNone, or a value the argv switch does not know: one list.
+		return nil
+	}
+	return &spawnPlan{where: s.emulator.where(), what: command, steps: [][]string{argv}}
 }
 
 // preview is the plan as the bottom line shows it: the steps joined the
@@ -246,6 +416,7 @@ const spawnTimeout = 10 * time.Second
 type spawnDoneMsg struct {
 	alias string
 	where string
+	what  string   // the command that was opened, for the notice
 	argv  []string // the step that failed, for the popup
 	err   error
 }
@@ -277,7 +448,7 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s: %w", argv[0], err)}
 			}
 			if !res.OK() {
-				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s failed: %s", strings.Join(argv[:min(3, len(argv))], " "), failureText(res))}
+				return spawnDoneMsg{alias: alias, where: p.where, argv: argv, err: fmt.Errorf("%s failed: %s", argvHead(argv), failureText(res))}
 			}
 			if needsPane && paneID == "" {
 				id, err := herdrPaneID(res.Stdout)
@@ -287,8 +458,23 @@ func spawnCmd(r run.Runner, alias string, p *spawnPlan) tea.Cmd {
 				paneID = id
 			}
 		}
-		return spawnDoneMsg{alias: alias, where: p.where}
+		return spawnDoneMsg{alias: alias, where: p.where, what: strings.Join(p.what, " ")}
 	}
+}
+
+// argvHead names the tool a failed step ran, for the one-line notice:
+// the first three words, past a leading `env -u NAME ...` prefix, which
+// is the scrub and not the tool.
+func argvHead(argv []string) string {
+	i := 0
+	if len(argv) > 0 && argv[0] == "env" {
+		i = 1
+		for i+1 < len(argv) && argv[i] == "-u" {
+			i += 2
+		}
+	}
+	rest := argv[i:]
+	return strings.Join(rest[:min(3, len(rest))], " ")
 }
 
 // failureText is a failed step's reason for the notice: herdr's reply

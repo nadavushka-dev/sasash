@@ -130,20 +130,17 @@ func (m Model) handoff(alias string) (tea.Model, tea.Cmd) {
 	})
 }
 
-// herdrCommand is the argv `H` hands the terminal to (SPEC §5/§6): herdr
-// reads ssh_config itself, so it needs no actions.toml template.
+// hNoTabTitle heads the popup H shows when no terminal emulator tab can
+// be opened for it.
+const hNoTabTitle = "H: no terminal tab to open here"
+
+// herdrCommand is the argv `H` opens beside the TUI (SPEC §5/§6): herdr
+// reads ssh_config itself, so it needs no actions.toml template. Inside
+// herdr it runs in a tab of the outer emulator, never in herdr's own
+// (see herdrPlanFor).
 func herdrCommand(alias string) []string {
 	return []string{"herdr", "--remote", alias}
 }
-
-// herdrExec is the ONE construction site of the herdr handoff process.
-func herdrExec(alias string) *exec.Cmd {
-	return execCommand(herdrCommand(alias))
-}
-
-// herdrExitMsg arrives when the terminal comes back from herdr. err
-// reports only a failure to start; herdr's own exit code is not news.
-type herdrExitMsg struct{ err error }
 
 // editorArgv is the exact invocation `e` hands the terminal to.
 func editorArgv(editor []string, confPath string) []string {
@@ -537,6 +534,8 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		spawn: spawnState{
 			mux:        cfg.Spawn.Mux,
 			herdrPane:  cfg.Spawn.HerdrPane,
+			herdrEnv:   cfg.Spawn.HerdrEnv,
+			emulator:   cfg.Spawn.Emulator,
 			window:     cfg.Spawn.WindowTemplate,
 			windowPath: cfg.Spawn.WindowPath,
 			target:     cfg.Spawn.Target,
@@ -800,14 +799,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case herdrExitMsg:
-		var exitErr *exec.ExitError
-		started := msg.err == nil || errors.As(msg.err, &exitErr)
-		if !started {
-			m.notice = "herdr: " + msg.err.Error()
-		}
-		return m.handoffReturned(started)
-
 	case spawnDoneMsg:
 		if msg.err != nil {
 			m.notice = cleanLine(msg.err.Error())
@@ -825,7 +816,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.show("spawn failed for "+msg.alias, lines...)
 			return m, nil
 		}
-		m.notice = "spawned ssh " + msg.alias + " → " + msg.where
+		m.notice = "spawned " + msg.what + " → " + msg.where
 		// A spawn is a connection: it counts as the last one made.
 		m, stamp := m.stampHandoff(msg.alias)
 		return m, stamp
@@ -1180,14 +1171,28 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.focusPathsOn(host), nil
 			case key.Matches(msg, m.keys.Herdr):
+				// H spawns beside the TUI like enter (4.22), never a
+				// handoff: herdr's remote session in a new tab/pane/window,
+				// or — inside herdr, where --remote would nest — the same
+				// tab with plain ssh.
 				host, ok := m.Selected()
 				if !ok {
 					return m, nil
 				}
-				m.handoffHost = host.Alias
-				return m, tea.ExecProcess(herdrExec(host.Alias), func(err error) tea.Msg {
-					return herdrExitMsg{err: err}
-				})
+				plan := m.spawn.herdrPlanFor(host.Alias)
+				if plan == nil {
+					// No emulator to drive: the command is the user's to
+					// run, in a tab outside herdr — never a nesting or
+					// handoff fallback.
+					return m.show(hNoTabTitle,
+						"H runs herdr --remote in a new tab of the outer terminal emulator,",
+						"a fresh process outside herdr, so it never nests. None sasash can",
+						"drive is around (wezterm, kitty, iTerm2, Terminal.app).",
+						"",
+						"run it yourself, in a new tab outside herdr:",
+						"  "+strings.Join(herdrCommand(host.Alias), " ")), nil
+				}
+				return m, spawnCmd(m.runner, host.Alias, plan)
 			case key.Matches(msg, m.keys.CopyAddr):
 				host, ok := m.Selected()
 				if !ok {
@@ -1725,7 +1730,14 @@ func (m Model) previewView() string {
 					v += seg
 				}
 			}
-			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(strings.Join(herdrCommand(host.Alias), " "))
+			// H's command (4.22) and where it opens: the outer emulator's
+			// tab inside herdr, a tmux window otherwise; the wrapper argv
+			// is the failure popup's, not the footer's.
+			hseg := "no terminal tab to open here (shows the command)"
+			if plan := m.spawn.herdrPlanFor(host.Alias); plan != nil {
+				hseg = strings.Join(plan.what, " ") + " (" + plan.where + ")"
+			}
+			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(hseg)
 			if lipgloss.Width(v+seg) <= m.width {
 				v += seg
 			}

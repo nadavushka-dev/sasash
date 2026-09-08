@@ -1,9 +1,7 @@
 package ui_test
 
 import (
-	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -24,18 +22,18 @@ func TestHerdrCommand_ExactStrings(t *testing.T) {
 	if got, want := ui.HerdrCommand("web"), []string{"herdr", "--remote", "web"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("HerdrCommand(web) = %v, want %v", got, want)
 	}
-	if got, want := ui.HerdrExec("web").Args, []string{"herdr", "--remote", "web"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("HerdrExec(web).Args = %v, want %v", got, want)
-	}
 }
 
-func TestModel_Update_HerdrHandoff(t *testing.T) {
+func TestModel_Update_HerdrKeyGuards(t *testing.T) {
 	t.Parallel()
+	// No emulator sasash can drive: H shows the command to run yourself
+	// — it never hands off, never runs anything (4.22).
 	m := probedModel(t, fakerun.New())
-	if _, cmd := m.Update(keyMsg("H")); cmd == nil {
-		t.Errorf("Update(H) cmd = nil, want the herdr handoff")
+	next, cmd := m.Update(keyMsg("H"))
+	if view := next.(ui.Model).View(); cmd != nil || !ui.PopupOpen(next.(ui.Model)) || !strings.Contains(view, "H: no terminal tab to open here") || !strings.Contains(view, "herdr --remote web") {
+		t.Errorf("Update(H) without an emulator: cmd %v, view:\n%s", cmd != nil, view)
 	}
-	// No host, no handoff.
+	// No host, nothing.
 	empty := sized(t, nil)
 	if _, cmd := empty.Update(keyMsg("H")); cmd != nil {
 		t.Errorf("Update(H) with no hosts cmd = %v, want nil", cmd)
@@ -47,49 +45,19 @@ func TestModel_Update_HerdrHandoff(t *testing.T) {
 	}
 }
 
-func TestModel_Update_HerdrExitVariants(t *testing.T) {
-	t.Parallel()
-	exitErr := exec.Command("false").Run()
-	if exitErr == nil {
-		t.Fatalf("exec false: expected non-nil exit error for fixture")
-	}
-	tests := []struct {
-		name       string
-		err        error
-		wantNotice bool
-	}{
-		{name: "clean exit re-probes quietly", err: nil},
-		{name: "herdr's own exit code is not news", err: exitErr},
-		{name: "start failure is reported", err: errors.New(`exec: "herdr": executable file not found in $PATH`), wantNotice: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			m := probedModel(t, fakerun.New())
-			next, cmd := m.Update(ui.HerdrExit(tt.err))
-			m = next.(ui.Model)
-			if cmd == nil {
-				t.Errorf("Update(herdrExit) cmd = nil, want a re-probe")
-			}
-			if got := strings.Contains(m.View(), "herdr: "); got != tt.wantNotice {
-				t.Errorf("View() shows a herdr notice = %v, want %v:\n%s", got, tt.wantNotice, m.View())
-			}
-		})
-	}
-}
-
 func TestModel_View_HerdrPreview(t *testing.T) {
 	t.Parallel()
 	// The host row's line names both handoffs; a highlighted forward row
 	// previews space alone.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	m := polled(t, r, fakedial.New())
-	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H herdr --remote ubuntu") {
-		t.Errorf("View() missing the herdr preview beside enter's:\n%s", view)
+	// Without an emulator the H segment says H will show the command.
+	if view := m.View(); !strings.Contains(view, "$ ssh ubuntu") || !strings.Contains(view, "H no terminal tab to open here (shows the command)") {
+		t.Errorf("View() missing the H segment beside enter's:\n%s", view)
 	}
 	m = press(t, m, "l")
-	if view := m.View(); strings.Contains(view, "herdr --remote") {
-		t.Errorf("View() with a forward highlighted still previews herdr:\n%s", view)
+	if view := m.View(); strings.Contains(view, "H no terminal tab") {
+		t.Errorf("View() with a forward highlighted still previews H:\n%s", view)
 	}
 }
 
@@ -98,10 +66,10 @@ func TestModel_View_HerdrPreviewFitsOrGoes(t *testing.T) {
 	// A long alias at a narrow width: the H segment must vanish whole,
 	// never render as a clipped command.
 	hosts := []hostmodel.Host{{Alias: "build-eu-west-bastion-01", Paths: []probe.Path{{Host: "192.0.2.10"}}}}
-	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{})
-	wide := update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24}).View()
-	if !strings.Contains(wide, "H herdr --remote build-eu-west-bastion-01") {
-		t.Errorf("View() at 100 cols missing the whole H segment:\n%s", wide)
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{Spawn: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "tab"}})
+	wide := update(t, m, tea.WindowSizeMsg{Width: 180, Height: 24}).View()
+	if !strings.Contains(wide, "H herdr --remote build-eu-west-bastion-01 (tmux window)") {
+		t.Errorf("View() at 180 cols missing the whole H segment:\n%s", wide)
 	}
 	narrow := update(t, m, tea.WindowSizeMsg{Width: 60, Height: 24}).View()
 	preview := ""
@@ -113,7 +81,7 @@ func TestModel_View_HerdrPreviewFitsOrGoes(t *testing.T) {
 	if strings.Contains(preview, "herd") {
 		t.Errorf("preview at 60 cols shows a clipped H segment: %q", preview)
 	}
-	if !strings.Contains(preview, "$ ssh build-eu-west-bastion-01") {
+	if !strings.Contains(preview, "build-eu-west-bastion-01") {
 		t.Errorf("preview at 60 cols lost the enter command: %q", preview)
 	}
 }
