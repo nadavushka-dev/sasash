@@ -65,10 +65,6 @@ Sleep 800ms
 Screenshot demo/out/frame-tunnels.png
 Escape
 Sleep 300ms
-Type "H"
-Sleep 800ms
-Screenshot demo/out/frame-h.png
-Sleep 300ms
 Type "?"
 Sleep 1.5s
 Screenshot demo/out/frame-keys.png
