@@ -36,7 +36,7 @@ func (m Model) openEditFwd(host hostmodel.Host, row tunnel.Forward) (tea.Model, 
 	ts, known := m.tstatus[host.Alias]
 	live := known && ts.err == nil && row.State == tunnel.Up && row.Pid > 0
 	if row.Set == "" && !live {
-		m.notice = "ad-hoc forward is not live — x it and + a new one"
+		m.notice = "session-only forward is not live — x it and + a new one"
 		return m, nil
 	}
 	if row.Set != "" && m.saveForwardEdit == nil && !live {

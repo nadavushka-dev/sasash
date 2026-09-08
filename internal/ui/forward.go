@@ -127,7 +127,16 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 		m.notice = "host " + m.fwdHost + " is gone — nothing added"
 		return m, nil
 	}
-	return m, m.forwardCheckCmd(host.Alias, spec, port, ephemeral)
+	// The persist default needs a sasash.conf block to declare into; an
+	// unmanaged host has none, so + there is session-only, with a hint to
+	// save the host first to persist (SASASH.4.21 — never fail after two
+	// prompts).
+	note := "unsaved, X forgets it"
+	if !ephemeral && !m.managed(host) {
+		ephemeral = true
+		note = host.Alias + " not managed — save it (o) to persist"
+	}
+	return m, m.forwardCheckCmd(host.Alias, spec, port, ephemeral, note)
 }
 
 // forwardCheckCmd dials 127.0.0.1:<port> through the probe seam first (SPEC
@@ -136,7 +145,7 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 // (persist by default, SASASH.4.21) or, with the ! opt-in, straight to a
 // session-only connect. The engine's own refusal still catches a port taken
 // between the check and the spawn.
-func (m Model) forwardCheckCmd(alias, spec, port string, ephemeral bool) tea.Cmd {
+func (m Model) forwardCheckCmd(alias, spec, port string, ephemeral bool, sessionNote string) tea.Cmd {
 	eng, prober := m.tunnels, m.prober
 	m.tinflight[alias] = true // the add writes the caches: no poll meanwhile
 	return func() tea.Msg {
@@ -150,7 +159,7 @@ func (m Model) forwardCheckCmd(alias, spec, port string, ephemeral bool) tea.Cmd
 			// recorded so x/X can still end it, but NOT in sasash.conf.
 			actx, acancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 			defer acancel()
-			done := "session-only tunnel up: " + spec + " on " + alias + " — unsaved, X forgets it"
+			done := "session-only tunnel up: " + spec + " on " + alias + " — " + sessionNote
 			return tunnelDoneMsg{host: alias, label: "add", done: done, err: eng.SpawnSet(actx, alias, "", []string{spec})}
 		}
 		// Persist by default: on to the set-name prompt, then declare + connect.

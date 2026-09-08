@@ -124,14 +124,14 @@ func (m Model) confirmDeleteSet(host hostmodel.Host, name string) Model {
 // state only.
 func (m Model) confirmForgetAdhoc(host hostmodel.Host, row tunnel.Forward) Model {
 	alias, spec := host.Alias, row.Spec
-	lines := []string{"forget this ad-hoc forward:", "  " + spec}
+	lines := []string{"forget this session-only forward:", "  " + spec}
 	verb := "forgot"
 	if row.Pid > 0 {
 		lines = append(lines, "it is live — its process is killed first, and its connections drop.")
 		verb = "killed and forgot"
 	}
-	lines = append(lines, "nothing in sasash.conf changes — an ad-hoc is state only.")
-	return m.ask("forget ad-hoc on "+alias, lines, verb, spec+" kept",
+	lines = append(lines, "nothing in sasash.conf changes — a session-only forward is state only.")
+	return m.ask("forget unsaved on "+alias, lines, verb, spec+" kept",
 		func(m Model) (Model, tea.Cmd) { return m, m.forgetAdhocCmd(alias, spec) })
 }
 

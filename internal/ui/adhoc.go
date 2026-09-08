@@ -447,7 +447,7 @@ func (m Model) engineTunnel(alias string, specs []string) (Model, tea.Cmd) {
 	if len(specs) == 1 {
 		if port, _ := localPort(specs[0]); port != "" {
 			m.notice = "starting " + strings.Join(m.engineTunnelPreview(alias, specs), " ; ") + " …"
-			return m, m.forwardCheckCmd(alias, specs[0], port, true)
+			return m, m.forwardCheckCmd(alias, specs[0], port, true, "unsaved, X forgets it")
 		}
 	}
 	eng := m.tunnels

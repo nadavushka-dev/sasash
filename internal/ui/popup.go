@@ -477,7 +477,7 @@ func (m Model) corruptCaches(msg tunnelStatusMsg) Model {
 	}
 	var lines []string
 	if st.CorruptState {
-		lines = append(lines, "tunnel state cache unreadable — treated as empty: remembered ad-hoc forwards are forgotten until re-added", "file: "+msg.host+".json under "+where)
+		lines = append(lines, "tunnel state cache unreadable — treated as empty: remembered session-only forwards are forgotten until re-added", "file: "+msg.host+".json under "+where)
 	}
 	if st.CorruptStats {
 		lines = append(lines, "stats cache unreadable — up/down times start fresh from now", "file: "+msg.host+".stats.json under "+where)

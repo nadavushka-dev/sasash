@@ -560,7 +560,12 @@ func TestModel_Update_AddForwardPersistsByDefault(t *testing.T) {
 	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New()
 	sp := fakespawn.New().Dial(d)
-	m := polledSpawn(t, r, sp, d, t.TempDir())
+	// A MANAGED host (HasMeta): + persists into its sasash.conf block.
+	hosts := []hostmodel.Host{{Alias: "ubuntu", HasMeta: true, Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}}}
+	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = feed(t, m, m.Init())
 	var saved [][]string
 	m = ui.WithSaveForwardSet(m, func(alias, name string, specs []string) error {
 		saved = append(saved, append([]string{alias, name}, specs...))
@@ -614,5 +619,35 @@ func TestModel_Update_AddForwardEphemeralWritesNoConfig(t *testing.T) {
 	}
 	if view := m.View(); !strings.Contains(view, "session-only") || !strings.Contains(view, "unsaved") {
 		t.Errorf("the notice should mark it session-only / unsaved:\n%s", view)
+	}
+}
+
+// TestModel_Update_AddForwardUnmanagedIsSessionOnly pins that + on an
+// UNMANAGED host (no sasash.conf block to declare into) is session-only with
+// a save hint — never a two-prompt failure (SASASH.4.21 QA round 1).
+func TestModel_Update_AddForwardUnmanagedIsSessionOnly(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir()) // tunnelHosts' ubuntu is unmanaged
+	m = update(t, m, tea.WindowSizeMsg{Width: 140, Height: 30})
+	saved := false
+	m = ui.WithSaveForwardSet(m, func(string, string, []string) error { saved = true; return nil })
+	m = press(t, m, "+")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6060:localhost:60")}) // no !
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	if ui.Prompting(m) {
+		t.Errorf("+ on an unmanaged host should not open the set-name prompt:\n%s", m.View())
+	}
+	if saved {
+		t.Error("+ on an unmanaged host must not attempt a declaration")
+	}
+	if got := sp.Spawned(); !reflect.DeepEqual(got, []string{spawnArgv("ubuntu", "6060:localhost:60")}) {
+		t.Errorf("unmanaged + should spawn one session-only process, got %v", got)
+	}
+	if view := m.View(); !strings.Contains(view, "not managed") || !strings.Contains(view, "save it") {
+		t.Errorf("the notice should say it is session-only and how to persist:\n%s", view)
 	}
 }
