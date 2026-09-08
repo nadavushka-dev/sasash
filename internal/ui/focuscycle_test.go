@@ -231,19 +231,15 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 			t.Errorf("without a path switcher l should focus the tunnels pane")
 		}
 	})
-	t.Run("v still shows the variant rows, and is not needed to switch", func(t *testing.T) {
+	t.Run("a path switch goes through the pane — no variant list needed", func(t *testing.T) {
 		t.Parallel()
 		m, switched := cycleModel(t)
-		if view := press(t, m, "v").View(); !strings.Contains(view, "pinned variants") {
-			t.Errorf("v should still toggle the variant rows:\n%s", view)
-		}
-		// The switch above went through the pane, with v untouched.
 		m = press(t, m, "l", "j")
 		next, cmd := m.Update(keyMsg("enter"))
 		_ = next
 		cmd()
 		if len(*switched) != 1 {
-			t.Errorf("a path switch should need no v (switched %v)", *switched)
+			t.Errorf("a path switch should go through the pane alone (switched %v)", *switched)
 		}
 	})
 }

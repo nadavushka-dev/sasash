@@ -53,58 +53,15 @@ func TestModel_View_VariantsFoldByDefault(t *testing.T) {
 			t.Errorf("View() folded the non-variant %q:\n%s", kept, view)
 		}
 	}
-	// The parent names them; the tally counts listed hosts only.
-	if !strings.Contains(view, "pinned .office .nat (v shows them)") {
-		t.Errorf("View() missing the parent's pinned line:\n%s", view)
+	// The tally counts listed hosts only; the folded variants are gone
+	// from the pane entirely (no pinned line — SASASH.4.23).
+	if strings.Contains(view, "pinned ") {
+		t.Errorf("View() should not carry a pinned-variants line:\n%s", view)
 	}
 	if !strings.Contains(view, "5 hosts · 0 reachable") {
 		t.Errorf("View() tally should count the 5 listed hosts:\n%s", view)
 	}
 }
-
-func TestModel_Update_VariantsToggle(t *testing.T) {
-	t.Parallel()
-	m := foldModel(t)
-	m = press(t, m, "G") // api.v2, the last listed host
-	if host, _ := m.Selected(); host.Alias != "api.v2" {
-		t.Fatalf("Selected() = %q, want api.v2", host.Alias)
-	}
-	m = press(t, m, "v")
-	view := m.View()
-	for _, shown := range []string{"web.office", "web.nat", "api.v2.office"} {
-		if !strings.Contains(view, shown) {
-			t.Errorf("View() after v missing %q:\n%s", shown, view)
-		}
-	}
-	if !strings.Contains(view, "8 hosts") || !strings.Contains(view, "pinned variants listed") || !strings.Contains(view, "(listed)") {
-		t.Errorf("View() after v: tally/notice/hint:\n%s", view)
-	}
-	// The selection stayed on its alias through the rebuild.
-	if host, _ := m.Selected(); host.Alias != "api.v2" {
-		t.Errorf("Selected() after v = %q, want api.v2 kept", host.Alias)
-	}
-	// A surfaced variant is a real host: ssh to it works.
-	m = press(t, m, "j") // api.v2.office
-	if host, _ := m.Selected(); host.Alias != "api.v2.office" {
-		t.Fatalf("Selected() = %q, want api.v2.office", host.Alias)
-	}
-	if _, cmd := m.Update(keyMsg("enter")); cmd == nil {
-		t.Errorf("enter on a surfaced variant cmd = nil, want the ssh handoff")
-	}
-	if view := m.View(); !strings.Contains(view, "$ ssh api.v2.office") {
-		t.Errorf("View() preview for the variant:\n%s", view)
-	}
-	// Fold again: the cursor cannot stay on a hidden row, so it clamps.
-	m = press(t, m, "v")
-	view = m.View()
-	if strings.Contains(view, "api.v2.office") || !strings.Contains(view, "5 hosts") {
-		t.Errorf("View() after the second v should fold again:\n%s", view)
-	}
-	if _, ok := m.Selected(); !ok {
-		t.Errorf("Selected() ok = false after folding under the cursor")
-	}
-}
-
 func TestModel_Update_FilterSurfacesVariantsExplicitly(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -154,20 +111,10 @@ func TestModel_Update_ReloadRefolds(t *testing.T) {
 	m = ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf")
 	m = reloadAndProbe(t, m, foldHosts()[:3]) // web + its two variants
 	view := m.View()
-	if strings.Contains(view, "  web.office") || !strings.Contains(view, "pinned .office .nat") || !strings.Contains(view, "1 host ·") {
+	if strings.Contains(view, "  web.office") || !strings.Contains(view, "1 host ·") {
 		t.Errorf("View() after the reload should fold the new variants:\n%s", view)
 	}
 }
-
-func TestModel_View_HelpListsVariants(t *testing.T) {
-	t.Parallel()
-	// Tall enough for the whole host-list group (it grew a row in 2.11).
-	m := update(t, sized(t, nil), tea.WindowSizeMsg{Width: 100, Height: 40})
-	if view := press(t, m, "?").View(); !strings.Contains(view, "pinned variants") {
-		t.Errorf("View() full help missing v:\n%s", view)
-	}
-}
-
 func TestComputeVariants_Witnesses(t *testing.T) {
 	t.Parallel()
 	web := hostmodel.Host{Alias: "web", Paths: []probe.Path{{Name: "office", Host: "192.0.2.10"}, {Name: "office.2", Host: "192.0.2.12"}}}
@@ -250,55 +197,6 @@ func TestModel_Update_OneMatchSetPerKeystroke(t *testing.T) {
 	}
 }
 
-func TestModel_Update_VariantsToggleRefreshesStatus(t *testing.T) {
-	t.Parallel()
-	// Folding under the cursor moves the selection to another host: that
-	// host's status is refreshed like any selection change.
-	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu").StubExit(0, "ssh", "-O", "check", "ubuntu.lan")
-	d := fakedial.New()
-	hosts := []hostmodel.Host{
-		{Alias: "ubuntu", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}},
-		{Alias: "ubuntu.lan", Paths: []probe.Path{{Host: "192.0.2.10"}}},
-	}
-	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d)})
-	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
-	m = feed(t, m, m.Init())
-	m = press(t, m, "v")
-	next, sel := m.Update(keyMsg("j")) // ubuntu.lan
-	m = feed(t, next.(ui.Model), sel)
-	if host, _ := m.Selected(); host.Alias != "ubuntu.lan" {
-		t.Fatalf("Selected() = %q, want ubuntu.lan", host.Alias)
-	}
-	next, cmd := m.Update(keyMsg("v")) // folds under the cursor: selection clamps to ubuntu
-	m = next.(ui.Model)
-	if host, _ := m.Selected(); host.Alias != "ubuntu" {
-		t.Fatalf("Selected() after folding = %q, want ubuntu", host.Alias)
-	}
-	if cmd == nil || !strings.Contains(m.View(), "◌ master") {
-		t.Errorf("folding onto ubuntu: cmd %v, view:\n%s", cmd != nil, m.View())
-	}
-}
-
-func TestModel_View_PinnedLineCountsWhenLong(t *testing.T) {
-	t.Parallel()
-	parent := hostmodel.Host{Alias: "dc"}
-	hosts := []hostmodel.Host{parent}
-	for i := 0; i < 12; i++ {
-		name := "datacenter" + string(rune('0'+i%10)) + string(rune('a'+i))
-		hosts[0].Paths = append(hosts[0].Paths, probe.Path{Name: name, Host: "192.0.2.1"})
-		hosts = append(hosts, hostmodel.Host{Alias: "dc." + name, Paths: []probe.Path{{Host: "192.0.2.1"}}})
-	}
-	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{})
-	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 30})
-	if view := m.View(); !strings.Contains(view, "pinned 12 variants (v shows them)") {
-		t.Errorf("View() at 80 cols should count the variants:\n%s", view)
-	}
-	m = update(t, m, tea.WindowSizeMsg{Width: 250, Height: 30})
-	if view := m.View(); !strings.Contains(view, ".datacenter0a") || !strings.Contains(view, "(v shows them)") {
-		t.Errorf("View() at 250 cols should name them:\n%s", view)
-	}
-}
-
 func TestModel_Update_ReloadUnderFilterKeepsTheSelectedAlias(t *testing.T) {
 	t.Parallel()
 	// Under a filter the cursor indexes the match set; a reload that
@@ -323,38 +221,6 @@ func TestModel_Update_ReloadUnderFilterKeepsTheSelectedAlias(t *testing.T) {
 		t.Errorf("Selected() after the reload = %q, want b2 re-selected by alias", host.Alias)
 	}
 }
-
-func TestModel_Update_VariantsToggleUnderAppliedFilter(t *testing.T) {
-	t.Parallel()
-	// v under an applied filter must keep the rows (SetItems' round has
-	// to reach the runtime) and surface the variants the term reaches;
-	// the stashed re-select must not hijack a later filter either.
-	m := ui.StaticCursor(foldModel(t))
-	m = press(t, m, "/", "w", "e", "b", "enter")
-	if view := m.View(); !strings.Contains(view, "› web") || strings.Contains(view, "web.office") {
-		t.Fatalf("View() before v:\n%s", view)
-	}
-	next, cmd := m.Update(keyMsg("v"))
-	m = next.(ui.Model)
-	rounds := filterMatches(cmd)
-	if len(rounds) != 1 {
-		t.Fatalf("v under a filter produced %d match rounds, want 1", len(rounds))
-	}
-	m = update(t, m, rounds[0])
-	view := m.View()
-	if strings.Contains(view, "no hosts match") || !strings.Contains(view, "web.office") || !strings.Contains(view, "web.nat") {
-		t.Errorf("View() after v under /web:\n%s", view)
-	}
-	if host, _ := m.Selected(); host.Alias != "web" {
-		t.Errorf("Selected() after v = %q, want web kept", host.Alias)
-	}
-	// A later, unrelated filter lands where it should.
-	m = press(t, m, "v", "esc", "/", "d", "b", ".", "l", "enter")
-	if host, _ := m.Selected(); host.Alias != "db.lan" {
-		t.Errorf("Selected() after /db.l = %q, want db.lan (no stale re-select)", host.Alias)
-	}
-}
-
 func TestModel_Update_EmptyFilterTermKeepsTheFold(t *testing.T) {
 	t.Parallel()
 	// bubbles never calls the filter function for an empty term, so the

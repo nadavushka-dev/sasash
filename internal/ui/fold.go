@@ -1,26 +1,25 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 )
 
 // foldState is shared by pointer between the model and the list's filter
 // function (a closure made once in New): which aliases are generated
-// variants (alias → path name) and whether they are listed. It is
-// mutated in place — on reload and on v — deliberately, so the closure
-// sees fresh data; like the model's other maps, the mutation is shared
-// across Model copies.
+// variants (alias → path name). It is mutated in place on reload —
+// deliberately, so the closure sees fresh data; like the model's other
+// maps, the mutation is shared across Model copies. Generated variants
+// always fold: they are an ssh-alias detail for external tools, never TUI
+// rows, and a filter term that names one is the only way to surface it
+// (SASASH.4.23 retired the v toggle and the pinned-variants line).
 type foldState struct {
 	variants map[string]string
 	hidden   map[string]bool // "# @sasash hide" hosts: out of the rows unless named
-	show     bool
 }
 
 // hiddenSet collects the hosts that asked to be left out of listings.
@@ -62,17 +61,6 @@ func computeVariants(hosts []hostmodel.Host) map[string]string {
 	return out
 }
 
-// variantsOf lists parent's variant names in config order.
-func variantsOf(parent string, hosts []hostmodel.Host, variants map[string]string) []string {
-	var out []string
-	for _, h := range hosts {
-		if name, ok := variants[h.Alias]; ok && h.Alias == parent+"."+name {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
 // termNamesVariant reports whether a filter term explicitly asks for the
 // variant: it contains the whole alias, or it is a substring of the
 // ".<name>" suffix at least as specific as the name itself — so a bare
@@ -103,7 +91,7 @@ func foldFilter(fold *foldState) list.FilterFunc {
 			if fold.hidden[alias] && !strings.Contains(strings.ToLower(term), strings.ToLower(alias)) {
 				continue // hidden: only a term naming the whole alias reveals it
 			}
-			if name, variant := fold.variants[alias]; fold.show || !variant || termNamesVariant(term, alias, name) {
+			if name, variant := fold.variants[alias]; !variant || termNamesVariant(term, alias, name) {
 				out = append(out, r)
 			}
 		}
@@ -111,15 +99,15 @@ func foldFilter(fold *foldState) list.FilterFunc {
 	}
 }
 
-// listedHosts are the rows outside a filter: every host when variants
-// are shown, else the non-variants. (The header tally counts these.)
+// listedHosts are the rows outside a filter: the non-variant hosts
+// (generated variants always fold). The header tally counts these.
 func (m Model) listedHosts() []hostmodel.Host {
 	var out []hostmodel.Host
 	for _, h := range m.hosts {
 		if m.fold.hidden[h.Alias] {
 			continue
 		}
-		if _, variant := m.fold.variants[h.Alias]; variant && !m.fold.show {
+		if _, variant := m.fold.variants[h.Alias]; variant {
 			continue
 		}
 		out = append(out, h)
@@ -182,25 +170,4 @@ func (m Model) rowsDiffer(rows []list.Item) bool {
 		}
 	}
 	return false
-}
-
-// pinnedLine renders a parent's folded variants in its detail pane, in
-// config order, whole or as a count when they would not fit the pane.
-func (m Model) pinnedLine(host hostmodel.Host) string {
-	names := variantsOf(host.Alias, m.hosts, m.fold.variants)
-	if len(names) == 0 {
-		return ""
-	}
-	hint := "(v shows them)"
-	if m.fold.show {
-		hint = "(listed)"
-	}
-	for i, n := range names {
-		names[i] = "." + n
-	}
-	line := m.styles.SectionLabel.Render("pinned") + " " + m.styles.PathName.Render(strings.Join(names, " ")) + " " + m.styles.PathExtra.Render(hint)
-	if lipgloss.Width(line) > m.width-m.listWidth()-3 {
-		line = m.styles.SectionLabel.Render("pinned") + " " + m.styles.PathName.Render(fmt.Sprintf("%d variants", len(names))) + " " + m.styles.PathExtra.Render(hint)
-	}
-	return "\n " + line
 }

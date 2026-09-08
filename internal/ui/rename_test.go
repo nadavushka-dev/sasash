@@ -142,7 +142,7 @@ func TestModel_Rename_RefusedRows(t *testing.T) {
 			keys:   []string{"R"},
 			notice: "bare is not in sasash.conf — rename it by hand (e)"},
 		{name: "pinned variant points at its parent", hook: true, hosts: webGroup(),
-			keys:   []string{"v", "j", "R"},
+			keys:   []string{"/", "w", "e", "b", ".", "l", "a", "n", "enter", "R"},
 			notice: "web.lan is listed as web's pinned variant for path lan — rename web instead"},
 	}
 	for _, tt := range tests {
@@ -320,8 +320,19 @@ func TestModel_Rename_Renamed(t *testing.T) {
 	if ui.TunnelStatusKnown(m, "web") {
 		t.Error("tstatus should forget the old alias")
 	}
-	if view := press(t, m, "v").View(); !strings.Contains(view, "srv.lan") || !strings.Contains(view, "srv.wan") || !strings.Contains(view, "web.old") || strings.Contains(view, "srv.old") || strings.Contains(view, "web.lan") {
-		t.Errorf("rows before the reload: variants should follow and web.old stay:\n%s", view)
+	// web.old (a hand-authored two-path block) is no variant, so it stays
+	// listed under its own name; the followed variants srv.lan/srv.wan fold
+	// under the new alias and a filter surfaces them (SASASH.4.23: no v).
+	if view := m.View(); !strings.Contains(view, "web.old") || strings.Contains(view, "srv.old") || strings.Contains(view, "web.lan") {
+		t.Errorf("rows before the reload: web.old stays, no srv.old, web.lan renamed away:\n%s", view)
+	}
+	// Each followed variant surfaces under a filter naming its full alias
+	// (the only way now that v is gone); both carry the new alias.
+	if view := press(t, m, "/", "s", "r", "v", ".", "l", "a", "n", "enter").View(); !strings.Contains(view, "srv.lan") {
+		t.Errorf("a filter should surface the followed variant srv.lan:\n%s", view)
+	}
+	if view := press(t, m, "/", "s", "r", "v", ".", "w", "a", "n", "enter").View(); !strings.Contains(view, "srv.wan") {
+		t.Errorf("a filter should surface the followed variant srv.wan:\n%s", view)
 	}
 	// The reload lands with the file's hosts; the selection stays.
 	for _, msg := range drain(cmd) {

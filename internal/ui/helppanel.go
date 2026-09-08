@@ -29,7 +29,7 @@ type helpGroup struct {
 func (m Model) helpGroups() []helpGroup {
 	k := m.keys
 	groups := []helpGroup{
-		{"host list", []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.FocusRight, k.Filter, k.ClearFilter, k.Help, k.Settings, k.Theme, k.Variants, k.Rename, k.Quit}},
+		{"host list", []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.FocusRight, k.Filter, k.ClearFilter, k.Help, k.Settings, k.Theme, k.Rename, k.Quit}},
 		{"paths (p)", pathsKeys{}.ShortHelp()},
 		{"tunnels (l)", append([]key.Binding{k.FocusRight, k.FocusLeft, k.AddFwd, k.Restart, k.Exit}, tunnelsKeys{k: k}.ShortHelp()...)},
 		{"prompts", promptGroupKeys()},

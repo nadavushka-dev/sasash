@@ -20,7 +20,7 @@ Set TypingSpeed 40ms
 Set Padding 10
 
 Hide
-Type `HOME="$PWD/demo/home" ./sasash`
+Type `mkdir -p demo/out; rm -rf demo/out/home; cp -R demo/home demo/out/home; HOME="$PWD/demo/out/home" ./sasash`
 Enter
 Sleep 1.5s
 Show
@@ -59,13 +59,26 @@ Escape
 Sleep 300ms
 Type "ttt"
 Sleep 500ms
+# SASASH.4.23 — one focus model; a focused section only moves the highlight,
+# it never hides the other. api shows paths AND tunnels together (list focus).
+Screenshot demo/out/frame-nav-list.png
+Sleep 700ms
+# l cycles list -> paths: the mark lands on a path row, tunnels still below.
 Type "l"
-Sleep 800ms
+Sleep 900ms
 Screenshot demo/out/frame-paths.png
+# move the mark to vpn and switch the active path — enter writes HostName.
 Type "j"
-Sleep 500ms
+Sleep 700ms
+Enter
+Sleep 1.2s
+Screenshot demo/out/frame-switch.png
+Sleep 600ms
+# l again to paths, l once more to tunnels: paths stay visible above.
 Type "l"
-Sleep 800ms
+Sleep 400ms
+Type "l"
+Sleep 900ms
 Screenshot demo/out/frame-tunnels.png
 Escape
 Sleep 300ms

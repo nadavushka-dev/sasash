@@ -695,7 +695,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before, _ := m.Selected()
 	beforeIdx := m.list.Index()
-	var rowsCmd tea.Cmd // a SetItems round that must reach the runtime
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -1319,18 +1318,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.setTheme((m.themeIdx + 1) % len(Themes))
 			case key.Matches(msg, m.keys.Settings):
 				return m.openSettings(), nil
-			case key.Matches(msg, m.keys.Variants):
-				m.fold.show = !m.fold.show
-				m.notice = "pinned variants hidden"
-				if m.fold.show {
-					m.notice = "pinned variants listed"
-				}
-				// Rows change now; the key then falls through to the
-				// list (unbound there) and the selection tail below, so
-				// a host the clamp moved onto gets its status refreshed.
-				// Under a filter SetItems' cmd is the only thing that
-				// refills the match set: it must reach the runtime.
-				rowsCmd = m.setRows(m.listRows())
 			case key.Matches(msg, m.keys.Rename):
 				return m.openRename()
 			case key.Matches(msg, m.keys.Help):
@@ -1370,7 +1357,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = tea.Batch(cmd, m.setRows(m.listRows()))
 		}
 	}
-	cmd = tea.Batch(cmd, rowsCmd)
 	// Off the divider BEFORE the selection tail below, so crossing it
 	// counts as the host change it is: the new host's status is fetched,
 	// never the old host's shown as its own.
@@ -1694,7 +1680,6 @@ func (m Model) detailView() string {
 			}
 		}
 	}
-	b.WriteString(m.pinnedLine(host))
 	if m.tunnels != nil {
 		b.WriteString(m.tunnelsView(host))
 	}

@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
 	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run"
@@ -841,5 +842,62 @@ func TestModel_View_NoTunnelsWithoutEngine(t *testing.T) {
 	}
 	if _, cmd := m.Update(keyMsg(" ")); cmd != nil {
 		t.Errorf("Update(space) with no engine cmd = %v, want nil", cmd)
+	}
+}
+
+// TestModel_View_FocusNeverHidesPathsOrTunnels pins SASASH.4.23: paths AND
+// tunnels render in every focus state — list, paths, tunnels — so focusing
+// a section only moves the highlight, it never drops the other section's
+// content. (The reported bug: an added tunnel showed in the list-focus
+// detail view but vanished when focused into paths.)
+func TestModel_View_FocusNeverHidesPathsOrTunnels(t *testing.T) {
+	t.Parallel()
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "dual")
+	hosts := []hostmodel.Host{{
+		Alias: "dual", Paths: []probe.Path{pathLAN, pathTS},
+		Forwards: []hostmodel.ForwardSet{{Name: "web", Specs: []string{specWeb0}}},
+	}}
+	d := fakedial.New().Up("192.0.2.10:22", 5*time.Millisecond).Down("198.51.100.5:2222")
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: tunnelEngine(t, r, d)})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+	m = ui.WithSwitcher(m,
+		func(alias, name string) (pathswitch.Result, error) { return pathswitch.Result{}, nil },
+		func(alias string) ([]probe.Path, string, bool) {
+			return []probe.Path{pathLAN, pathTS}, "192.0.2.10", true
+		},
+		nil)
+
+	// l cycles list -> paths -> tunnels; each state must show both sections.
+	states := []struct {
+		name  string
+		keys  []string
+		paths bool // want the paths section focused (a › on a path row)
+		tuns  bool // want the tunnels section focused (a › on a forward row)
+	}{
+		{name: "list focus", keys: nil},
+		{name: "paths focus", keys: []string{"l"}, paths: true},
+		{name: "tunnels focus", keys: []string{"l", "l"}, tuns: true},
+	}
+	for _, st := range states {
+		mm := m
+		if len(st.keys) > 0 {
+			mm = press(t, mm, st.keys...)
+		}
+		if st.paths && !ui.PathsFocused(mm) {
+			t.Errorf("%s: PathsFocused = false, want the paths section focused", st.name)
+		}
+		if st.tuns && !ui.TunnelsFocused(mm) {
+			t.Errorf("%s: TunnelsFocused = false, want the tunnels section focused", st.name)
+		}
+		view := mm.View()
+		// The paths section: its label and the lan path row.
+		if !strings.Contains(view, "paths") || !strings.Contains(view, "lan") {
+			t.Errorf("%s: paths section hidden:\n%s", st.name, view)
+		}
+		// The tunnels section: its label and the web forward row.
+		if !strings.Contains(view, "tunnels") || !strings.Contains(view, specWeb0) {
+			t.Errorf("%s: tunnels section hidden:\n%s", st.name, view)
+		}
 	}
 }
