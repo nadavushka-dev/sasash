@@ -51,34 +51,3 @@ release:
     name: sasash
   # v0.1.0-rc1 style tags become pre-releases automatically.
   prerelease: auto
-
-# Homebrew tap (macOS only: Homebrew casks do not exist on Linux, where curl|sh is
-# the path). Prerequisite: the repo github.com/nadavushka-dev/homebrew-tap exists and
-# the release workflow has a HOMEBREW_TAP_GITHUB_TOKEN secret (a fine-grained PAT with
-# contents:write on that tap repo). Without the secret the cask is still rendered
-# into dist/ but not pushed, so a release never fails on a missing tap.
-# `brews` (a formula that installs a prebuilt binary) is deprecated upstream in
-# favour of casks. See docs/releasing.md.
-homebrew_casks:
-  - name: sasash
-    ids:
-      - tarball
-    binaries:
-      - sasash
-    repository:
-      owner: nadavushka-dev
-      name: homebrew-tap
-      token: "{{ envOrDefault \"HOMEBREW_TAP_GITHUB_TOKEN\" \"\" }}"
-    skip_upload: "{{ if envOrDefault \"HOMEBREW_TAP_GITHUB_TOKEN\" \"\" }}false{{ else }}true{{ end }}"
-    directory: Casks
-    homepage: https://github.com/nadavushka-dev/sasash
-    description: "Terminal UI over ssh_config: hosts, live path status, one keypress to connect"
-    caveats: "Run `sasash setup` once to add the Include line to ~/.ssh/config."
-    # Binaries are not signed or notarized yet (SASASH.8 non-goal), so Gatekeeper
-    # would quarantine the download; strip the bit as upstream recommends.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sasash"]
-          end

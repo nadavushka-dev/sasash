@@ -1,11 +1,7 @@
 # Release (SASASH.8): on a v* tag, build all four targets with GoReleaser and
 # publish a GitHub Release (tarballs + checksums.txt). See docs/releasing.md.
 #
-# Secrets:
-#   GITHUB_TOKEN               automatic; contents:write below is all it needs.
-#   HOMEBREW_TAP_GITHUB_TOKEN  optional; a PAT with contents:write on
-#                              nadavushka-dev/homebrew-tap. Unset => the formula
-#                              is rendered but not pushed (see .goreleaser.yaml).
+# Secrets: only the automatic GITHUB_TOKEN; contents:write below is all it needs.
 name: release
 
 on:
@@ -36,4 +32,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

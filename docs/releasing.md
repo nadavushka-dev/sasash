@@ -3,9 +3,9 @@
 Distribution is prebuilt binaries (SASASH.8): a `v*` tag triggers
 `.github/workflows/release.yml`, which runs `make check` and then GoReleaser
 (`.goreleaser.yaml`) to build darwin/linux x amd64/arm64, publish a GitHub Release
-with four `.tar.gz` archives plus `checksums.txt`, and push a Homebrew cask when a
-tap token is configured. `install.sh` at the repo root is the curl|sh onboarding
-path and reads exactly those assets.
+with four `.tar.gz` archives plus `checksums.txt`. `install.sh` at the repo root is
+the curl|sh onboarding path and reads exactly those assets; `go install ...@latest`
+from source is the only other route.
 
 ## Cutting a release
 
@@ -30,9 +30,8 @@ worktree's — so prove a stamp from a plain clone, never from `.worktrees/`.
 
 ## Local proof without pushing
 
-- `make snapshot` builds all four targets into `dist/` (gitignored) and renders the
-  cask into `dist/homebrew/Casks/sasash.rb`. `dist/sasash_darwin_arm64_v8.0/sasash
-  version` shows what the binary would report.
+- `make snapshot` builds all four targets into `dist/` (gitignored).
+  `dist/sasash_darwin_arm64_v8.0/sasash version` shows what the binary would report.
 - `make check-dist` runs the snapshot, lints the workflows and the installer, then
   runs `scripts/test-install.sh`: the snapshot's real tarball and `checksums.txt`
   served over `file://`, exercising OS/arch detection, download, sha256
@@ -44,23 +43,16 @@ worktree's — so prove a stamp from a plain clone, never from `.worktrees/`.
   git tag v0.0.0-test && make snapshot && dist/sasash_darwin_arm64_v8.0/sasash version`
   prints `v0.0.0-test` for all four targets (check the others with `go version -m`).
 
-## Secrets and prerequisites
+## Secrets
 
-| what | needed for | notes |
-|---|---|---|
-| `GITHUB_TOKEN` | the release itself | automatic; the workflow grants `contents: write` |
-| `HOMEBREW_TAP_GITHUB_TOKEN` | pushing the cask | optional repo secret: a fine-grained PAT with `contents: write` on `nadavushka-dev/homebrew-tap`. Unset means the cask is rendered but not pushed (`skip_upload` renders `true`; the skip itself is GoReleaser semantics, first exercised by the first real release) |
-| `nadavushka-dev/homebrew-tap` repo | Homebrew install | must exist (empty is fine; GoReleaser commits `Casks/sasash.rb`). Users then run `brew install --cask nadavushka-dev/tap/sasash` |
-
-Homebrew casks are macOS-only; Linux users take the curl|sh path. GoReleaser has
-deprecated `brews` (a formula that installs a prebuilt binary) in favour of casks,
-which is why the tap ships a cask.
+Only the automatic `GITHUB_TOKEN`; the release workflow grants it `contents: write`.
 
 ## Not yet
 
-- Code signing and notarization. macOS would otherwise quarantine a downloaded
-  binary; the cask strips the bit in a post-install hook, and a curl|sh download
-  never carries it. Revisit when there is an Apple developer identity.
-- Self-update. Re-run the installer or `brew upgrade`.
-- A `LICENSE` file: the repo has none, so neither the archives nor the cask
-  declare one. Add one before announcing the release.
+- Code signing and notarization. A curl|sh download never carries the macOS
+  quarantine bit, so nothing blocks today. Revisit when there is an Apple
+  developer identity.
+- Homebrew. The human chose prebuilt + curl|sh only; no tap, no cask.
+- Self-update. Re-run the installer.
+- A `LICENSE` file: the repo has none, so the archives declare none. Add one
+  before announcing the release.

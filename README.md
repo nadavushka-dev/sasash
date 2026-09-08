@@ -29,15 +29,10 @@ PATH, and offers to run `sasash setup` — the one-time bootstrap that adds a si
 confirmed `Include` line to `~/.ssh/config`. `SASASH_VERSION=v0.1.0` pins a release;
 `sh install.sh --help` lists the other knobs.
 
-Other ways in:
-
-- Homebrew (macOS): `brew install --cask nadavushka-dev/tap/sasash`, once the tap is
-  published (see `docs/releasing.md`).
-- From source (Go 1.26.4+): `go install github.com/nadavushka-dev/sasash/cmd/sasash@latest`.
+From source instead (Go 1.26.4+): `go install github.com/nadavushka-dev/sasash/cmd/sasash@latest`.
 
 `sasash version` prints the release tag the binary was built from. Binaries are not
-signed or notarized yet; the Homebrew cask strips the quarantine bit on install, and
-a curl|sh install never had it.
+signed or notarized yet; a curl|sh download never carries the macOS quarantine bit.
 
 ![sasash demo](demo/demo.gif)
 
