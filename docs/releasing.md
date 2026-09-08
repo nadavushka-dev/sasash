@@ -33,10 +33,12 @@ worktree's — so prove a stamp from a plain clone, never from `.worktrees/`.
 - `make snapshot` builds all four targets into `dist/` (gitignored) and renders the
   cask into `dist/homebrew/Casks/sasash.rb`. `dist/sasash_darwin_arm64_v8.0/sasash
   version` shows what the binary would report.
-- `make check-dist` lints the config, the workflows and the installer, then runs
-  `scripts/test-install.sh`: a fake release served over `file://`, exercising OS/arch
-  detection, download, sha256 verification, install, the PATH hint, and the two
-  refusal paths (tampered checksum, unlisted asset).
+- `make check-dist` runs the snapshot, lints the workflows and the installer, then
+  runs `scripts/test-install.sh`: the snapshot's real tarball and `checksums.txt`
+  served over `file://`, exercising OS/arch detection, download, sha256
+  verification, install, the PATH hint, and the two refusal paths (tampered
+  checksum, unlisted asset). That is what ties install.sh's asset naming to
+  `.goreleaser.yaml`.
 - A throwaway tag in a plain clone proves the version stamp:
   `git clone --branch <branch> . /tmp/sasash-proof && cd /tmp/sasash-proof &&
   git tag v0.0.0-test && make snapshot && dist/sasash_darwin_arm64_v8.0/sasash version`
@@ -47,7 +49,7 @@ worktree's — so prove a stamp from a plain clone, never from `.worktrees/`.
 | what | needed for | notes |
 |---|---|---|
 | `GITHUB_TOKEN` | the release itself | automatic; the workflow grants `contents: write` |
-| `HOMEBREW_TAP_GITHUB_TOKEN` | pushing the cask | optional repo secret: a fine-grained PAT with `contents: write` on `nadavushka-dev/homebrew-tap`. Unset means the cask is rendered but not pushed, and the release still succeeds |
+| `HOMEBREW_TAP_GITHUB_TOKEN` | pushing the cask | optional repo secret: a fine-grained PAT with `contents: write` on `nadavushka-dev/homebrew-tap`. Unset means the cask is rendered but not pushed (`skip_upload` renders `true`; the skip itself is GoReleaser semantics, first exercised by the first real release) |
 | `nadavushka-dev/homebrew-tap` repo | Homebrew install | must exist (empty is fine; GoReleaser commits `Casks/sasash.rb`). Users then run `brew install --cask nadavushka-dev/tap/sasash` |
 
 Homebrew casks are macOS-only; Linux users take the curl|sh path. GoReleaser has

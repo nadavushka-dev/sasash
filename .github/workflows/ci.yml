@@ -1,8 +1,9 @@
 # CI (SASASH.8): the repo gate on every push and PR.
 #   check: gofmt + make check (vet, linux cross-build, race, coverage) + make build,
 #          on Linux and macOS (both are first-class targets; public repo, so both are free).
-#   dist:  the distribution infra — shellcheck, actionlint, goreleaser check,
-#          and the no-network install.sh end-to-end test.
+#   dist:  the distribution infra — shellcheck, actionlint, a goreleaser snapshot
+#          build of all four targets, and the install.sh end-to-end test against
+#          those artifacts (no network).
 name: ci
 
 on:
@@ -44,10 +45,10 @@ jobs:
         run: shellcheck install.sh scripts/*.sh
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - name: goreleaser check
+      - name: goreleaser snapshot (validates the config and builds all targets)
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: "~> v2"
-          args: check
-      - name: install.sh end-to-end (file:// release, no network)
+          version: "~> v2.18"
+          args: release --snapshot --clean
+      - name: install.sh end-to-end against the snapshot (file://, no network)
         run: scripts/test-install.sh

@@ -45,13 +45,6 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
-changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^chore:"
-
 release:
   github:
     owner: nadavushka-dev

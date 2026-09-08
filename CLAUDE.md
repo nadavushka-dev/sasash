@@ -64,7 +64,9 @@ the outside world — that is what makes the logic testable without a live SSH s
 ## Testing
 
 Gate for every merge: `make check` (vet + race + coverage) green, `make build` green,
-`gofmt -l .` clean. Run `make fuzz` when touching `internal/sshconf`.
+`gofmt -l .` clean. Run `make fuzz` when touching `internal/sshconf`, and `make check-dist`
+(goreleaser snapshot + shellcheck + actionlint + installer e2e; brew-installed tools) when
+touching `.goreleaser.yaml`, `.github/workflows/`, `install.sh`, or `scripts/test-install.sh`.
 
 Conventions (match exactly):
 - External test packages (`package x_test`); exported API only.

@@ -56,10 +56,10 @@ integration:
 snapshot:
 	goreleaser release --snapshot --clean
 
-# check-dist: lint the release config, the workflows and the installer, then run
-# the installer end-to-end against a file:// release (no network).
-check-dist:
+# check-dist: lint the workflows and the installer, then run the installer
+# end-to-end against the snapshot's real artifacts over file:// (no network) —
+# which is what keeps install.sh's asset naming honest to .goreleaser.yaml.
+check-dist: snapshot
 	shellcheck install.sh scripts/*.sh
 	actionlint
-	goreleaser check
 	scripts/test-install.sh

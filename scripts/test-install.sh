@@ -1,16 +1,29 @@
 #!/bin/sh
 # End-to-end test for install.sh with no network and no goreleaser.
 #
-# Stages a fake release for the host os/arch (tarball + checksums.txt in the
-# exact layout goreleaser publishes), serves it over file://, and checks:
+# Serves a release over file:// in the exact layout install.sh expects and checks:
 # os/arch detection across the four targets and two unsupported ones (via a
 # uname shim), download + sha256 verify + install, the PATH hint, that a
 # tampered checksum is refused, and that an unlisted asset is refused.
+#
+# The release is the real goreleaser output when dist/ exists (`make snapshot`
+# first — that is what pins install.sh's asset naming to .goreleaser.yaml);
+# without dist/ it stages a go-built tarball for the host os/arch instead.
 # Run by `make check-dist` and the ci.yml dist job.
+#
+# Needs curl: wget cannot fetch file:// URLs, so the download half of this test
+# always goes through install.sh's curl branch (the wget branch is one standard
+# `wget -q -O` line; its `latest` redirect parsing was checked by hand against
+# a real GitHub repo with curl hidden from PATH).
 set -eu
 
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+
+command -v curl >/dev/null 2>&1 || {
+	echo "test-install.sh: needs curl (file:// release)" >&2
+	exit 1
+}
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -69,7 +82,7 @@ echo "$out" | grep -q '^version=v0.1.0$' || fail "version without v prefix not n
 echo "$out" | grep -q '^url=https://example.invalid/r/download/v0.1.0/sasash_0.1.0_[a-z]*_[a-z0-9]*\.tar\.gz$' || fail "url shape: $out"
 ok
 
-# --- stage a fake release for the host ------------------------------------
+# --- stage the release for the host ----------------------------------------
 case "$(uname -s)" in
 Darwin) os=darwin ;;
 Linux) os=linux ;;
@@ -80,18 +93,32 @@ x86_64 | amd64) arch=amd64 ;;
 arm64 | aarch64) arch=arm64 ;;
 *) fail "host arch $(uname -m) is not a sasash target" ;;
 esac
-tag=v0.0.0-test
-asset="sasash_0.0.0-test_${os}_${arch}.tar.gz"
-rel="$tmp/release/download/$tag"
-mkdir -p "$rel" "$tmp/build"
-go build -o "$tmp/build/sasash" ./cmd/sasash
-tar -C "$tmp/build" -czf "$rel/$asset" sasash
-if command -v sha256sum >/dev/null 2>&1; then
-	sum=$(sha256sum "$rel/$asset" | cut -d' ' -f1)
+if [ -f dist/checksums.txt ]; then
+	set -- dist/sasash_*_"${os}_${arch}".tar.gz
+	[ -f "$1" ] || fail "dist/ has no ${os}/${arch} tarball"
+	asset=$(basename "$1")
+	ver=${asset#sasash_}
+	ver=${ver%"_${os}_${arch}.tar.gz"}
+	tag="v$ver"
+	rel="$tmp/release/download/$tag"
+	mkdir -p "$rel"
+	cp "$1" dist/checksums.txt "$rel/"
+	source="goreleaser dist/ $tag"
 else
-	sum=$(shasum -a 256 "$rel/$asset" | cut -d' ' -f1)
+	tag=v0.0.0-test
+	asset="sasash_0.0.0-test_${os}_${arch}.tar.gz"
+	rel="$tmp/release/download/$tag"
+	mkdir -p "$rel" "$tmp/build"
+	go build -o "$tmp/build/sasash" ./cmd/sasash
+	tar -C "$tmp/build" -czf "$rel/$asset" sasash
+	if command -v sha256sum >/dev/null 2>&1; then
+		sum=$(sha256sum "$rel/$asset" | cut -d' ' -f1)
+	else
+		sum=$(shasum -a 256 "$rel/$asset" | cut -d' ' -f1)
+	fi
+	printf '%s  %s\n' "$sum" "$asset" >"$rel/checksums.txt"
+	source="go build (no dist/)"
 fi
-printf '%s  %s\n' "$sum" "$asset" >"$rel/checksums.txt"
 
 run_install() { # run_install INSTALL_DIR [extra env via caller]
 	SASASH_BASE_URL="file://$tmp/release" SASASH_VERSION=$tag SASASH_INSTALL_DIR=$1 SASASH_SETUP=0 \
@@ -133,4 +160,4 @@ fi
 echo "$log" | grep -q "download failed" || fail "wrong failure message: $log"
 ok
 
-echo "install.sh: $pass checks passed ($os/$arch)"
+echo "install.sh: $pass checks passed ($os/$arch, release from $source)"

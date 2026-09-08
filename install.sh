@@ -3,25 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/nadavushka-dev/sasash/main/install.sh | sh
 #
-# Picks the release asset for this machine (darwin/linux x amd64/arm64), verifies
-# its sha256 against the release's checksums.txt, installs the binary to
-# ~/.local/bin (falling back to /usr/local/bin via sudo), prints a PATH hint when
-# needed, then offers `sasash setup`.
-#
-# Environment:
-#   SASASH_VERSION      release tag to install, e.g. v0.1.0 (default: latest release)
-#   SASASH_INSTALL_DIR  install directory (default: ~/.local/bin)
-#   SASASH_BASE_URL     release base URL (default: https://github.com/nadavushka-dev/sasash/releases);
-#                       a file:// URL works for local testing — see scripts/test-install.sh
-#   SASASH_SETUP        1 = run `sasash setup -y` after installing, 0 = never ask, just hint
-#                       (default: ask on a terminal, otherwise print the hint)
-#
-# Arguments:
-#   --dry-run   print the resolved target and URL, install nothing
-#   --help      this text
-#
-# Needs curl or wget, tar, and sha256sum / shasum / openssl. No release exists until
-# the first v* tag is pushed (docs/releasing.md); until then only the file:// path works.
+# `sh install.sh --help` lists the environment knobs and flags. No release exists
+# until the first v* tag is pushed (docs/releasing.md); until then only a file://
+# SASASH_BASE_URL works, and only with curl — see scripts/test-install.sh.
 set -eu
 
 REPO="nadavushka-dev/sasash"
@@ -31,7 +15,31 @@ say() { printf 'sasash-install: %s\n' "$*" >&2; }
 die() { say "error: $*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-usage() { sed -n '2,/^set -eu/{/^set -eu/d;s/^# \{0,1\}//p;}' "$0"; }
+usage() {
+	cat <<'EOT'
+install.sh — install a prebuilt sasash release
+
+  curl -fsSL https://raw.githubusercontent.com/nadavushka-dev/sasash/main/install.sh | sh
+
+Picks the release asset for this machine (darwin/linux x amd64/arm64), verifies
+its sha256 against the release's checksums.txt, installs the binary to
+~/.local/bin (falling back to /usr/local/bin via sudo), prints a PATH hint when
+needed, then offers `sasash setup`.
+
+Environment:
+  SASASH_VERSION      release tag to install, e.g. v0.1.0 (default: latest release)
+  SASASH_INSTALL_DIR  install directory (default: ~/.local/bin)
+  SASASH_BASE_URL     release base URL (default: https://github.com/nadavushka-dev/sasash/releases)
+  SASASH_SETUP        1 = run `sasash setup -y` after installing, 0 = never ask, just hint
+                      (default: ask on a terminal, otherwise print the hint)
+
+Arguments:
+  --dry-run   print the resolved target and URL, install nothing
+  --help      this text
+
+Needs curl or wget, tar, and sha256sum / shasum / openssl.
+EOT
+}
 
 detect_os() {
 	case "$(uname -s)" in
@@ -118,6 +126,7 @@ install_bin() {
 			dir=/usr/local/bin
 		fi
 		if ! writable_dir "$dir"; then
+			have sudo || die "$dir is not writable and sudo is not installed; set SASASH_INSTALL_DIR"
 			say "$dir is not writable; using sudo"
 			SUDO=sudo
 		fi
@@ -202,7 +211,8 @@ main() {
 	tar -xzf "$tmp/$asset" -C "$tmp" sasash
 
 	install_bin "$tmp/sasash"
-	say "installed sasash $("$dir/sasash" version) to $dir/sasash"
+	ver=$("$dir/sasash" version) || die "$dir/sasash does not run on this machine"
+	say "installed sasash $ver to $dir/sasash"
 	path_hint "$dir"
 	offer_setup "$dir/sasash"
 }
