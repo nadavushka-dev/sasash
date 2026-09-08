@@ -247,14 +247,18 @@ func (m Model) stampedPollCmd(host string) (Model, tea.Cmd) {
 		return m, nil
 	}
 	delete(m.pendingStamp, host)
-	m.tinflight[host] = true
+	// The handoff stamp is the connected alias's, but tunnel status is the
+	// machine's: a handoff to a path-variant refreshes the parent, whose pane
+	// the render shows (SASASH.4.24). tunnelHost is identity for a real host.
+	th := m.tunnelHost(h)
+	m.tinflight[th.Alias] = true
 	eng := m.tunnels
 	return m, func() tea.Msg {
 		stampErr := stamp()
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelStatusTimeout)
 		defer cancel()
-		st, err := eng.Status(ctx, host, h.Forwards)
-		return tunnelStatusMsg{host: host, status: st, err: err, stampErr: stampErr}
+		st, err := eng.Status(ctx, th.Alias, th.Forwards)
+		return tunnelStatusMsg{host: th.Alias, status: st, err: err, stampErr: stampErr}
 	}
 }
 
