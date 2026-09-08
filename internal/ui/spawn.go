@@ -232,37 +232,45 @@ func (s spawnState) planFor(alias string) *spawnPlan {
 // herdrNests is why H cannot run `herdr --remote` from inside herdr.
 const herdrNests = "herdr --remote would nest inside herdr"
 
+// insideHerdr is H's runtime gate (SASASH.4.22 part B), checked before
+// any multiplexer routing: HERDR_ENV set in this process's environment
+// means herdr is somewhere above us — the pane itself, or a tmux started
+// from one (a tmux server snapshots its env for life) — and `herdr
+// --remote` would nest, which herdr refuses. MuxHerdr is that same
+// signal by another road (DetectMux only picks it on HERDR_ENV), kept so
+// the gate cannot be bypassed by a config that names the mux alone.
+func (s spawnState) insideHerdr() bool { return s.herdrEnv || s.mux == MuxHerdr }
+
 // herdrPlanFor builds H's plan (SASASH.4.22): herdr's remote session in
 // a new tab/pane/window per the spawn target, the TUI staying up — the
-// same road as enter, never a handoff. Under tmux the command is `herdr
-// --remote <alias>`. Inside herdr that command nests, which herdr
-// refuses (its guard reads HERDR_ENV — and a tmux started inside a herdr
-// pane inherits it, so the same holds there), and herdr has no primitive
-// that opens a remote in a tab; so the tab or window runs plain `ssh
-// <alias>` — the session, without the nesting — and the plan says why.
-// sasash never overrides herdr's guard (experimental.allow_nested is the
-// user's setting; the fallback stands either way). Without a multiplexer
-// there is nothing to open beside the TUI: nil, and the caller says so
-// (the OS-window template bakes its own ssh command in — {host} is its
-// only placeholder — so it cannot carry H's command).
+// same road as enter, never a handoff. The HERDR_ENV gate comes FIRST
+// and settles the command: inside herdr (or a tmux carrying its env) the
+// command is plain `ssh <alias>` — the session, without the nesting; herdr
+// has no primitive that opens a remote in a tab — and the plan says why.
+// Otherwise it is `herdr --remote <alias>`. Only then does the multiplexer
+// pick the wrapper: a herdr tab/pane/workspace, or a tmux window/split/
+// session. sasash never overrides herdr's guard (experimental.allow_nested
+// is the user's setting; the fallback stands either way). Without a
+// multiplexer there is nothing to open beside the TUI: nil, and the caller
+// says so (the OS-window template bakes its own ssh command in — {host}
+// is its only placeholder — so it cannot carry H's command).
 func (s spawnState) herdrPlanFor(alias string) *spawnPlan {
+	command, note := herdrCommand(alias), ""
+	if s.insideHerdr() {
+		command, note = sshCommand(alias), herdrNests
+	}
 	target := s.target
 	if _, ok := SpawnTargetIndex(target); !ok {
 		target = DefaultSpawnTarget
 	}
 	switch s.mux {
 	case MuxHerdr:
-		return &spawnPlan{where: s.where(target), note: herdrNests, what: sshCommand(alias), steps: [][]string{
+		return &spawnPlan{where: s.where(target), note: note, what: command, steps: [][]string{
 			herdrCreateArgv(target, alias, s.herdrPane),
-			herdrRunArgv(panePlaceholder, sshCommand(alias)),
+			herdrRunArgv(panePlaceholder, command),
 		}}
 	case MuxTmux:
-		if s.herdrEnv {
-			// This tmux runs inside a herdr pane and carries HERDR_ENV:
-			// herdr --remote would nest here too. Plain ssh, said.
-			return &spawnPlan{where: s.where(target), note: herdrNests, what: sshCommand(alias), steps: [][]string{tmuxArgv(target, alias, sshCommand(alias))}}
-		}
-		return &spawnPlan{where: s.where(target), what: herdrCommand(alias), steps: [][]string{tmuxArgv(target, alias, herdrCommand(alias))}}
+		return &spawnPlan{where: s.where(target), note: note, what: command, steps: [][]string{tmuxArgv(target, alias, command)}}
 	}
 	return nil
 }
