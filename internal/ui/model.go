@@ -132,7 +132,8 @@ func (m Model) handoff(alias string) (tea.Model, tea.Cmd) {
 
 // herdrCommand is the argv `H` opens beside the TUI (SPEC §5/§6): herdr
 // reads ssh_config itself, so it needs no actions.toml template. It runs
-// in a tmux window; inside herdr it would nest (see herdrPlanFor).
+// only when H's insideHerdr gate does not fire — inside herdr it would
+// nest (see herdrPlanFor).
 func herdrCommand(alias string) []string {
 	return []string{"herdr", "--remote", alias}
 }
