@@ -768,15 +768,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fwdDeletedMsg:
 		delete(m.tinflight, msg.host)
 		switch {
+		case msg.adhoc && msg.killErr != nil:
+			// The process outlived SIGTERM: its record is kept (Forget was
+			// skipped), so x can still reach it — never orphaned.
+			m.notice = msg.name + " kept — the kill errored, so the record was not forgotten: " + oneLine(msg.killErr, msg.host)
 		case msg.removeErr != nil && msg.adhoc:
 			m.notice = "not forgotten: " + oneLine(msg.removeErr, msg.host)
 		case msg.removeErr != nil:
 			m.notice = "not deleted: " + oneLine(msg.removeErr, msg.host)
 		case msg.adhoc:
 			m.notice = "forgot " + msg.name + " on " + msg.host
-			if msg.killErr != nil {
-				m.notice = "forgot " + msg.name + " but the kill errored: " + oneLine(msg.killErr, msg.host)
-			}
 		default:
 			m.notice = "deleted " + msg.name + " from " + msg.host
 			if msg.killErr != nil {

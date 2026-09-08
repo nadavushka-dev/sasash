@@ -1078,6 +1078,13 @@ func TestModel_Update_DeleteForwardSet_NotLive(t *testing.T) {
 	if !ui.PopupOpen(m) || !strings.Contains(view, "delete web on ubuntu") || !strings.Contains(view, "@sasash forwards web") || !strings.Contains(view, specWeb0) || !strings.Contains(view, specWeb1) {
 		t.Fatalf("D should confirm with the exact line:\n%s", view)
 	}
+	// A not-live set must NOT preview a kill — the two branches are distinct.
+	if strings.Contains(view, "web is live") || strings.Contains(view, "kill -TERM") {
+		t.Errorf("a not-live set must not preview a down:\n%s", view)
+	}
+	if !strings.Contains(view, "not running") {
+		t.Errorf("the not-live preview should say the tunnels are not running:\n%s", view)
+	}
 	if c := press(t, m, "esc"); ui.PopupOpen(c) || len(removed) != 0 || !strings.Contains(c.View(), "web kept") {
 		t.Errorf("esc cancels, removes nothing:\n%s", c.View())
 	}
@@ -1184,4 +1191,28 @@ func TestModel_Update_LifecycleGuards(t *testing.T) {
 			t.Error("nothing should be removed for an undeclared set")
 		}
 	})
+}
+
+func TestModel_Update_DeleteAdhoc_SurvivorKeepsRecord(t *testing.T) {
+	t.Parallel()
+	// The ad-hoc process ignores SIGTERM (stays alive): Forget is skipped so
+	// the record survives and x can still reach it — never an orphaned tunnel.
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:8080", time.Millisecond)
+	sp := fakespawn.New().Dial(d).Live(55)
+	sp.KillErr = errors.New("operation not permitted") // the kill fails; the process lives on
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"","spec":"8080:localhost:8080","pid":55}]}`)
+	m := polledSpawn(t, r, sp, d, stateDir)
+	m = press(t, m, "l", "G", "D")
+	next, cmd := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), cmd())
+	// Forget was SKIPPED because the kill errored: the record is kept, never
+	// orphaning a process sasash could not end.
+	if b, _ := os.ReadFile(filepath.Join(stateDir, "ubuntu.json")); !strings.Contains(string(b), "8080") {
+		t.Errorf("a kill-failed ad-hoc must keep its record (not orphan the process), state = %s", b)
+	}
+	if view := m.View(); !strings.Contains(view, "kept") || !strings.Contains(view, "not forgotten") {
+		t.Errorf("the notice should say the record was kept, not forgotten:\n%s", view)
+	}
 }

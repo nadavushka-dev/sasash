@@ -160,15 +160,20 @@ func (m Model) killThenRemoveSetCmd(alias, name string, specs []string) tea.Cmd 
 }
 
 // forgetAdhocCmd kills an ad-hoc's process (if live) then forgets its record.
-// No config write.
+// No config write. A process that outlives SIGTERM keeps its record (Kill
+// errors and leaves it), and Forget is SKIPPED then — never orphan a live
+// ssh -N with no record, exactly as the named-live path keeps survivors
+// killable via x (parity, QA round 1).
 func (m Model) forgetAdhocCmd(alias, spec string) tea.Cmd {
 	eng := m.tunnels
 	m.tinflight[alias] = true
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelActionTimeout)
 		defer cancel()
-		killErr := eng.Kill(ctx, alias, spec)
-		return fwdDeletedMsg{host: alias, name: spec, killErr: killErr, removeErr: eng.Forget(alias, spec), adhoc: true}
+		if killErr := eng.Kill(ctx, alias, spec); killErr != nil {
+			return fwdDeletedMsg{host: alias, name: spec, killErr: killErr, adhoc: true}
+		}
+		return fwdDeletedMsg{host: alias, name: spec, removeErr: eng.Forget(alias, spec), adhoc: true}
 	}
 }
 
