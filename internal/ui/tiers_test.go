@@ -347,3 +347,22 @@ func TestModel_Update_AmbientHiddenByDefaultUntilToggled(t *testing.T) {
 		t.Errorf(". again should hide the ambient tier:\n%s", view)
 	}
 }
+
+func TestModel_View_AllAmbientShowsByDefault(t *testing.T) {
+	t.Parallel()
+	// SASASH.4.26 decision (2) invariant: ambient hides ONLY when a managed
+	// host exists — hiding with nothing else to show would empty the list.
+	// So an all-ambient config renders every host by default, no `.` needed.
+	// This pins hasManaged()'s reason to exist: making it always-true, or
+	// dropping the guard, empties this list and the assertion fails.
+	hosts := []hostmodel.Host{
+		{Alias: "plain", Paths: []probe.Path{{Host: "192.0.2.4"}}, File: "/home/u/.ssh/config"},
+		{Alias: "office", Paths: []probe.Path{{Host: "192.0.2.6"}}, File: "/home/u/.ssh/work.conf"},
+	}
+	m := ui.New(hosts, probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{ConfPath: confPath})
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = update(t, m, m.Init()())
+	if view := m.View(); !strings.Contains(view, "plain") || !strings.Contains(view, "office") {
+		t.Errorf("all-ambient hosts must render by default (never an empty list):\n%s", view)
+	}
+}
