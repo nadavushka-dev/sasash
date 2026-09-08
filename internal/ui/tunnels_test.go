@@ -121,7 +121,7 @@ func TestTunnelArgv_ExactStrings(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{name: "spawn", got: ui.SpawnArgv("ubuntu", specWeb0), want: []string{"ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", specWeb0, "ubuntu"}},
+		{name: "spawn", got: ui.SpawnArgv("ubuntu", specWeb0), want: []string{"ssh", "-N", "-S", "none", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", specWeb0, "ubuntu"}},
 		{name: "kill", got: ui.KillArgv(4242), want: []string{"kill", "-TERM", "4242"}},
 		{name: "exit", got: ui.ExitArgv("ubuntu"), want: []string{"ssh", "-O", "exit", "ubuntu"}},
 	}

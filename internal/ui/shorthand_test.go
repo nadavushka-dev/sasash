@@ -75,6 +75,7 @@ func TestModel_Update_ShorthandExpandsEverywhere(t *testing.T) {
 		t.Parallel()
 		var calls [][]string
 		m, _ := editModel(t, fakerun.New(), &calls, nil)
+		m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}) // the plan line carries the whole spawn argv
 		m = press(t, m, "l", "E")
 		for range specWeb0 {
 			m = update(t, m, tea.KeyMsg{Type: tea.KeyBackspace})

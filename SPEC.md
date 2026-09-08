@@ -141,7 +141,7 @@ every other ssh-aware tool on the machine follows immediately.
 
 | action | command |
 |---|---|
-| start a forward | `ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 <host>` — sasash detaches it itself (own session, stdin/stdout from/to `/dev/null`, stderr to `~/.local/state/sasash/<host>.<port>.log`) and records the pid. Success is the local port answering; the process exiting first is failure, with its stderr as the reason |
+| start a forward | `ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 <host>` — sasash detaches it itself (own session, stdin/stdout from/to `/dev/null`, stderr to `~/.local/state/sasash/<host>.<port>.log`) and records the pid. Success is the local port answering; the process exiting first is failure, with its stderr as the reason |
 | add a port to a running set | the same, once more — the other processes are not touched, nothing restarts |
 | remove a forward | SIGTERM to that one process — the listener and the connections through it drop together; the other processes are untouched |
 | set down | SIGTERM to each of the set's processes |
@@ -157,7 +157,13 @@ connecting once interactively, which the hybrid's `ControlMaster auto` then reus
 process serving nothing; with it the process dies and its stderr says
 `Address already in use` — the honest answer to a held port. No `-f` because `ssh -f`
 forks after auth and the pid we would hold is the one that exits; sasash is the
-backgrounder, so the pid it records is the tunnel's own.
+backgrounder, so the pid it records is the tunnel's own. `-S none` (ControlPath none)
+because the managed entry's trio would otherwise turn the process into a shared master:
+with no master alive, `ControlMaster auto` + `ControlPersist` fork it to the background
+and the recorded pid exits 0 (the `-f` problem by another road — measured on OpenSSH
+10.2, SASASH.7.1); with a master alive, ssh hands the `-L` to the master and exits, so
+the listener would be the master's and a kill would drop nothing. A tunnel process never
+shares a connection; its listener lives and dies with the pid sasash records.
 
 Hybrid: the ControlMaster trio stays in every managed entry for interactive reuse (auth
 once for shells and file copies). The one thing the master alone could do — graft a `-L`
@@ -221,7 +227,7 @@ it, as with a folded variant.
                     ○ api   4011, 4012, 4013        down
                     ● ad-hoc 4014                   up 2m
 
-                   $ ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 ubuntu
+                   $ ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 ubuntu
 ```
 
 The command line at the bottom always shows what the highlighted action will run, except

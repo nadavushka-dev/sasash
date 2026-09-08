@@ -210,9 +210,18 @@ func (e Engine) exec(ctx context.Context, argv ...string) error {
 // that cannot bind ends the process with "Address already in use" on its
 // stderr instead of leaving a live process that serves nothing. No -f:
 // sasash detaches the process itself, so the pid it records is the
-// tunnel's own.
+// tunnel's own. -S none (ControlPath=none, the short spelling so the
+// preview line still fits): the process must never share a master —
+// the managed block's trio would otherwise make it one. Measured against
+// OpenSSH 10.2 (SASASH.7.1): with no master alive, `ControlMaster auto` +
+// `ControlPersist` make ssh fork the master to the background and the pid
+// we spawned exits 0 (the -f problem by another road: the record dies,
+// the tunnel lives on unrecorded); with a master alive, ssh hands the -L
+// to the master and exits 0, so the listener is the master's and Kill
+// would drop nothing. Disabling sharing keeps the listener in the process
+// whose pid is recorded, which is the whole model.
 func SpawnArgv(host, spec string) []string {
-	return []string{"ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", spec, host}
+	return []string{"ssh", "-N", "-S", "none", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", spec, host}
 }
 
 // Spawn starts one detached tunnel process for spec and waits for reality

@@ -25,8 +25,8 @@ import (
 const (
 	specWeb = "3000:localhost:3000"
 	specDB  = "5432:localhost:5432"
-	argvWeb = "ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3000:localhost:3000 ubuntu"
-	argvDB  = "ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 5432:localhost:5432 ubuntu"
+	argvWeb = "ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3000:localhost:3000 ubuntu"
+	argvDB  = "ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 5432:localhost:5432 ubuntu"
 )
 
 // engine wires the fakes with a permissive runner (the interactive master
@@ -133,6 +133,40 @@ func TestEngine_Argv(t *testing.T) {
 				t.Errorf("spawned %q, want nothing for a master command", got)
 			}
 		})
+	}
+}
+
+// SASASH.7.1's regression at the engine tier: an ad-hoc spawn (set "") is
+// recorded, shows in Status as its own row even though no desired set
+// declares it, and reconciliation — a read-only render — never prunes it
+// while its process lives.
+func TestEngine_Status_AdhocSpawnSurvivesReconciliation(t *testing.T) {
+	t.Parallel()
+	s := fakespawn.New()
+	e := engine(t, s, fakedial.New())
+	if err := e.Spawn(context.Background(), "ubuntu", "", "8080:localhost:80"); err != nil {
+		t.Fatalf("Spawn() err = %v", err)
+	}
+	wantState := `{"forwards":[{"set":"","spec":"8080:localhost:80","pid":1000}]}`
+	if got := readState(t, e, "ubuntu"); got != wantState {
+		t.Fatalf("state after Spawn = %s, want %s", got, wantState)
+	}
+	web := hostmodel.ForwardSet{Name: "web", Specs: []string{specWeb}}
+	want := []string{"web/3000:localhost:3000=down", "/8080:localhost:80=up"}
+	for pass := 1; pass <= 2; pass++ {
+		if got := rows(t, e, "ubuntu", web); !reflect.DeepEqual(got, want) {
+			t.Errorf("Status() pass %d = %q, want %q", pass, got, want)
+		}
+		if got := readState(t, e, "ubuntu"); got != wantState {
+			t.Errorf("state after Status pass %d = %s, want %s (a render never writes)", pass, got, wantState)
+		}
+	}
+	st, err := e.Status(context.Background(), "ubuntu", []hostmodel.ForwardSet{web})
+	if err != nil {
+		t.Fatalf("Status() err = %v", err)
+	}
+	if f := st.Forwards[1]; f.Set != "" || f.Pid != 1000 || f.Port != "8080" {
+		t.Errorf("ad-hoc row = %+v, want set \"\", pid 1000, port 8080", f)
 	}
 }
 
@@ -562,7 +596,7 @@ func TestEngine_SpawnSet_AddsOnlyWhatIsMissing(t *testing.T) {
 	if err := e.SpawnSet(context.Background(), "ubuntu", "web", []string{specWeb, specDB, "8080:localhost:80"}); err != nil {
 		t.Fatalf("SpawnSet() err = %v", err)
 	}
-	want := []string{"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 8080:localhost:80 ubuntu"}
+	want := []string{"ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 8080:localhost:80 ubuntu"}
 	if got := s.Spawned(); !reflect.DeepEqual(got, want) {
 		t.Errorf("spawned = %q, want exactly %q", got, want)
 	}

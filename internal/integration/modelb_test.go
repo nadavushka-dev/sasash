@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nadavushka-dev/sasash/internal/controlmaster"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/run"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
@@ -32,9 +33,10 @@ import (
 
 const alias = "it"
 
-// modelBEngine starts a throwaway sshd, writes a Host block for it, puts an
-// ssh wrapper pinned to that config on PATH, and returns a real engine.
-func modelBEngine(t *testing.T) tunnel.Engine {
+// modelBEngine starts a throwaway sshd, writes a Host block for it (plus
+// any extra directive lines, as a managed block would carry), puts an ssh
+// wrapper pinned to that config on PATH, and returns a real engine.
+func modelBEngine(t *testing.T, extra ...string) tunnel.Engine {
 	t.Helper()
 	userKey, sshdPort, login := startSshd(t, run.OS{})
 	dir := t.TempDir()
@@ -49,6 +51,9 @@ func modelBEngine(t *testing.T) tunnel.Engine {
   UserKnownHostsFile /dev/null
   LogLevel ERROR
 `, alias, login, sshdPort, userKey)
+	for _, line := range extra {
+		conf += "  " + line + "\n"
+	}
 	confPath := filepath.Join(dir, "ssh_config")
 	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
 		t.Fatalf("WriteFile() err = %v", err)
@@ -315,5 +320,89 @@ func TestEngine_KillAll_SurvivorStaysRecorded(t *testing.T) {
 	waitFor(t, "listener on "+port+" to close", 5*time.Second, func() bool { return !listening(port) })
 	if f := forward(t, eng, spec); f.State != tunnel.Down || f.Pid != 0 {
 		t.Errorf("after the second KillAll: %+v, want down, no pid", f)
+	}
+}
+
+// TestEngine_Spawn_NeverSharesAMaster is SASASH.7.1's regression: the block
+// sasash saves carries the ControlMaster trio, and against a real OpenSSH
+// that made every tunnel process disappear. With no master alive,
+// `ControlMaster auto` + `ControlPersist` fork the master to the background
+// and the pid Spawn holds exits 0 (the handshake read it as dead; nothing
+// was recorded; the tunnel lived on unrecorded — the human's empty
+// forwards:[]). With a master alive, ssh hands the -L to the master and
+// exits 0, so the listener was the master's and Kill dropped nothing. The
+// argv's -S none is what makes both false; this test pins both halves.
+func TestEngine_Spawn_NeverSharesAMaster(t *testing.T) {
+	sock := filepath.Join(controlSocketDir(t), "cm.sock")
+	var trio []string
+	for _, d := range controlmaster.Trio {
+		trio = append(trio, d.Keyword+" "+d.Value)
+	}
+	const templatePath = "ControlPath ~/.ssh/cm/%C"
+	if len(trio) != 3 || trio[1] != templatePath {
+		t.Fatalf("controlmaster.Trio = %q, want the ControlPath line second", trio)
+	}
+	trio[1] = "ControlPath " + sock // the template's ~ is the passwd home: not ours to touch
+	eng := modelBEngine(t, trio...)
+	echo := startEcho(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	// The wrapper on PATH pins the block; these drive the interactive master
+	// the way the hybrid does (a shell's ControlMaster auto, -O check/exit).
+	// Own context per call: the -O exit in cleanup runs after the test's
+	// ctx is cancelled, and a master left behind holds sshd's stderr pipe
+	// open through its session child — startSshd's teardown would hang.
+	ssh := func(extra ...string) (run.Result, error) {
+		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer ccancel()
+		return run.OS{}.Run(cctx, append(append([]string{"ssh"}, extra...), alias)...)
+	}
+
+	// Half one: no master alive. The spawned pid must be the tunnel's own —
+	// alive, owning the listener — and must not have become a master.
+	portA := freePort(t)
+	specA := portA + ":127.0.0.1:" + echo
+	if err := eng.Spawn(ctx, alias, "", specA); err != nil {
+		t.Fatalf("Spawn(%s) under the trio err = %v", specA, err)
+	}
+	fa := forward(t, eng, specA)
+	if fa.State != tunnel.Up || fa.Pid <= 0 || !(run.OSSpawner{}).Alive(fa.Pid) {
+		t.Fatalf("ad-hoc after Spawn: %+v, want up with a live pid", fa)
+	}
+	if _, err := os.Stat(sock); err == nil {
+		t.Errorf("the tunnel process created the control socket %s: it became a master", sock)
+	}
+	if res, err := ssh("-O", "check"); err != nil || res.OK() {
+		t.Fatalf("ssh -O check with only a tunnel up = %v, %v; want no master\n%s", res.Code, err, res.Stderr)
+	}
+	roundTrip(t, dialThrough(t, portA), "one")
+
+	// Half two: a persisted master IS alive (as after an interactive
+	// connect). A new tunnel must still own its listener: killing it drops
+	// the port, and the master is not touched.
+	if res, err := ssh("-fN"); err != nil || !res.OK() {
+		t.Fatalf("ssh -fN (start the interactive master) = %v, %v\n%s", res.Code, err, res.Stderr)
+	}
+	t.Cleanup(func() { _, _ = ssh("-O", "exit") })
+	if res, err := ssh("-O", "check"); err != nil || !res.OK() {
+		t.Fatalf("ssh -O check after -fN = %v, %v\n%s", res.Code, err, res.Stderr)
+	}
+	portB := freePort(t)
+	specB := portB + ":127.0.0.1:" + echo
+	if err := eng.Spawn(ctx, alias, "", specB); err != nil {
+		t.Fatalf("Spawn(%s) beside a live master err = %v", specB, err)
+	}
+	if fb := forward(t, eng, specB); fb.State != tunnel.Up || fb.Pid <= 0 {
+		t.Fatalf("B beside a live master: %+v, want up with a pid", fb)
+	}
+	if err := eng.Kill(ctx, alias, specB); err != nil {
+		t.Fatalf("Kill(B) err = %v", err)
+	}
+	waitFor(t, "listener on "+portB+" to close", 5*time.Second, func() bool { return !listening(portB) })
+	if res, err := ssh("-O", "check"); err != nil || !res.OK() {
+		t.Errorf("ssh -O check after Kill(B) = %v, %v; killing a tunnel must not touch the master\n%s", res.Code, err, res.Stderr)
+	}
+	if fa := forward(t, eng, specA); fa.State != tunnel.Up {
+		t.Errorf("A after Kill(B): %+v, want still up", fa)
 	}
 }

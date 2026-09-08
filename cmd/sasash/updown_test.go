@@ -223,9 +223,9 @@ func TestRunUp_DrivesRealEngineArgv(t *testing.T) {
 		t.Fatalf("runUp() = %v, want 0 (stderr: %q)", got, stderr.String())
 	}
 	want := []string{
-		"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3000:localhost:3000 ubuntu",
-		"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3001:localhost:3001 ubuntu",
-		"ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4011:localhost:4011 ubuntu",
+		"ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3000:localhost:3000 ubuntu",
+		"ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 3001:localhost:3001 ubuntu",
+		"ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4011:localhost:4011 ubuntu",
 	}
 	if got := sp.Spawned(); !reflect.DeepEqual(got, want) {
 		t.Errorf("runUp() spawned = %v, want %v", got, want)
