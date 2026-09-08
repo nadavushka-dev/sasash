@@ -1585,8 +1585,9 @@ func (m Model) expansionLine() string {
 }
 
 // detailView renders the right pane for the selected host: one line per
-// path, glyph + name + address + latency/state, first alive path marked
-// active (probe.Select semantics: config order is preference).
+// path, glyph + name + address + latency/state, with ← active on the path
+// whose address is the block HostName — the one ssh actually dials
+// (SASASH.7.2), never first-reachable.
 func (m Model) detailView() string {
 	host, ok := m.Selected()
 	if !ok {

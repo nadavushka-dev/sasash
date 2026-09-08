@@ -783,4 +783,14 @@ func TestModel_View_ActiveIsHostNameNotFirstReachable(t *testing.T) {
 	if view := m2.View(); strings.Contains(view, "← active") {
 		t.Errorf("a HostName matching no path must mark none active:\n%s", view)
 	}
+	// A SINGLE @sasash path whose HostName has drifted: none active, not the
+	// lone path — the honest signal even though there is only one row and the
+	// switcher cannot offer p (SASASH.7.2's stuck case).
+	single := []hostmodel.Host{{Alias: "solo", HostName: "203.0.113.5", Paths: []probe.Path{{Name: "office", Host: "192.0.2.10"}}}}
+	m3 := ui.New(single, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
+	m3 = update(t, m3, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m3 = feed(t, m3, m3.Init())
+	if view := m3.View(); strings.Contains(view, "← active") {
+		t.Errorf("a single named path not matching the drifted HostName must not be active:\n%s", view)
+	}
 }

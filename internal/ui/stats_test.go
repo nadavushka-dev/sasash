@@ -146,9 +146,7 @@ func TestModel_View_PathSessionMemory(t *testing.T) {
 	hosts := []hostmodel.Host{{Alias: "web", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}}}
 	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond)
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{Clock: clock.now})
-	// The sole path is always active (SASASH.7.2), so the line carries
-	// "← active" beside the session shape — give it room.
-	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = feed(t, m, m.Init())
 	if view := m.View(); !lineHas(view, "● lan", "▁", "20ms", "1/1") {
 		t.Errorf("View() after one round:\n%s", view)
@@ -164,9 +162,7 @@ func TestModel_View_PathSessionMemory(t *testing.T) {
 	_, tick = m.Update(ui.RefreshTick())
 	m = feed(t, m, tick)
 	clock.advance(3 * time.Minute)
-	// The sole path stays active though down (SASASH.7.2); the marker sits
-	// between the state and the down-since on the same line.
-	if view := m.View(); !lineHas(view, "○ lan", "down", "← active", "3m", "▁█·", "20ms–40ms", "2/3") {
+	if view := m.View(); !lineHas(view, "○ lan", "down 3m", "▁█·", "20ms–40ms", "2/3") {
 		t.Errorf("View() after the miss:\n%s", view)
 	}
 	// A path never seen up this session carries no down-since.

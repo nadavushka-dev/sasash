@@ -47,11 +47,15 @@ func pathRows(host hostmodel.Host, b pathBlock) (rows []probe.Path, at []int) {
 // activeMark is the path ssh ACTUALLY dials among all rendered rows: the one
 // whose address is hostName (the block's HostName directive), never
 // first-reachable (SASASH.7.2 — a HostName out of sync with a reachable path
-// must read honestly). A single-path host has one route, always it; when
-// hostName matches no path none is active, so the marker never claims ssh
-// goes to a path it will not. Host.Paths space — the render's own order.
+// must read honestly). The one DERIVED route — a host with no @sasash path
+// metas gets a single nameless path whose address IS the HostName-or-alias
+// ssh dials (hostmodel.Build) — is always it. Otherwise the active path is
+// the one whose address matches hostName; a named path that does not match
+// is NOT active, so the marker never claims ssh goes where it will not (a
+// single @sasash path whose HostName has drifted reads as none active, the
+// honest signal). Host.Paths space — the render's own order.
 func activeMark(paths []probe.Path, hostName string) int {
-	if len(paths) == 1 {
+	if len(paths) == 1 && paths[0].Name == "" {
 		return 0
 	}
 	return activeIndex(paths, hostName)
