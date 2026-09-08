@@ -32,6 +32,7 @@ type editFwdDoneMsg struct {
 // openEditFwd is E on a highlighted row: the prompt opens PREFILLED with
 // the spec, bound to the row.
 func (m Model) openEditFwd(host hostmodel.Host, row tunnel.Forward) (tea.Model, tea.Cmd) {
+	host = m.tunnelHost(host)
 	ts, known := m.tstatus[host.Alias]
 	live := known && ts.err == nil && row.State == tunnel.Up && row.Pid > 0
 	if row.Set == "" && !live {

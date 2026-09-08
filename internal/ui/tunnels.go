@@ -26,6 +26,9 @@ type Tunneler interface {
 	Spawn(ctx context.Context, host, set, spec string) error
 	Kill(ctx context.Context, host, spec string) error
 	KillAll(ctx context.Context, host string) error
+	// Adopt migrates a host's variant-keyed tunnel state into the host
+	// (SASASH.4.23); tunnels belong to the machine, not the path-alias.
+	Adopt(host string, variants []string) error
 	Exit(ctx context.Context, host string) error
 	Forget(host, spec string) error
 }
@@ -77,11 +80,22 @@ func exitArgv(host string) []string        { return []string{"ssh", "-O", "exit"
 // cannot fan out a process per keystroke, and results cannot land out of
 // order.
 func (m Model) tunnelStatusCmd(host hostmodel.Host) tea.Cmd {
+	host = m.tunnelHost(host) // poll the machine, whichever alias is selected
 	if m.tunnels == nil || m.tinflight[host.Alias] || m.switching[host.Alias] {
 		return nil
 	}
 	m.tinflight[host.Alias] = true
 	eng := m.tunnels
+	// Migrate any variant-keyed tunnels into the parent BEFORE dispatching
+	// the poll, synchronously on the UI thread (SASASH.4.23): Adopt and a
+	// user write-action (SpawnSet/Kill) are both unlocked writers of
+	// <parent>.json, and only the tinflight gate above serializes per host.
+	// Running Adopt here — where the gate guarantees no action is in flight,
+	// and the single-threaded Update guarantees none can begin mid-call —
+	// keeps the migration off the poll goroutine that races those actions.
+	// It writes nothing once there is nothing left to adopt, so the recurring
+	// poll cost is a few stats. A write failure just leaves it for next time.
+	_ = eng.Adopt(host.Alias, m.variantAliasesOf(host.Alias))
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), tunnelStatusTimeout)
 		defer cancel()
@@ -128,6 +142,7 @@ func (m Model) hostByAlias(alias string) (hostmodel.Host, bool) {
 // one lands — the declared sets, flagged pending so they render as
 // unknown rather than down.
 func (m Model) forwardRows(host hostmodel.Host) (rows []tunnel.Forward, pending bool) {
+	host = m.tunnelHost(host) // tunnels belong to the machine, not the path-alias
 	if ts, ok := m.tstatus[host.Alias]; ok && ts.err == nil {
 		return demoteShared(ts.status.Forwards), false
 	}
@@ -242,7 +257,9 @@ func (m Model) actionPreview() (argv []string, more int) {
 		return killArgv(pids[0]), len(pids) - 1
 	}
 	pending := m.notUp(host, specs)
-	return spawnArgv(host.Alias, pending[0]), len(pending) - 1
+	// The parent alias: the spawn runs against the machine (toggleCmd
+	// canonicalizes), so the preview must not name the path-variant.
+	return spawnArgv(m.tunnelHost(host).Alias, pending[0]), len(pending) - 1
 }
 
 // setPids lists the live pids of a set's up rows, in row order.
@@ -299,6 +316,7 @@ func (m Model) enterPreview(alias string) []string {
 // comes back as the engine's refusal, which the notice shows rather than
 // hides.
 func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
+	host = m.tunnelHost(host)
 	eng, alias, set := m.tunnels, host.Alias, row.Set
 	specs, allUp := m.setSpecs(host, set)
 	name := setLabel(set)
@@ -318,6 +336,7 @@ func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 // the notice (a master that is not running says so), and a "No
 // ControlPath" refusal is what opens the trio offer (SASASH.4.18).
 func (m Model) restartCmd(host hostmodel.Host) tea.Cmd {
+	host = m.tunnelHost(host)
 	eng, alias := m.tunnels, host.Alias
 	return m.tunnelActionCmd(alias, "restart", "master exited — a fresh one starts on the next connect", func(ctx context.Context) error {
 		return eng.Exit(ctx, alias)
@@ -349,6 +368,7 @@ func oneLine(err error, host string) string {
 // process of ours has nothing to kill; the engine still retires its
 // record (a named row) or keeps it as the ad-hoc declaration.
 func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
+	host = m.tunnelHost(host)
 	eng, alias, spec := m.tunnels, host.Alias, row.Spec
 	done := "killed " + spec + " — its connections dropped with it"
 	if row.Pid == 0 {
@@ -363,6 +383,7 @@ func (m Model) cancelCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 // the interactive master (`ssh -O exit`) when the last poll saw one. A
 // master that is not running is not asked to exit.
 func (m Model) exitCmd(host hostmodel.Host) tea.Cmd {
+	host = m.tunnelHost(host)
 	eng, alias := m.tunnels, host.Alias
 	ts, known := m.tstatus[alias]
 	master := known && ts.err == nil && ts.status.Master
@@ -385,6 +406,7 @@ func (m Model) exitCmd(host hostmodel.Host) tea.Cmd {
 // word, so the state survives NO_COLOR. Nothing is collapsed: listening
 // (the port answers, but no process of ours) is not up.
 func (m Model) tunnelsView(host hostmodel.Host) string {
+	host = m.tunnelHost(host) // the parent's tunnels, whichever alias is selected
 	var b strings.Builder
 	b.WriteString("\n\n" + m.styles.SectionLabel.Render("tunnels"))
 

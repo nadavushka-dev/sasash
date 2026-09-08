@@ -901,3 +901,103 @@ func TestModel_View_FocusNeverHidesPathsOrTunnels(t *testing.T) {
 		}
 	}
 }
+
+// TestModel_View_AdoptsVariantTunnelUnderTheParent pins SASASH.4.23's
+// migration: a + recorded under a variant alias (ubuntu1.office) before the
+// variant rows were retired surfaces under the parent machine (ubuntu1) on
+// the next poll, and the variant state file is folded away.
+func TestModel_View_AdoptsVariantTunnelUnderTheParent(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu1.office.json"),
+		[]byte(`{"forwards":[{"set":"","spec":"8080:localhost:8080","pid":77}]}`), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	hosts := []hostmodel.Host{
+		{Alias: "ubuntu1", Paths: []probe.Path{{Name: "office", Host: "192.0.2.10"}, {Name: "vpn", Host: "198.51.100.5"}}},
+		{Alias: "ubuntu1.office", Paths: []probe.Path{{Host: "192.0.2.10"}}},
+	}
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu1")
+	d := fakedial.New().Up("127.0.0.1:8080", time.Millisecond)
+	sp := fakespawn.New().Dial(d).Live(77)
+	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: stateDir, Timeout: 50 * time.Millisecond}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+
+	if view := m.View(); !strings.Contains(view, "8080:localhost:8080") {
+		t.Errorf("the parent's tunnels pane should surface the adopted ad-hoc:\n%s", view)
+	}
+	if b, err := os.ReadFile(filepath.Join(stateDir, "ubuntu1.office.json")); err == nil {
+		t.Errorf("variant state file should be removed, got %s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(stateDir, "ubuntu1.json")); !strings.Contains(string(b), "8080:localhost:8080") {
+		t.Errorf("parent state should hold the adopted tunnel, got %s", b)
+	}
+}
+
+// TestModel_Update_AddForwardOnVariantAttributesToParent pins that pressing
+// + while a filter-surfaced variant is selected binds the forward to the
+// parent machine, never the path-forcing alias (SASASH.4.23).
+func TestModel_Update_AddForwardOnVariantAttributesToParent(t *testing.T) {
+	t.Parallel()
+	hosts := []hostmodel.Host{
+		{Alias: "ubuntu1", Paths: []probe.Path{{Name: "office", Host: "192.0.2.10"}, {Name: "vpn", Host: "198.51.100.5"}}},
+		{Alias: "ubuntu1.office", Paths: []probe.Path{{Host: "192.0.2.10"}}},
+	}
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu1")
+	d := fakedial.New()
+	eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+	m = press(t, m, "/", "u", "b", "u", "n", "t", "u", "1", ".", "o", "f", "f", "i", "c", "e", "enter")
+	if host, _ := m.Selected(); host.Alias != "ubuntu1.office" {
+		t.Fatalf("Selected() = %q, want the surfaced variant ubuntu1.office", host.Alias)
+	}
+	m = press(t, m, "+")
+	if view := m.View(); !strings.Contains(view, "forward ubuntu1:") || strings.Contains(view, "forward ubuntu1.office:") {
+		t.Errorf("+ on a variant should bind the prompt to the parent ubuntu1:\n%s", view)
+	}
+}
+
+// TestModel_Update_CancelForwardOnVariantKeysTheParent pins that x on a
+// forward row keys the parent machine's state even when a variant is the
+// selected host (SASASH.4.23): the kill hits the parent's recorded pid, not
+// an empty variant state file.
+func TestModel_Update_CancelForwardOnVariantKeysTheParent(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	// A live ad-hoc recorded under the PARENT (as the migration leaves it).
+	if err := os.WriteFile(filepath.Join(stateDir, "ubuntu1.json"),
+		[]byte(`{"forwards":[{"set":"","spec":"18099:localhost:18099","pid":77}]}`), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	hosts := []hostmodel.Host{
+		{Alias: "ubuntu1", Paths: []probe.Path{{Name: "office", Host: "192.0.2.10"}, {Name: "vpn", Host: "198.51.100.5"}}},
+		{Alias: "ubuntu1.office", Paths: []probe.Path{{Host: "192.0.2.10"}}},
+	}
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu1")
+	d := fakedial.New().Up("127.0.0.1:18099", time.Millisecond)
+	sp := fakespawn.New().Dial(d).Live(77)
+	eng := tunnel.Engine{Runner: r, Spawner: sp, Dialer: d, StateDir: stateDir, Timeout: 50 * time.Millisecond}
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Tunnels: eng})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	m = feed(t, m, m.Init())
+	// Surface and select the variant, focus the tunnels pane on the row.
+	m = press(t, m, "/", "u", "b", "u", "n", "t", "u", "1", ".", "o", "f", "f", "i", "c", "e", "enter", "l")
+	if host, _ := m.Selected(); host.Alias != "ubuntu1.office" || !ui.TunnelsFocused(m) {
+		t.Fatalf("want the variant selected with tunnels focus; got %q focused %v", host.Alias, ui.TunnelsFocused(m))
+	}
+	next, cmd := m.Update(keyMsg("x"))
+	m = next.(ui.Model)
+	if cmd == nil {
+		t.Fatalf("Update(x) on the variant cmd = nil, want the kill cmd")
+	}
+	m = update(t, m, cmd())
+	// The parent's recorded pid was killed — the op keyed ubuntu1, not the
+	// empty ubuntu1.office state.
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{77}) {
+		t.Errorf("x on the variant killed = %v, want the parent's pid [77]", got)
+	}
+}

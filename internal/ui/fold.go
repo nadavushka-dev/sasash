@@ -61,6 +61,33 @@ func computeVariants(hosts []hostmodel.Host) map[string]string {
 	return out
 }
 
+// tunnelHost resolves the host a tunnel belongs to: the canonical parent
+// when host is a generated <parent>.<path> variant, else host itself.
+// Tunnels belong to the machine, not the path-forcing alias (SASASH.4.23),
+// so every tunnel op — poll, render, +, space/x/E, r/X — goes through here
+// and a variant never owns a separate tunnel list. A variant whose parent
+// is somehow not loaded falls back to itself (nothing to attribute to).
+func (m Model) tunnelHost(host hostmodel.Host) hostmodel.Host {
+	if name, ok := m.fold.variants[host.Alias]; ok {
+		if parent, ok := m.hostByAlias(strings.TrimSuffix(host.Alias, "."+name)); ok {
+			return parent
+		}
+	}
+	return host
+}
+
+// variantAliasesOf lists the generated variant aliases of parent — the
+// state files Engine.Adopt migrates into it (SASASH.4.23).
+func (m Model) variantAliasesOf(parent string) []string {
+	var out []string
+	for alias, name := range m.fold.variants {
+		if strings.TrimSuffix(alias, "."+name) == parent {
+			out = append(out, alias)
+		}
+	}
+	return out
+}
+
 // termNamesVariant reports whether a filter term explicitly asks for the
 // variant: it contains the whole alias, or it is a substring of the
 // ".<name>" suffix at least as specific as the name itself — so a bare

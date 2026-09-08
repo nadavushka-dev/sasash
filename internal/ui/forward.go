@@ -82,7 +82,7 @@ func withLocalPort(spec string, field int, port string) string {
 // moved on still adds to the host the user meant.
 func (m Model) openForward(host hostmodel.Host, value string) (Model, tea.Cmd) {
 	m.mode = promptForward
-	m.fwdHost = host.Alias
+	m.fwdHost = m.tunnelHost(host).Alias // the tunnel is the machine's, not the variant's
 	m.prompt.Reset()
 	m.prompt.Placeholder = "local:host:port  e.g. 8080:localhost:80"
 	m.prompt.SetValue(value)
