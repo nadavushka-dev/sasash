@@ -815,9 +815,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.removeErr != nil:
 			m.notice = "not deleted: " + oneLine(msg.removeErr, msg.host)
 		case msg.adhoc:
-			m.notice = "forgot " + msg.name + " on " + msg.host
+			m.notice = "forgot " + msg.name + " on " + msg.host + stoppedSuffix(msg.stopped)
 		default:
-			m.notice = "deleted " + msg.name + " from " + msg.host
+			m.notice = "deleted " + msg.name + " on " + msg.host + stoppedSuffix(msg.stopped)
 			if msg.killErr != nil {
 				m.notice = "deleted " + msg.name + " but the down errored: " + oneLine(msg.killErr, msg.host)
 			}

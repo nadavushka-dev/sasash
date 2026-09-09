@@ -1028,56 +1028,72 @@ func TestModel_Update_DeleteForwardSet_NotLive(t *testing.T) {
 		return nil
 	})
 	m = press(t, m, "l") // web's first row highlighted
-	m = press(t, m, "X")
-	view := m.View()
-	if !ui.PopupOpen(m) || !strings.Contains(view, "delete web on ubuntu") || !strings.Contains(view, "@sasash forwards web") || !strings.Contains(view, specWeb0) || !strings.Contains(view, specWeb1) {
-		t.Fatalf("D should confirm with the exact line:\n%s", view)
+	next, cmd := m.Update(keyMsg("X"))
+	m = next.(ui.Model)
+	// No confirm gate (SASASH.4.30): X is the deed, not a question.
+	if ui.PopupOpen(m) || cmd == nil {
+		t.Fatalf("X should delete at once, no popup: popup %v, cmd %v", ui.PopupOpen(m), cmd != nil)
 	}
-	// A not-live set must NOT preview a kill — the two branches are distinct.
-	if strings.Contains(view, "web is live") || strings.Contains(view, "kill -TERM") {
-		t.Errorf("a not-live set must not preview a down:\n%s", view)
-	}
-	if !strings.Contains(view, "not running") {
-		t.Errorf("the not-live preview should say the tunnels are not running:\n%s", view)
-	}
-	if c := press(t, m, "esc"); ui.PopupOpen(c) || len(removed) != 0 || !strings.Contains(c.View(), "web kept") {
-		t.Errorf("esc cancels, removes nothing:\n%s", c.View())
-	}
-	next, cmd := m.Update(keyMsg("enter"))
-	m = update(t, next.(ui.Model), cmd())
+	m = update(t, m, cmd())
 	if want := [][]string{{"ubuntu", "web"}}; !reflect.DeepEqual(removed, want) {
 		t.Errorf("removeForwardSet = %v, want %v", removed, want)
 	}
 	if got := sp.Killed(); len(got) != 0 {
 		t.Errorf("a not-live delete kills nothing, killed %v", got)
 	}
-	if view := m.View(); !strings.Contains(view, "deleted web from ubuntu") {
-		t.Errorf("notice:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "deleted web on ubuntu") || strings.Contains(view, "stopped") {
+		t.Errorf("notice should say deleted, nothing stopped:\n%s", view)
 	}
 }
 
 func TestModel_Update_DeleteForwardSet_LiveIsTwoStep(t *testing.T) {
 	t.Parallel()
-	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
-	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
-	sp := fakespawn.New().Dial(d).Live(41)
-	stateDir := t.TempDir()
-	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
-	m := polledSpawn(t, r, sp, d, stateDir)
-	var removed [][]string
-	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed = append(removed, []string{alias, name}); return nil })
-	m = press(t, m, "l") // web0 highlighted, up
-	m = press(t, m, "X")
-	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "web is live") || !strings.Contains(view, "kill -TERM 41") || !strings.Contains(view, "@sasash forwards web") {
-		t.Fatalf("D on a live set previews down-then-delete:\n%s", view)
+	tests := []struct {
+		name  string
+		state string
+		up    []string
+		pids  []int
+		want  string
+	}{
+		{name: "one live tunnel", state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41}]}`,
+			up: []string{"127.0.0.1:3000"}, pids: []int{41}, want: "deleted web on ubuntu — 1 tunnel stopped"},
+		{name: "two live tunnels", state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41},{"set":"web","spec":"` + specWeb1 + `","pid":42}]}`,
+			up: []string{"127.0.0.1:3000", "127.0.0.1:3001"}, pids: []int{41, 42}, want: "deleted web on ubuntu — 2 tunnels stopped"},
 	}
-	next, cmd := m.Update(keyMsg("enter"))
-	m = update(t, next.(ui.Model), cmd())
-	if got := sp.Killed(); !reflect.DeepEqual(got, []int{41}) {
-		t.Errorf("live delete KillSets pid 41, killed %v", got)
-	}
-	if want := [][]string{{"ubuntu", "web"}}; !reflect.DeepEqual(removed, want) {
-		t.Errorf("removeForwardSet = %v, want %v", removed, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+			d := fakedial.New()
+			for _, addr := range tt.up {
+				d.Up(addr, time.Millisecond)
+			}
+			sp := fakespawn.New().Dial(d)
+			for _, pid := range tt.pids {
+				sp.Live(pid)
+			}
+			stateDir := t.TempDir()
+			writeState(t, stateDir, tt.state)
+			m := polledSpawn(t, r, sp, d, stateDir)
+			var removed [][]string
+			m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed = append(removed, []string{alias, name}); return nil })
+			m = press(t, m, "l") // web0 highlighted, up
+			next, cmd := m.Update(keyMsg("X"))
+			m = next.(ui.Model)
+			if ui.PopupOpen(m) || cmd == nil {
+				t.Fatalf("X on a live set should down-then-delete at once, no popup: popup %v, cmd %v", ui.PopupOpen(m), cmd != nil)
+			}
+			m = update(t, m, cmd())
+			if got := sp.Killed(); !reflect.DeepEqual(got, tt.pids) {
+				t.Errorf("live delete KillSets %v, killed %v", tt.pids, got)
+			}
+			if want := [][]string{{"ubuntu", "web"}}; !reflect.DeepEqual(removed, want) {
+				t.Errorf("removeForwardSet = %v, want %v", removed, want)
+			}
+			if view := m.View(); !strings.Contains(view, tt.want) {
+				t.Errorf("View() lacks %q:\n%s", tt.want, view)
+			}
+		})
 	}
 }
 
@@ -1092,12 +1108,12 @@ func TestModel_Update_DeleteAdhoc_ForgetsNoConfig(t *testing.T) {
 	removeCalled := false
 	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
 	m = press(t, m, "l", "G") // last row = the ad-hoc 8080
-	m = press(t, m, "X")
-	if view := m.View(); !ui.PopupOpen(m) || !strings.Contains(view, "forget unsaved on ubuntu") || !strings.Contains(view, "8080:localhost:8080") || !strings.Contains(view, "state only") {
-		t.Fatalf("D on an ad-hoc row confirms a forget:\n%s", view)
+	next, cmd := m.Update(keyMsg("X"))
+	m = next.(ui.Model)
+	if ui.PopupOpen(m) || cmd == nil {
+		t.Fatalf("X on an ad-hoc row forgets at once, no popup: popup %v, cmd %v", ui.PopupOpen(m), cmd != nil)
 	}
-	next, cmd := m.Update(keyMsg("enter"))
-	m = update(t, next.(ui.Model), cmd())
+	m = update(t, m, cmd())
 	if got := sp.Killed(); !reflect.DeepEqual(got, []int{55}) {
 		t.Errorf("ad-hoc forget kills pid 55, killed %v", got)
 	}
@@ -1108,7 +1124,7 @@ func TestModel_Update_DeleteAdhoc_ForgetsNoConfig(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(stateDir, "ubuntu.json")); strings.Contains(string(b), "8080") {
 		t.Errorf("the ad-hoc record should be forgotten, state = %s", b)
 	}
-	if view := m.View(); !strings.Contains(view, "forgot 8080:localhost:8080 on ubuntu") {
+	if view := m.View(); !strings.Contains(view, "forgot 8080:localhost:8080 on ubuntu — 1 tunnel stopped") {
 		t.Errorf("notice:\n%s", view)
 	}
 }
@@ -1139,8 +1155,8 @@ func TestModel_Update_LifecycleGuards(t *testing.T) {
 		removeCalled := false
 		m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removeCalled = true; return nil })
 		m = press(t, m, "l", "G", "X") // last row is the recorded extra set
-		if v := m.View(); ui.PopupOpen(m) || !strings.Contains(v, "extra is not declared on ubuntu") {
-			t.Errorf("D on an undeclared set should refuse, not confirm:\n%s", v)
+		if v := m.View(); !strings.Contains(v, "extra is not declared on ubuntu") {
+			t.Errorf("X on an undeclared set should refuse:\n%s", v)
 		}
 		if removeCalled {
 			t.Error("nothing should be removed for an undeclared set")
@@ -1159,8 +1175,8 @@ func TestModel_Update_DeleteAdhoc_SurvivorKeepsRecord(t *testing.T) {
 	stateDir := t.TempDir()
 	writeState(t, stateDir, `{"forwards":[{"set":"","spec":"8080:localhost:8080","pid":55}]}`)
 	m := polledSpawn(t, r, sp, d, stateDir)
-	m = press(t, m, "l", "G", "X")
-	next, cmd := m.Update(keyMsg("enter"))
+	m = press(t, m, "l", "G")
+	next, cmd := m.Update(keyMsg("X"))
 	m = update(t, next.(ui.Model), cmd())
 	// Forget was SKIPPED because the kill errored: the record is kept, never
 	// orphaning a process sasash could not end.
