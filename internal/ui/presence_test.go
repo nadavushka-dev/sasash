@@ -3,6 +3,7 @@ package ui_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -80,6 +81,45 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 				t.Errorf("line %d = %q, want the blank under the header", hh-1, lines[hh-1])
 			}
 		})
+	}
+}
+
+// The default face is the human's pick (SASASH.4.29): a choice no other
+// test can see.
+func TestRenderLogo_DefaultFaceIsSmslant(t *testing.T) {
+	t.Parallel()
+	if got := ui.DefaultLogoFace(); got != "smslant" {
+		t.Errorf("DefaultLogoFace() = %q, want smslant", got)
+	}
+}
+
+// The wordmark yields to the tally, and the tally's text changes width
+// during a session (probing… → the round's counts): at a width where
+// that flips the header, the list must be re-sized to the pane area it
+// has now — not the one the last resize saw.
+func TestModel_Update_ListFollowsTheHeaderHeight(t *testing.T) {
+	t.Parallel()
+	// 57 cols: the wordmark (34) + 1 + 3 + "2 hosts · probing…" (19)
+	// fits exactly; the round's "2 hosts · 2 reachable" (21) does not.
+	hosts := []hostmodel.Host{
+		{Alias: "alpha", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}},
+		{Alias: "bravo", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.20"}}},
+	}
+	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond).Up("192.0.2.20:22", 5*time.Millisecond)
+	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
+	m = update(t, m, tea.WindowSizeMsg{Width: 57, Height: 40})
+	if ui.HeaderHeight(m) <= 2 {
+		t.Fatalf("HeaderHeight() before the round = %d, want the wordmark (fixture geometry)", ui.HeaderHeight(m))
+	}
+	m = update(t, m, m.Init()())
+	if ui.HeaderHeight(m) != 2 {
+		t.Fatalf("HeaderHeight() after the round = %d, want the plain title (fixture geometry)", ui.HeaderHeight(m))
+	}
+	if got, want := ui.ListHeight(m), ui.ContentHeight(m); got != want {
+		t.Errorf("list height = %d after the header changed, want the pane area %d", got, want)
+	}
+	if lines := strings.Split(m.View(), "\n"); len(lines) != 40 {
+		t.Errorf("View() is %d lines, want 40", len(lines))
 	}
 }
 

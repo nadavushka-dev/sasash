@@ -662,6 +662,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.list.Index()
 	next, cmd := m.update(msg)
 	n := next.(Model)
+	// The header's height follows its content (the wordmark yields to
+	// the tally, SASASH.4.29), so the pane area can change without a
+	// resize: keep the list sized to it, or its paging would trust a
+	// stale height and the frame clamp would swallow rows.
+	if h := n.contentHeight(); n.list.Height() != h {
+		n.list.SetSize(n.listWidth(), h)
+	}
 	// Backstop for the early-return paths (half pages, reloads, a
 	// filter clearing): the key path corrects itself before its
 	// selection tail, so this is a no-op there.

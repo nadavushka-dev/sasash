@@ -264,7 +264,9 @@ const (
 	MinLogoHeight = minLogoHeight
 )
 
-func HeaderHeight(m Model) int { return m.headerHeight() }
+func HeaderHeight(m Model) int  { return m.headerHeight() }
+func ContentHeight(m Model) int { return m.contentHeight() }
+func ListHeight(m Model) int    { return m.list.Height() }
 func LogoFaceNames() []string {
 	var out []string
 	for _, f := range logoFaces {

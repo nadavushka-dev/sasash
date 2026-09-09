@@ -52,8 +52,9 @@ var logoFaces = []logoFace{
 var logoFaceName = "smslant"
 
 // minLogoHeight is the shortest terminal that shows the wordmark. It
-// costs four rows over the plain title; a full-screen terminal has them
-// to spare, a classic 80x24 window or the half of a split does not.
+// costs rows over the plain title (three for smslant); a full-screen
+// terminal has them to spare, a classic 80x24 window or the half of a
+// split does not.
 const minLogoHeight = 32
 
 // wakeGap separates the face from its chevrons.
