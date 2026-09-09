@@ -30,6 +30,7 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 		{name: "at the threshold", width: 100, height: ui.MinLogoHeight, wantLogo: true},
 		{name: "one row short", width: 100, height: ui.MinLogoHeight - 1, wantLogo: false},
 		{name: "classic 80x24", width: 80, height: 24, wantLogo: false},
+		{name: "half of a 60-row screen", width: 200, height: 30, wantLogo: false},
 		{name: "tall but narrow", width: 40, height: 40, wantLogo: false},
 	}
 	for _, tt := range tests {

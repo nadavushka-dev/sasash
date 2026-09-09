@@ -64,10 +64,15 @@ func (hostDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
 
 // Column widths: the prefix and glyph, the latency ("1.234s" at most
 // from spellLatency's rounding), and the forward count ("12 up").
+// minAliasCells is the alias room the count column must leave: below
+// it (a narrow pane, the classic 80 columns) the column is dropped
+// whole rather than clipping every alias to a stub — the header tally
+// still counts the forwards and the detail pane still lists them.
 const (
-	rowLead  = 4 // "› " + glyph + " "
-	latWidth = 6
-	upWidth  = 5
+	rowLead       = 4 // "› " + glyph + " "
+	latWidth      = 6
+	upWidth       = 5
+	minAliasCells = 12
 )
 
 // rowFixed is what a row spends beside the alias.
@@ -77,6 +82,12 @@ func rowFixed(tunnels bool) int {
 		n += 2 + upWidth
 	}
 	return n
+}
+
+// withCount reports whether the rows carry the forward-count column:
+// the tunnels section is on and the pane keeps minAliasCells beside it.
+func (d hostDelegate) withCount(m list.Model) bool {
+	return d.tunnels && m.Width()-rowFixed(true) >= minAliasCells
 }
 
 // aliasWidth is the alias column: the longest listed alias, within what
@@ -89,7 +100,7 @@ func (d hostDelegate) aliasWidth(m list.Model) int {
 			longest = max(longest, lipgloss.Width(h.host.Alias))
 		}
 	}
-	return max(min(longest, m.Width()-rowFixed(d.tunnels)), 1)
+	return max(min(longest, m.Width()-rowFixed(d.withCount(m))), 1)
 }
 
 // rowStatus picks the path a row reports: the block's HostName path —
@@ -175,7 +186,7 @@ func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	alias += strings.Repeat(" ", aliasW-lipgloss.Width(alias))
 
 	row := seg(base, prefix) + glyph + seg(base, " "+alias) + seg(d.styles.PathExtra, fmt.Sprintf("  %*s", latWidth, extra))
-	if d.tunnels {
+	if d.withCount(m) {
 		up := ""
 		if n := d.upCount(it.host); n > 0 {
 			up = fmt.Sprintf("%d up", n)

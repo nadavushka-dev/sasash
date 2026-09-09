@@ -123,6 +123,40 @@ func TestModel_View_RowsCarryTunnelCount(t *testing.T) {
 	}
 }
 
+func TestModel_View_NarrowPaneDropsTheCountColumn(t *testing.T) {
+	t.Parallel()
+	// At 80 columns the list pane cannot hold a real alias beside the
+	// count column, so the column goes whole and the alias stays whole;
+	// wider, the column is there (reserved, blank until a poll says up).
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+	tests := []struct {
+		name      string
+		width     int
+		wantCount bool
+	}{
+		{name: "classic 80", width: 80, wantCount: false},
+		{name: "wide", width: 100, wantCount: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := tunnelModelSpawn(t, r, fakespawn.New().Dial(d).Live(41), d, stateDir)
+			m = update(t, m, tea.WindowSizeMsg{Width: tt.width, Height: 24})
+			m = feed(t, m, m.Init())
+			row := rowOf(t, m.View(), "ubuntu")
+			if got := strings.Contains(row, "1 up"); got != tt.wantCount {
+				t.Errorf("row = %q, count shown %v, want %v", row, got, tt.wantCount)
+			}
+			if !strings.Contains(row, "› ○ ubuntu ") {
+				t.Errorf("row = %q, want the whole alias", row)
+			}
+		})
+	}
+}
+
 func TestModel_View_LongAliasKeepsTheStatusColumns(t *testing.T) {
 	t.Parallel()
 	// The alias is cut with a visible ellipsis; the status column after

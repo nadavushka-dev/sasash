@@ -204,6 +204,21 @@ lie), and `ExitOnForwardFailure` catches the one that appears in between.
 
 Two panes. Left: filterable host list. Right: detail for the selected host.
 
+Presence (SASASH.4.29). Every host row is glanceable: `› ● api        67ms  2 up` — the
+reachability glyph (`●` up / `○` down / `◌` pending) and latency of the path ssh dials (the
+block's `HostName` path, the same rule as the detail's `← active`; first alive in config order
+when no path is the HostName), and the host's forwards up as of its last poll (blank when
+never polled or none up). Rows are tabular over the longest listed alias, a long alias is cut
+with `…` so the columns survive, and the count column is reserved whenever the tunnels
+section is on and the pane keeps 12 alias cells beside it (a narrower pane drops the column
+whole rather than clipping every alias), so the detail pane never shifts. The rows read the maps the detail pane
+already reads — never a probe, poll, or config read of their own. The header is a slanted
+ascii wordmark with a `»` wake (palette-colored, plain ascii under `NO_COLOR`) when the
+terminal has at least 32 rows and the columns for it, else the one-line title; the tally
+rides the wordmark's baseline row. On a terminal wider than 120 columns the frame is centered
+horizontally (the cap places, it never cuts: a preview or plan row still runs to the
+terminal's edge); vertically the frame stays top-anchored.
+
 The list is attention-ordered, not capability-ordered: *managed* hosts — declared in
 `sasash.conf`, or carrying any `@sasash` meta of their own — list first, in config order;
 every other ssh_config entry follows below a blank spacer and a divider row (`other
