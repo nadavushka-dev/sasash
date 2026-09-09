@@ -13,7 +13,7 @@ Set TypingSpeed 40ms
 Set Padding 10
 
 Hide
-Type `mkdir -p demo/out/bin; rm -rf demo/out/home; cp -R demo/home demo/out/home; python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"127.0.0.1\",2222));s.listen();time.sleep(600)" & for f in slant smslant speed; do go build -ldflags "-X github.com/nadavushka-dev/sasash/internal/ui.logoFaceName=$f" -o demo/out/bin/sasash-$f ./cmd/sasash; done; clear`
+Type `mkdir -p demo/out/bin; rm -rf demo/out/home; cp -R demo/home demo/out/home; python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"127.0.0.1\",2222));s.listen();time.sleep(600)" & sleep 0.5; for f in slant smslant speed; do go build -ldflags "-X github.com/nadavushka-dev/sasash/internal/ui.logoFaceName=$f" -o demo/out/bin/sasash-$f ./cmd/sasash; done; clear`
 Enter
 Sleep 8s
 Type `clear; HOME="$PWD/demo/out/home" demo/out/bin/sasash-slant`

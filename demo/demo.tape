@@ -25,7 +25,7 @@ Set TypingSpeed 40ms
 Set Padding 10
 
 Hide
-Type `mkdir -p demo/out; rm -rf demo/out/home; cp -R demo/home demo/out/home; python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"127.0.0.1\",2222));s.listen();time.sleep(600)" & clear; HOME="$PWD/demo/out/home" "${SASASH_BIN:-./sasash}"`
+Type `mkdir -p demo/out; rm -rf demo/out/home; cp -R demo/home demo/out/home; python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"127.0.0.1\",2222));s.listen();time.sleep(600)" & sleep 0.5; clear; HOME="$PWD/demo/out/home" "${SASASH_BIN:-./sasash}"`
 Enter
 Sleep 2s
 Show
