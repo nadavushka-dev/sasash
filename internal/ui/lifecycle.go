@@ -55,6 +55,7 @@ func (m Model) openDeclareFwd(host hostmodel.Host) (Model, tea.Cmd) {
 func (m Model) deleteFwd(host hostmodel.Host, row tunnel.Forward) (Model, tea.Cmd) {
 	host = m.tunnelHost(host)
 	if m.tinflight[host.Alias] {
+		m.notice = busyNotice(host.Alias) // a poll or an action owns the host: say so, X is not a queue
 		return m, nil
 	}
 	if row.Set == "" {

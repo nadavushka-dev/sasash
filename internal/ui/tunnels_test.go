@@ -1049,16 +1049,21 @@ func TestModel_Update_DeleteForwardSet_NotLive(t *testing.T) {
 func TestModel_Update_DeleteForwardSet_LiveIsTwoStep(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		state string
-		up    []string
-		pids  []int
-		want  string
+		name      string
+		state     string
+		up        []string
+		pids      []int
+		removeErr error
+		want      string
 	}{
 		{name: "one live tunnel", state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41}]}`,
 			up: []string{"127.0.0.1:3000"}, pids: []int{41}, want: "deleted web on ubuntu — 1 tunnel stopped"},
 		{name: "two live tunnels", state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41},{"set":"web","spec":"` + specWeb1 + `","pid":42}]}`,
 			up: []string{"127.0.0.1:3000", "127.0.0.1:3001"}, pids: []int{41, 42}, want: "deleted web on ubuntu — 2 tunnels stopped"},
+		// The down happened before the write failed: the notice says both.
+		{name: "a failed write still names what stopped", state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41}]}`,
+			up: []string{"127.0.0.1:3000"}, pids: []int{41}, removeErr: errors.New("permission denied"),
+			want: "not deleted: permission denied — 1 tunnel stopped"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1076,7 +1081,7 @@ func TestModel_Update_DeleteForwardSet_LiveIsTwoStep(t *testing.T) {
 			writeState(t, stateDir, tt.state)
 			m := polledSpawn(t, r, sp, d, stateDir)
 			var removed [][]string
-			m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed = append(removed, []string{alias, name}); return nil })
+			m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed = append(removed, []string{alias, name}); return tt.removeErr })
 			m = press(t, m, "l") // web0 highlighted, up
 			next, cmd := m.Update(keyMsg("X"))
 			m = next.(ui.Model)
@@ -1171,8 +1176,8 @@ func TestModel_Update_DeleteForwardSet_SecondPressWaits(t *testing.T) {
 	}
 	next, second := m.Update(keyMsg("X"))
 	m = next.(ui.Model)
-	if second != nil {
-		t.Errorf("a second X while the delete is in flight = cmd, want nil")
+	if view := m.View(); second != nil || !strings.Contains(view, "ubuntu is busy") {
+		t.Errorf("a second X while the delete is in flight: cmd %v, want nil and the busy notice:\n%s", second != nil, view)
 	}
 	m = update(t, m, first())
 	if removed != 1 {

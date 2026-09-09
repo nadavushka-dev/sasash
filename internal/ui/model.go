@@ -811,7 +811,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// skipped), so x can still reach it — never orphaned.
 			m.notice = msg.name + " kept — the kill errored, so the record was not forgotten: " + oneLine(msg.killErr, msg.host)
 		case msg.removeErr != nil && msg.adhoc:
-			m.notice = "not forgotten: " + oneLine(msg.removeErr, msg.host)
+			m.notice = "not forgotten: " + oneLine(msg.removeErr, msg.host) + stoppedSuffix(msg.stopped)
 		case msg.removeErr != nil:
 			// The down already happened: say so beside the failed write.
 			m.notice = "not deleted: " + oneLine(msg.removeErr, msg.host) + stoppedSuffix(msg.stopped)
