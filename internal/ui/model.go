@@ -813,7 +813,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.removeErr != nil && msg.adhoc:
 			m.notice = "not forgotten: " + oneLine(msg.removeErr, msg.host)
 		case msg.removeErr != nil:
-			m.notice = "not deleted: " + oneLine(msg.removeErr, msg.host)
+			// The down already happened: say so beside the failed write.
+			m.notice = "not deleted: " + oneLine(msg.removeErr, msg.host) + stoppedSuffix(msg.stopped)
 		case msg.adhoc:
 			m.notice = "forgot " + msg.name + " on " + msg.host + stoppedSuffix(msg.stopped)
 		default:

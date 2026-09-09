@@ -48,10 +48,17 @@ func (m Model) openDeclareFwd(host hostmodel.Host) (Model, tea.Cmd) {
 }
 
 // deleteFwd is X on the highlighted row: a named set's declaration is removed
-// at once (two-step when live), an ad-hoc record is forgotten. No confirm.
+// at once (two-step when live), an ad-hoc record is forgotten. No confirm —
+// so the in-flight gate is what makes a second X a no-op (a live kill can
+// take seconds; a second delete would race the first and report a false
+// failure), and the notice says the deed is under way meanwhile.
 func (m Model) deleteFwd(host hostmodel.Host, row tunnel.Forward) (Model, tea.Cmd) {
 	host = m.tunnelHost(host)
+	if m.tinflight[host.Alias] {
+		return m, nil
+	}
 	if row.Set == "" {
+		m.notice = "forgetting " + row.Spec + " on " + host.Alias + " …"
 		return m, m.forgetAdhocCmd(host.Alias, row.Spec, row.Pid > 0)
 	}
 	return m.deleteSet(host, row.Set)
@@ -96,6 +103,7 @@ func (m Model) deleteSet(host hostmodel.Host, name string) (Model, tea.Cmd) {
 		m.notice = name + " is not declared on " + host.Alias + " — x kills its forwards, it is not in sasash.conf"
 		return m, nil
 	}
+	m.notice = "deleting " + name + " on " + host.Alias + " …"
 	if m.setIsLive(host, name) {
 		return m, m.killThenRemoveSetCmd(host.Alias, name, specs, len(m.setPids(host, name)))
 	}
@@ -114,7 +122,10 @@ func (m Model) removeSetCmd(alias, name string) tea.Cmd {
 // killThenRemoveSetCmd downs a live set (KillSet) then removes its
 // declaration — the two-step. The declaration is removed even if a process
 // outlives the kill (the survivor stays recorded and killable); the kill
-// error rides along for the notice, as does the count of processes downed.
+// error rides along for the notice. stopped is the count of rows observed
+// UP at press time — what the user saw stop — not everything KillSet may
+// have signalled (it also ends recorded processes whose port never
+// answered; the engine does not report a count).
 func (m Model) killThenRemoveSetCmd(alias, name string, specs []string, stopped int) tea.Cmd {
 	eng, remove := m.tunnels, m.removeForwardSet
 	m.tinflight[alias] = true

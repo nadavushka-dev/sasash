@@ -1129,6 +1129,60 @@ func TestModel_Update_DeleteAdhoc_ForgetsNoConfig(t *testing.T) {
 	}
 }
 
+func TestModel_Update_DeleteAdhoc_NotLiveForgetsQuietly(t *testing.T) {
+	t.Parallel()
+	// x already ended the ad-hoc's process and kept its record (pid 0):
+	// X forgets it with nothing to stop, and the notice says exactly that.
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"","spec":"8080:localhost:8080","pid":0}]}`)
+	m := polledSpawn(t, r, sp, d, stateDir)
+	m = press(t, m, "l", "G")
+	next, cmd := m.Update(keyMsg("X"))
+	m = update(t, next.(ui.Model), cmd())
+	if got := sp.Killed(); len(got) != 0 {
+		t.Errorf("a not-live forget kills nothing, killed %v", got)
+	}
+	if view := m.View(); !strings.Contains(view, "forgot 8080:localhost:8080 on ubuntu") || strings.Contains(view, "stopped") {
+		t.Errorf("notice should say forgot, nothing stopped:\n%s", view)
+	}
+}
+
+func TestModel_Update_DeleteForwardSet_SecondPressWaits(t *testing.T) {
+	t.Parallel()
+	// No confirm means no popup to absorb a second X: while the first
+	// delete's kill runs, the host is in flight and X is inert — the
+	// declaration is removed once, and the notice is the first deed's.
+	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	sp := fakespawn.New().Dial(d).Live(41)
+	stateDir := t.TempDir()
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+	m := polledSpawn(t, r, sp, d, stateDir)
+	removed := 0
+	m = ui.WithRemoveForwardSet(m, func(alias, name string) error { removed++; return nil })
+	m = press(t, m, "l")
+	next, first := m.Update(keyMsg("X"))
+	m = next.(ui.Model)
+	if view := m.View(); first == nil || !strings.Contains(view, "deleting web on ubuntu") {
+		t.Fatalf("the first X should start the delete and say so:\n%s", view)
+	}
+	next, second := m.Update(keyMsg("X"))
+	m = next.(ui.Model)
+	if second != nil {
+		t.Errorf("a second X while the delete is in flight = cmd, want nil")
+	}
+	m = update(t, m, first())
+	if removed != 1 {
+		t.Errorf("removeForwardSet calls = %d, want 1", removed)
+	}
+	if view := m.View(); !strings.Contains(view, "deleted web on ubuntu — 1 tunnel stopped") {
+		t.Errorf("notice:\n%s", view)
+	}
+}
+
 func TestModel_Update_LifecycleGuards(t *testing.T) {
 	t.Parallel()
 	t.Run("n and D need their hooks", func(t *testing.T) {
