@@ -60,9 +60,10 @@ var logoFaceName = "ansi-shadow"
 
 // minLogoHeight is the shortest terminal that shows the wordmark. The
 // band costs rows over the plain title (six for ANSI Shadow: the face
-// and the wake line); a full-screen terminal has them to spare, a
-// classic 80x24 window or the half of a split does not.
-const minLogoHeight = 32
+// and the wake line), so the floor leaves the panes at least 26 rows
+// under it; a full-screen terminal has them to spare, a classic 80x24
+// window or the half of a split does not.
+const minLogoHeight = 36
 
 // wake is the motion motif, leading the tally line under the face.
 const wake = "»»»»"

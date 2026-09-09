@@ -111,6 +111,36 @@ func TestRenderLogo_DefaultFaceIsANSIShadow(t *testing.T) {
 	}
 }
 
+// A prompt's expansion line takes a row from the pane area without a
+// resize: the list must follow, or the frame clamp swallows its last
+// row — the selected one, when the cursor sits on a full page's last
+// row — behind the open prompt.
+func TestModel_Update_ListFollowsTheExpansionLine(t *testing.T) {
+	t.Parallel()
+	m := update(t, sized(t, testHosts(40)), tea.WindowSizeMsg{Width: 100, Height: 40})
+	perPage := ui.ListHeight(m)
+	if perPage < 5 || perPage >= 40 {
+		t.Fatalf("list height = %d, want a full first page smaller than the 40 hosts (fixture geometry)", perPage)
+	}
+	keys := make([]string, perPage-1)
+	for i := range keys {
+		keys[i] = "j"
+	}
+	m = press(t, m, keys...) // the last row of the first page
+	m = press(t, m, "a")
+	m = update(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("-L 3000")})
+	view := m.View()
+	if !strings.Contains(view, "→ ") {
+		t.Fatalf("View() should carry the expansion line (fixture):\n%s", view)
+	}
+	if got, want := ui.ListHeight(m), ui.ContentHeight(m); got != want {
+		t.Errorf("list height = %d with the expansion line up, want the pane area %d", got, want)
+	}
+	if !strings.Contains(view, "› ") {
+		t.Errorf("View() lost the selected row behind the prompt:\n%s", view)
+	}
+}
+
 // Every shipped face renders on an 80-column full-screen terminal, its
 // rows one width (the block centers as a unit). (Color is not asserted:
 // go test renders in the ascii profile, so the text here is the
@@ -130,8 +160,16 @@ func TestRenderLogo_EveryFace(t *testing.T) {
 			continue
 		}
 		for i, r := range rows {
-			if w := lipgloss.Width(r); w > 80 || w != lipgloss.Width(rows[0]) {
-				t.Errorf("RenderLogo(%q) row %d width = %v, want <= 80 and equal to row 0 (%d)", name, i, w, lipgloss.Width(rows[0]))
+			if w := lipgloss.Width(r); w > 80 {
+				t.Errorf("RenderLogo(%q) row %d width = %v, want <= 80", name, i, w)
+			}
+		}
+		// The vendored table itself is rectangular: a ragged row would
+		// center one column off its neighbours.
+		raw := ui.LogoRows(name)
+		for i, r := range raw {
+			if w := lipgloss.Width(r); w != lipgloss.Width(raw[0]) {
+				t.Errorf("LogoRows(%q) row %d width = %v, want row 0's %d", name, i, w, lipgloss.Width(raw[0]))
 			}
 		}
 	}

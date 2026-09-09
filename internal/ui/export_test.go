@@ -264,7 +264,9 @@ const (
 	MinLogoHeight = minLogoHeight
 )
 
-func HeaderHeight(m Model) int { return m.headerHeight() }
+func HeaderHeight(m Model) int  { return m.headerHeight() }
+func ContentHeight(m Model) int { return m.contentHeight() }
+func ListHeight(m Model) int    { return m.list.Height() }
 func LogoFaceNames() []string {
 	var out []string
 	for _, f := range logoFaces {
@@ -281,6 +283,16 @@ func RenderLogo(name string, width, height int) []string {
 	return nil
 }
 func DefaultLogoFace() string { return currentLogo().name }
+
+// LogoRows is a face's vendored table, unstyled and uncentered.
+func LogoRows(name string) []string {
+	for _, f := range logoFaces {
+		if f.name == name {
+			return append([]string(nil), f.rows...)
+		}
+	}
+	return nil
+}
 
 func ListPaneWidth(m Model) int { return lipgloss.Width(m.list.View()) }
 

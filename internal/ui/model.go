@@ -662,6 +662,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.list.Index()
 	next, cmd := m.update(msg)
 	n := next.(Model)
+	// The pane area moves without a resize: the header's height is
+	// size-driven, but a prompt's expansion line (SASASH.4.16) takes a
+	// row from it. Keep the list sized to the area it has now, or the
+	// frame clamp swallows its last row — the selected one, on a full
+	// page — behind an open prompt.
+	if h := n.contentHeight(); n.list.Height() != h {
+		n.list.SetSize(n.listWidth(), h)
+	}
 	// Backstop for the early-return paths (half pages, reloads, a
 	// filter clearing): the key path corrects itself before its
 	// selection tail, so this is a no-op there.

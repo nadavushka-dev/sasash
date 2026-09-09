@@ -8,7 +8,7 @@ import "github.com/charmbracelet/lipgloss"
 // this struct from another Palette.
 type Styles struct {
 	Title    lipgloss.Style // app name in the header line, and the wordmark's face
-	LogoWake lipgloss.Style // the » chevrons trailing the wordmark
+	LogoWake lipgloss.Style // the » chevrons leading the tally line under the wordmark
 
 	// Host list (left pane).
 	Item         lipgloss.Style // unselected row's alias
