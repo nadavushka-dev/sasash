@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	// os/exec appears here ONLY to build the *exec.Cmd that tea.ExecProcess
 	// requires for the ssh handoff (SPEC §5): tea must own the tty itself,
 	// so this one invocation cannot go through run.Runner. Every other
@@ -49,43 +48,6 @@ type hostItem struct {
 // FilterValue is what `/` filters on: alias and @sasash tags.
 func (i hostItem) FilterValue() string {
 	return i.host.Alias + " " + strings.Join(i.host.Tags, " ")
-}
-
-// hostDelegate renders one single-line row: "› alias" selected, "  alias"
-// otherwise — the prefix is what keeps the selection visible under
-// NO_COLOR (bold does not survive it). While the tunnels pane holds focus
-// (dim) the row keeps its fill but loses the prefix: the one "›" on
-// screen then marks the focused pane's selection, in colour or not.
-type hostDelegate struct {
-	styles Styles
-	dim    bool
-}
-
-func (hostDelegate) Height() int                               { return 1 }
-func (hostDelegate) Spacing() int                              { return 0 }
-func (hostDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
-
-func (d hostDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	it, ok := item.(hostItem)
-	if !ok {
-		if _, divider := item.(dividerItem); divider {
-			renderDivider(w, d.styles, m.Width())
-		}
-		return // the spacer renders as its blank line
-	}
-	if index == m.Index() {
-		if d.dim {
-			fmt.Fprint(w, d.styles.ItemSelectedDim.MaxWidth(m.Width()).Render("  "+it.host.Alias))
-			return
-		}
-		fmt.Fprint(w, d.styles.ItemSelected.MaxWidth(m.Width()).Render("› "+it.host.Alias))
-		return
-	}
-	if it.ambient {
-		fmt.Fprint(w, d.styles.ItemAmbient.MaxWidth(m.Width()).Render(it.host.Alias))
-		return
-	}
-	fmt.Fprint(w, d.styles.Item.MaxWidth(m.Width()).Render(it.host.Alias))
 }
 
 // probeDoneMsg carries one full refresh: statuses per host alias, each
@@ -332,7 +294,12 @@ type Model struct {
 	// handoff returning) must not each arm their own tick chain.
 	tickArmed bool
 
+	// width is the FRAME: the terminal's columns capped at maxFrameWidth
+	// (SASASH.4.29). termWidth is the terminal itself; the difference is
+	// split around the frame by View, so a wide terminal centers the
+	// panes instead of stranding them at its left edge.
 	width, height int
+	termWidth     int
 }
 
 // Config carries the theme selection into the model. The zero value is
@@ -568,7 +535,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 func (m Model) applyTheme(idx int) Model {
 	m.themeIdx = idx
 	m.styles = NewStyles(Themes[idx].Palette)
-	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: m.focus != focusList})
+	m.list.SetDelegate(m.delegate())
 	m.help.Styles.ShortKey = m.styles.HelpKey
 	m.help.Styles.ShortDesc = m.styles.HelpDesc
 	m.help.Styles.ShortSeparator = m.styles.HelpSep
@@ -590,7 +557,7 @@ func (m Model) setFocus(f paneFocus) Model {
 			m.focusHost = host.Alias
 		}
 	}
-	m.list.SetDelegate(hostDelegate{styles: m.styles, dim: f != focusList})
+	m.list.SetDelegate(m.delegate())
 	return m
 }
 
@@ -695,6 +662,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.list.Index()
 	next, cmd := m.update(msg)
 	n := next.(Model)
+	// The header's height follows its content (the wordmark yields to
+	// the tally, SASASH.4.29), so the pane area can change without a
+	// resize: keep the list sized to it, or its paging would trust a
+	// stale height and the frame clamp would swallow rows.
+	if h := n.contentHeight(); n.list.Height() != h {
+		n.list.SetSize(n.listWidth(), h)
+	}
 	// Backstop for the early-return paths (half pages, reloads, a
 	// filter clearing): the key path corrects itself before its
 	// selection tail, so this is a no-op there.
@@ -707,8 +681,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	beforeIdx := m.list.Index()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.help.Width = msg.Width
+		m.termWidth, m.height = msg.Width, msg.Height
+		m.width = min(msg.Width, maxFrameWidth)
+		m.help.Width = m.termWidth
 		if m.popup.open() {
 			// The room changed (help width included): a parked offset
 			// would eat the next key.
@@ -717,12 +692,13 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The prompt needs an explicit width to get textinput's horizontal
 		// viewport: without one, long input silently loses its tail and
 		// cursor past the terminal edge.
-		m.prompt.Width = max(10, msg.Width-14)
+		m.prompt.Width = max(10, m.width-14)
 		m.list.SetSize(m.listWidth(), m.contentHeight())
 		return m, nil
 
 	case probeDoneMsg:
 		m.statuses = msg.statuses
+		m.list.SetDelegate(m.delegate()) // the rows read the new round
 		m = m.observeProbes(msg.statuses)
 		if m.tickArmed {
 			return m, nil
@@ -1103,6 +1079,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (the reloads tunnel actions trigger must not blank the pane).
 		if !samePaths(before, pathList(m.hosts)) {
 			m.statuses = nil
+			m.list.SetDelegate(m.delegate())
 		}
 		// The rows replace the list (variants re-folded from the new
 		// hosts); the selection stays on its alias when still listed,
@@ -1498,12 +1475,25 @@ func (m Model) halfPage() int {
 // frame clamp keeps a narrow terminal from scrolling sideways.
 const paneGap = 6
 
-// listWidth gives the left pane roughly a third of the terminal, clamped
-// so short lists stay narrow and tiny terminals stay usable.
+// maxFrameWidth caps the frame — the width the pane proportions and the
+// centering are computed from: past it the panes gain nothing but
+// distance from each other, so a wider terminal centers the frame
+// instead (SASASH.4.29). The cap places, it never cuts: every line is
+// clamped at the TERMINAL's width exactly as before, and centerFrame
+// gives a line longer than the frame its room by shifting the whole
+// frame left — so a command preview or a plan row that fit on the wide
+// terminal before still fits whole. Presentation changed, honesty did
+// not. Narrow terminals keep the existing clamps.
+const maxFrameWidth = 120
+
+// listWidth gives the left pane roughly a third of the frame, clamped
+// so short lists stay narrow and tiny terminals stay usable. The cap is
+// what a status-bearing row (SASASH.4.29) needs for a real alias beside
+// its columns — every column past it belongs to the detail pane.
 func (m Model) listWidth() int {
 	w := m.width / 3
-	if w > 28 {
-		w = 28
+	if w > 32 {
+		w = 32
 	}
 	if w < 16 {
 		w = 16
@@ -1514,11 +1504,11 @@ func (m Model) listWidth() int {
 	return w
 }
 
-// contentHeight is the pane area: total minus header (2), the preview
-// line, and the footer — one line always: the whisper, or a surface's
-// context hint (SASASH.4.13).
+// contentHeight is the pane area: total minus the header (the title or
+// the wordmark, and its blank), the preview line, and the footer — one
+// line always: the whisper, or a surface's context hint (SASASH.4.13).
 func (m Model) contentHeight() int {
-	h := m.height - 3 - lipgloss.Height(m.helpView())
+	h := m.height - m.headerHeight() - 1 - lipgloss.Height(m.helpView())
 	if m.expansionLine() != "" {
 		h-- // the expansion line under the prompt
 	}
@@ -1558,9 +1548,9 @@ func (m Model) helpView() string {
 	// in the ? panel. A keyboard owner or a pane focus keeps its one-line
 	// context help, because that line says what the keys do there.
 	if k == nil {
-		return m.styles.Clamp.MaxWidth(m.width).Render(" " + m.whisper())
+		return m.styles.Clamp.MaxWidth(m.termWidth).Render(" " + m.whisper())
 	}
-	v := m.styles.Clamp.MaxWidth(m.width).Render(" " + m.help.View(k))
+	v := m.styles.Clamp.MaxWidth(m.termWidth).Render(" " + m.help.View(k))
 	return clampHeight(v, m.height-4)
 }
 
@@ -1583,19 +1573,7 @@ func (m Model) View() string {
 		return ""
 	}
 
-	header := " " + m.styles.Title.Render("sasash")
-	if m.list.FilterState() == list.FilterApplied {
-		header += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
-	}
-	// The tally is decoration next to the filter term, which explains
-	// why the list is a subset: it is appended only when both fit whole.
-	if sum := m.summaryLine(); sum != "" && m.settings.pane == settingsOff {
-		if with := header + "   " + m.styles.PathExtra.Render(sum); lipgloss.Width(with) <= m.width {
-			header = with
-		}
-	}
-	// The applied-filter term is user content: clamp like all chrome.
-	header = m.styles.Clamp.MaxWidth(m.width).Render(header)
+	header := m.headerView()
 
 	var body string
 	if m.popup.open() {
@@ -1603,8 +1581,6 @@ func (m Model) View() string {
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.popupView())
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, panel)
 	} else if m.settings.pane != settingsOff {
-		header += "   " + m.styles.CmdPreview.Render("settings")
-		header = m.styles.Clamp.MaxWidth(m.width).Render(header)
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, panel)
 	} else if len(m.hosts) == 0 {
@@ -1620,7 +1596,7 @@ func (m Model) View() string {
 		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), strings.Repeat(" ", paneGap), right)
 		// A long alias + hostname can outgrow the terminal; truncate every
 		// line so the frame never wraps and pushes the alt screen around.
-		panes = m.styles.Clamp.MaxWidth(m.width).Render(panes)
+		panes = m.styles.Clamp.MaxWidth(m.termWidth).Render(panes)
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panes)
 	}
 	// On a very short terminal the panes can outgrow their slot.
@@ -1678,28 +1654,75 @@ func (m Model) View() string {
 	} else if m.notice != "" {
 		preview += "  " + m.styles.Notice.Render(m.notice)
 	}
-	// Same width clamp as the panes: a long alias (or notice) must not
-	// wrap the preview line and push the alt screen around.
-	preview = m.styles.Clamp.MaxWidth(m.width).Render(preview)
+	// The same kind of clamp as the panes: a long alias (or notice) must
+	// not wrap the preview line and push the alt screen around.
+	preview = m.styles.Clamp.MaxWidth(m.termWidth).Render(preview)
 	// A shorthand's full expansion gets a line of its own under the
 	// prompt — what enter will really use is never hidden — cut with a
 	// visible ellipsis rather than silently when even that is too long.
 	if line := m.expansionLine(); line != "" {
 		preview += "\n" + line
 	}
-	return strings.Join([]string{header, "", body, preview, m.helpView()}, "\n")
+	frame := strings.Join([]string{header, "", body, preview, m.helpView()}, "\n")
+	return centerFrame(frame, m.width, m.termWidth)
+}
+
+// headerView is the top of the frame: the wordmark when it fits, else
+// the one-line title; the last row carries an applied filter term and
+// the tally (SASASH.4.8) — the tally is decoration next to the term,
+// which explains why the list is a subset, so it is appended only when
+// both fit whole. Under settings the row names the panel instead.
+func (m Model) headerView() string {
+	lines := m.logoLines()
+	last := " " + m.styles.Title.Render("sasash")
+	if lines != nil {
+		last, lines = lines[len(lines)-1], lines[:len(lines)-1]
+	}
+	if m.list.FilterState() == list.FilterApplied {
+		last += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
+	}
+	if m.settings.pane != settingsOff {
+		last += "   " + m.styles.CmdPreview.Render("settings")
+	} else if sum := m.summaryLine(); sum != "" {
+		if with := last + "   " + m.styles.PathExtra.Render(sum); lipgloss.Width(with) <= m.width {
+			last = with
+		}
+	}
+	// The applied-filter term is user content: clamp like all chrome.
+	last = m.styles.Clamp.MaxWidth(m.width).Render(last)
+	return strings.Join(append(lines, last), "\n")
+}
+
+// centerFrame indents every line by half the slack a wide terminal
+// leaves beside the frame, so the panes sit together mid-screen. The
+// slack is measured against the frame's WIDEST line when that exceeds
+// the cap (a long command preview, a plan row): centering yields to
+// content — the frame shifts left rather than cutting a line that fits
+// the terminal. The vertical axis stays top-anchored: lists grow down.
+func centerFrame(frame string, width, termWidth int) string {
+	lines := strings.Split(frame, "\n")
+	widest := width
+	for _, l := range lines {
+		widest = max(widest, lipgloss.Width(l))
+	}
+	slack := termWidth - widest
+	if slack < 2 {
+		return frame
+	}
+	pad := strings.Repeat(" ", slack/2)
+	return pad + strings.Join(lines, "\n"+pad)
 }
 
 // expansionLine renders promptExpansion for the frame, "" when none.
 func (m Model) expansionLine() string {
 	full := m.promptExpansion()
-	if full == "" || m.height-3-lipgloss.Height(m.helpView()) < 2 {
+	if full == "" || m.height-m.headerHeight()-1-lipgloss.Height(m.helpView()) < 2 {
 		return "" // no row to give up on a tiny terminal
 	}
 	line := " " + m.styles.PathExtra.Render("→ "+full)
-	if lipgloss.Width(line) > m.width {
+	if lipgloss.Width(line) > m.termWidth {
 		r := []rune(" → " + full)
-		keep := max(m.width-1, 1)
+		keep := max(m.termWidth-1, 1)
 		if keep < len(r) {
 			r = append(r[:keep], '…')
 		}
@@ -1793,7 +1816,7 @@ func (m Model) detailView() string {
 				tail = " " + r + tail
 			}
 			lineSoFar := lipgloss.Width(strings.TrimLeft(b.String()[strings.LastIndex(b.String(), "\n")+1:], "\n"))
-			room := m.width - m.listWidth() - paneGap - lineSoFar - lipgloss.Width(tail) - 2
+			room := m.termWidth - m.listWidth() - paneGap - lineSoFar - lipgloss.Width(tail) - 2
 			// The tail is whole or absent: a count cut by the frame clamp
 			// would read as a smaller, plausible number.
 			if room >= 0 {
@@ -1838,7 +1861,7 @@ func (m Model) previewView() string {
 			// first, since the spawn line is the one that hides it.
 			if m.spawn.planFor(host.Alias) != nil {
 				seg := "   " + m.styles.HelpKey.Render("S") + " " + m.styles.HelpDesc.Render(strings.Join(sshCommand(host.Alias), " "))
-				if lipgloss.Width(v+seg) <= m.width {
+				if lipgloss.Width(v+seg) <= m.termWidth {
 					v += seg
 				}
 			}
@@ -1850,13 +1873,13 @@ func (m Model) previewView() string {
 				hseg = strings.Join(plan.what, " ") + " (" + plan.where + ")"
 			}
 			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(hseg)
-			if lipgloss.Width(v+seg) <= m.width {
+			if lipgloss.Width(v+seg) <= m.termWidth {
 				v += seg
 			}
 			// p's plan: the exact path it will make active, when it fits.
 			if plan := m.switchPlan(host); plan != "" {
 				seg := "   " + m.styles.HelpDesc.Render(plan)
-				if lipgloss.Width(v+seg) <= m.width {
+				if lipgloss.Width(v+seg) <= m.termWidth {
 					v += seg
 				}
 			}

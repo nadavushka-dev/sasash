@@ -309,6 +309,7 @@ func TestModel_View_SharedPortDemoted(t *testing.T) {
 	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"","spec":"3000:localhost:9999"},{"set":"","spec":"4011:localhost:1"}]}`)
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
 	m := tunnelModelSpawn(t, r, fakespawn.New().Dial(d).Live(41), d, stateDir)
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24}) // the note beside a status-bearing list row
 	m = feed(t, m, m.Init())
 	var webRow, staleRow string
 	for _, line := range strings.Split(m.View(), "\n") {

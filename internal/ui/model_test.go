@@ -183,8 +183,13 @@ func TestModel_Update_ProbeFlow(t *testing.T) {
 			t.Errorf("View() with db selected missing %q\nview:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "20ms") {
-		t.Errorf("View() with db selected still shows web's 20ms latency\nview:\n%s", view)
+	// (web's own row carries its 20ms since SASASH.4.29; the detail
+	// column — everything right of the list pane — must not.)
+	lw := ui.ListPaneWidth(m)
+	for _, line := range strings.Split(view, "\n") {
+		if r := []rune(line); len(r) > lw && strings.Contains(string(r[lw:]), "20ms") {
+			t.Errorf("View() with db selected still shows web's 20ms latency\nview:\n%s", view)
+		}
 	}
 }
 
@@ -238,10 +243,10 @@ func TestModel_View_Smoke(t *testing.T) {
 	// SetDelegate) drops both.
 	var selected, unselected bool
 	for _, line := range strings.Split(view, "\n") {
-		if strings.HasPrefix(line, "› host0") {
+		if strings.HasPrefix(line, "› ◌ host0") {
 			selected = true
 		}
-		if strings.HasPrefix(line, "  host1") {
+		if strings.HasPrefix(line, "  ◌ host1") {
 			unselected = true
 		}
 	}

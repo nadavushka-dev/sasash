@@ -238,7 +238,7 @@ func TestModel_Update_EditorReloadKeepsSelection(t *testing.T) {
 		t.Fatalf("Selected() after shrinking reload = %q, %v; want host1, true", host.Alias, ok)
 	}
 	view := m.View()
-	if !strings.Contains(view, "› host1") || !strings.Contains(view, "$ ssh host1") {
+	if !strings.Contains(view, "› ◌ host1") || !strings.Contains(view, "$ ssh host1") {
 		t.Errorf("View() after shrinking reload lost the selection or preview:\n%s", view)
 	}
 }

@@ -93,7 +93,7 @@ func TestModel_Update_FilterSurfacesVariantsExplicitly(t *testing.T) {
 			}
 			// Clearing the filter folds them again.
 			m = press(t, m, "esc")
-			if view := m.View(); strings.Contains(view, "  web.office") || strings.Contains(view, "› web.office") {
+			if view := m.View(); strings.Contains(view, "◌ web.office ") {
 				t.Errorf("View() after esc still lists a variant:\n%s", view)
 			}
 		})
@@ -159,7 +159,7 @@ func TestComputeVariants_Witnesses(t *testing.T) {
 			m := ui.New([]hostmodel.Host{tt.host, web}, probe.Prober{Dialer: fakedial.New(), Timeout: time.Millisecond}, fakerun.New(), ui.Config{})
 			m = update(t, m, tea.WindowSizeMsg{Width: 100, Height: 30})
 			view := m.View()
-			listedRow := strings.Contains(view, "  "+tt.host.Alias) || strings.Contains(view, "› "+tt.host.Alias)
+			listedRow := strings.Contains(view, "◌ "+tt.host.Alias+" ") // a row: glyph, alias, its column padding
 			if listedRow == tt.variant {
 				t.Errorf("%s listed = %v, want variant %v:\n%s", tt.host.Alias, listedRow, tt.variant, view)
 			}

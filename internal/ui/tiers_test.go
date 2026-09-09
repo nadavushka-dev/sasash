@@ -86,7 +86,7 @@ func TestModel_View_TiersAndDivider(t *testing.T) {
 	if strings.Contains(view, "secret") || !strings.Contains(view, "5 hosts (3 managed)") {
 		t.Errorf("View() tiers: hidden host listed, or tally without the split:\n%s", view)
 	}
-	if !order(view, "› web", "bare", "described", "other entries ─", "plain", "office") {
+	if !order(view, "› ○ web", "bare", "described", "other entries ─", "plain", "office") {
 		t.Errorf("View() rows out of tier order:\n%s", view)
 	}
 	// A blank spacer row sits between the last managed row and the

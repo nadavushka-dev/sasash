@@ -256,6 +256,34 @@ var (
 // PaneGap and ListPaneWidth expose the column geometry for the gap pin.
 const PaneGap = paneGap
 
+// Presence hooks (SASASH.4.29): the header's rows, the frame cap, the
+// wordmark threshold, and the faces rendered by name (the global stays
+// untouched so parallel tests never race on it).
+const (
+	MaxFrameWidth = maxFrameWidth
+	MinLogoHeight = minLogoHeight
+)
+
+func HeaderHeight(m Model) int  { return m.headerHeight() }
+func ContentHeight(m Model) int { return m.contentHeight() }
+func ListHeight(m Model) int    { return m.list.Height() }
+func LogoFaceNames() []string {
+	var out []string
+	for _, f := range logoFaces {
+		out = append(out, f.name)
+	}
+	return out
+}
+func RenderLogo(name string, width, height int) []string {
+	for _, f := range logoFaces {
+		if f.name == name && logoFits(f, width, height, 0) {
+			return renderLogo(NewStyles(Themes[0].Palette), f)
+		}
+	}
+	return nil
+}
+func DefaultLogoFace() string { return currentLogo().name }
+
 func ListPaneWidth(m Model) int { return lipgloss.Width(m.list.View()) }
 
 // ExpandSpec exposes the shorthand expansion for its table test.

@@ -327,7 +327,7 @@ func TestModel_View_PromptFullHelp(t *testing.T) {
 	if strings.Contains(view, "yank host") {
 		t.Errorf("View() with prompt focused advertises inert action keys:\n%s", view)
 	}
-	if view := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 60}), "?").View(); !strings.Contains(view, "prompts") {
+	if view := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 80}), "?").View(); !strings.Contains(view, "prompts") {
 		t.Errorf("View() keys panel should carry the prompts group:\n%s", view)
 	}
 }

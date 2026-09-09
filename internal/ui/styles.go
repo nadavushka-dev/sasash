@@ -7,11 +7,12 @@ import "github.com/charmbracelet/lipgloss"
 // call lipgloss.NewStyle themselves, so switching theme is just rebuilding
 // this struct from another Palette.
 type Styles struct {
-	Title lipgloss.Style // app name in the header line
+	Title    lipgloss.Style // app name in the header line, and the wordmark's face
+	LogoWake lipgloss.Style // the » chevrons trailing the wordmark
 
 	// Host list (left pane).
-	Item         lipgloss.Style // unselected row
-	ItemAmbient  lipgloss.Style // unselected row below the divider: dim
+	Item         lipgloss.Style // unselected row's alias
+	ItemAmbient  lipgloss.Style // unselected row's alias below the divider: dim
 	Divider      lipgloss.Style // the tier boundary line
 	ItemSelected lipgloss.Style // "› " row: accent text over selection fill
 	// ItemSelectedDim is the same row while the tunnels pane holds focus:
@@ -61,10 +62,11 @@ type Styles struct {
 // NewStyles materializes the widget styles for one theme.
 func NewStyles(p Palette) Styles {
 	return Styles{
-		Title: lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
+		Title:    lipgloss.NewStyle().Foreground(p.Accent).Bold(true),
+		LogoWake: lipgloss.NewStyle().Foreground(p.Accent2),
 
-		Item:         lipgloss.NewStyle().Foreground(p.Fg).PaddingLeft(2),
-		ItemAmbient:  lipgloss.NewStyle().Foreground(p.FgDim).PaddingLeft(2),
+		Item:         lipgloss.NewStyle().Foreground(p.Fg),
+		ItemAmbient:  lipgloss.NewStyle().Foreground(p.FgDim),
 		Divider:      lipgloss.NewStyle().Foreground(p.FgDim),
 		ItemSelected: lipgloss.NewStyle().Foreground(p.Accent).Background(p.Selection).Bold(true),
 
