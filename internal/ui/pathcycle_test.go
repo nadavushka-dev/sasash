@@ -474,10 +474,10 @@ func TestModel_View_PathsFocus(t *testing.T) {
 			t.Errorf("View() paths focus missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "$ ssh dual") || strings.Contains(view, "› dual") {
+	if strings.Contains(view, "$ ssh dual") || strings.Contains(view, "› ● dual") {
 		t.Errorf("View() paths focus should replace the ssh line and dim the list's mark:\n%s", view)
 	}
-	if !strings.Contains(plain, "$ ssh dual") || !strings.Contains(plain, "› dual") {
+	if !strings.Contains(plain, "$ ssh dual") || !strings.Contains(plain, "› ● dual") {
 		t.Errorf("View() before p:\n%s", plain)
 	}
 	// Moving changes the plan; the port is not guessed.
@@ -566,7 +566,7 @@ func TestModel_Update_PathsFocusKeys(t *testing.T) {
 	// esc and h return to the list: nothing written, the ssh line is back.
 	for _, back := range []string{"esc", "h"} {
 		m := press(t, m, "p", "j", back)
-		if ui.PathsFocused(m) || len(*switched) != 0 || !strings.Contains(m.View(), "$ ssh dual") || !strings.Contains(m.View(), "› dual") {
+		if ui.PathsFocused(m) || len(*switched) != 0 || !strings.Contains(m.View(), "$ ssh dual") || !strings.Contains(m.View(), "› ● dual") {
 			t.Errorf("%s: focused %v, switched %v:\n%s", back, ui.PathsFocused(m), *switched, m.View())
 		}
 	}

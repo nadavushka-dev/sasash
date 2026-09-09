@@ -417,7 +417,7 @@ func TestModel_Update_EditForwardLive(t *testing.T) {
 	var calls [][]string
 	r := fakerun.New()
 	m, sp := editModel(t, r, &calls, nil)
-	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 30}) // the plan line carries the whole spawn argv
+	m = update(t, m, tea.WindowSizeMsg{Width: 140, Height: 30}) // the plan line carries the whole spawn argv
 	m = press(t, m, "l", "E")                                   // web0, live
 	view := m.View()
 	if !ui.Prompting(m) || !strings.Contains(view, "edit web on ubuntu: "+specWeb0) {

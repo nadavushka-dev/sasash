@@ -227,6 +227,17 @@ func sshTreeBytes(t *testing.T, home string) map[string]string {
 }
 
 // lineHas reports whether some line of view contains all of the wants.
+// afterMarker is the rest of the first line carrying marker, from the
+// marker on; "" when no line does.
+func afterMarker(view, marker string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if i := strings.Index(line, marker); i >= 0 {
+			return line[i:]
+		}
+	}
+	return ""
+}
+
 func lineHas(view string, wants ...string) bool {
 	for _, line := range strings.Split(view, "\n") {
 		ok := true

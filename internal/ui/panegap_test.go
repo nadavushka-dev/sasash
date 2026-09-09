@@ -52,12 +52,12 @@ func TestModel_View_PaneGapSeparatesTheColumns(t *testing.T) {
 			}
 			m = update(t, m, tea.WindowSizeMsg{Width: tt.width, Height: 24})
 			lw := ui.ListPaneWidth(m)
-			// Pane rows only: the header (two lines) and the footer both
-			// carry text inside the band's columns, so they are skipped by
-			// position — a frame that gains a line above or below the
-			// panes must move these bounds, not loosen the band check.
+			// Pane rows only: the header (its rows, plus the blank) and
+			// the footer both carry text inside the band's columns, so they
+			// are skipped by position — a frame that gains a line below
+			// the panes must move these bounds, not loosen the band check.
 			lines := strings.Split(m.View(), "\n")
-			body := lines[2 : len(lines)-2]
+			body := lines[ui.HeaderHeight(m) : len(lines)-2]
 			detailStarts := false
 			for i, line := range body {
 				runes := []rune(line)

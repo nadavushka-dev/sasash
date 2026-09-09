@@ -343,7 +343,9 @@ func TestModel_Update_PathHistoryFollowsThePath(t *testing.T) {
 	m = reloadAndProbe(t, m, []hostmodel.Host{{Alias: "web", Paths: []probe.Path{wan, lan}}})
 	view := m.View()
 	// Two rounds before the reload plus the reload's own re-probe.
-	if !lineHas(view, "○ wan", "···", "0/3") || lineHas(view, "○ wan", "down 0s") || lineHas(view, "○ wan", "20ms") {
+	// (web's list row shares wan's line and carries lan's 20ms since
+	// SASASH.4.29; the check reads the path row itself.)
+	if wan := afterMarker(view, "○ wan"); !strings.Contains(wan, "···") || !strings.Contains(wan, "0/3") || strings.Contains(wan, "down 0s") || strings.Contains(wan, "20ms") {
 		t.Errorf("wan inherited lan's history after the reorder:\n%s", view)
 	}
 	if !lineHas(view, "● lan", "▁▁▁", "20ms", "3/3") {

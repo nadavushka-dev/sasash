@@ -69,7 +69,7 @@ func TestModel_Update_FocusFollowsHostChange(t *testing.T) {
 		}
 	}
 	// The list row carries the mark again; no tunnels row does.
-	if view := m.View(); !strings.Contains(view, "› spare") || strings.Contains(view, "› ○") || strings.Contains(view, "› ●") {
+	if view := m.View(); !strings.Contains(view, "› ○ spare") || strings.Count(view, "› ") != 1 {
 		t.Errorf("View() after the host change should mark the list, not a row:\n%s", view)
 	}
 }
@@ -88,7 +88,7 @@ func TestModel_Update_FocusDropsWhenHostEditedAway(t *testing.T) {
 	if host, _ := m.Selected(); host.Alias != "bare" || ui.TunnelsFocused(m) {
 		t.Errorf("after the reload: host %q, focused %v; want bare, list focus", host.Alias, ui.TunnelsFocused(m))
 	}
-	if view := m.View(); !strings.Contains(view, "› bare") {
+	if view := m.View(); !strings.Contains(view, "› ◌ bare") { // the reload re-probes: pending
 		t.Errorf("View() should mark the list:\n%s", view)
 	}
 }
@@ -104,7 +104,7 @@ func TestModel_Update_FocusOverFilteredEmptyHost(t *testing.T) {
 	m := polled(t, r, fakedial.New())
 	m = press(t, m, "l", "/", "b", "a", "r", "enter")
 	view := m.View()
-	if ui.TunnelsFocused(m) || strings.Count(view, "› ") != 1 || !strings.Contains(view, "› bare") {
+	if ui.TunnelsFocused(m) || strings.Count(view, "› ") != 1 || !strings.Contains(view, "› ○ bare") {
 		t.Errorf("focused %v, › count %d:\n%s", ui.TunnelsFocused(m), strings.Count(view, "› "), view)
 	}
 	// esc now means one thing: clear the filter.
@@ -120,20 +120,20 @@ func TestModel_View_FocusMarkMovesWithFocus(t *testing.T) {
 	// signal that survives NO_COLOR, and the pin that the delegate is
 	// re-set on every focus change and theme cycle.
 	m, _ := aliveWeb0(t)
-	if view := m.View(); !strings.Contains(view, "› ubuntu") {
+	if view := m.View(); !strings.Contains(view, "› ○ ubuntu") {
 		t.Fatalf("View() with list focus missing the list mark:\n%s", view)
 	}
 	m = press(t, m, "l")
 	view := m.View()
-	if strings.Contains(view, "› ubuntu") || !strings.Contains(view, "  ubuntu") || !lineHas(view, "› ", specWeb0) {
+	if strings.Contains(view, "› ○ ubuntu") || !strings.Contains(view, "  ○ ubuntu") || !lineHas(view, "› ", specWeb0) {
 		t.Errorf("View() with tunnels focus should move the mark to the row:\n%s", view)
 	}
 	m = press(t, m, "t") // a theme cycle rebuilds the delegate: focus must survive it
-	if view := m.View(); strings.Contains(view, "› ubuntu") || !lineHas(view, "› ", specWeb0) {
+	if view := m.View(); strings.Contains(view, "› ○ ubuntu") || !lineHas(view, "› ", specWeb0) {
 		t.Errorf("View() after t lost the tunnels focus mark:\n%s", view)
 	}
 	m = press(t, m, "h")
-	if view := m.View(); !strings.Contains(view, "› ubuntu") || lineHas(view, "› ", specWeb0) {
+	if view := m.View(); !strings.Contains(view, "› ○ ubuntu") || lineHas(view, "› ", specWeb0) {
 		t.Errorf("View() after h should mark the list again:\n%s", view)
 	}
 }
@@ -229,7 +229,7 @@ func TestModel_Update_FocusDropsWhenRowsVanish(t *testing.T) {
 	if ui.TunnelsFocused(m) {
 		t.Errorf("focus stayed on an empty tunnels pane")
 	}
-	if view := m.View(); !strings.Contains(view, "› ubuntu") {
+	if view := m.View(); !strings.Contains(view, "› ○ ubuntu") {
 		t.Errorf("View() should mark the list again:\n%s", view)
 	}
 }

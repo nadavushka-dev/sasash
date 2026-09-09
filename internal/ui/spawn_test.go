@@ -127,7 +127,7 @@ func spawnModel(t *testing.T, r *fakerun.Fake, cfg ui.SpawnConfig, rec func(stri
 	d := fakedial.New().Up("192.0.2.10:22", 5*time.Millisecond).Up("192.0.2.30:22", 5*time.Millisecond)
 	eng := tunnel.Engine{Runner: r, Spawner: fakespawn.New().Dial(d), Dialer: d, StateDir: t.TempDir(), Timeout: 50 * time.Millisecond}
 	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, r, ui.Config{Spawn: cfg, Tunnels: eng, RecordHandoff: rec})
-	m = update(t, m, tea.WindowSizeMsg{Width: 140, Height: 24})
+	m = update(t, m, tea.WindowSizeMsg{Width: 160, Height: 24})
 	return ui.WithPreviewShown(feed(t, m, m.Init()))
 }
 
