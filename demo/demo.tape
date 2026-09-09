@@ -25,7 +25,7 @@ Set TypingSpeed 40ms
 Set Padding 10
 
 Hide
-Type `mkdir -p demo/out; rm -rf demo/out/home; cp -R demo/home demo/out/home; python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"127.0.0.1\",2222));s.listen();time.sleep(600)" & sleep 0.5; clear; HOME="$PWD/demo/out/home" "${SASASH_BIN:-./sasash}"`
+Type `mkdir -p demo/out; rm -rf demo/out/home; cp -R demo/home demo/out/home; python3 -c "import socket,time;s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind((\"127.0.0.1\",2222));s.listen();time.sleep(600)" & sleep 0.5; clear; HOME="$PWD/demo/out/home" "${SASASH_BIN:-./sasash}"; kill %1 2>/dev/null`
 Enter
 Sleep 2s
 Show
@@ -58,6 +58,11 @@ Escape
 Sleep 300ms
 Escape
 Sleep 500ms
+Type "o"
+Sleep 1s
+Screenshot demo/out/frame-settings.png
+Escape
+Sleep 300ms
 Type "t"
 Sleep 800ms
 Type "t"
@@ -67,9 +72,18 @@ Sleep 800ms
 Screenshot demo/out/frame-theme.png
 Type "t"
 Sleep 500ms
+# l cycles list -> paths: the mark lands on a path row; j to vpn, enter
+# writes HostName — the row's glyph follows the path ssh now dials.
 Type "l"
 Sleep 900ms
 Screenshot demo/out/frame-paths.png
+Type "j"
+Sleep 700ms
+Enter
+Sleep 1.2s
+Screenshot demo/out/frame-switch.png
+Type "l"
+Sleep 400ms
 Type "l"
 Sleep 900ms
 Screenshot demo/out/frame-tunnels.png

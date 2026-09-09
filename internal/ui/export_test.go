@@ -274,7 +274,7 @@ func LogoFaceNames() []string {
 }
 func RenderLogo(name string, width, height int) []string {
 	for _, f := range logoFaces {
-		if f.name == name && logoFits(f, width, height) {
+		if f.name == name && logoFits(f, width, height, 0) {
 			return renderLogo(NewStyles(Themes[0].Palette), f)
 		}
 	}

@@ -105,13 +105,19 @@ func TestModel_View_RowsCarryTunnelCount(t *testing.T) {
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
 	stateDir := t.TempDir()
-	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
+	// A stale twin of web's port reads listening (the port answers, but
+	// for web's process): counted as up it would claim a forward we do
+	// not serve — the row counts Up only, never Listening.
+	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"","spec":"3000:localhost:9999"}]}`)
 	m := tunnelModelSpawn(t, r, fakespawn.New().Dial(d).Live(41), d, stateDir)
 	before := ui.ListPaneWidth(m)
 	m = feed(t, m, m.Init())
 	view := m.View()
-	if row := rowOf(t, view, "ubuntu"); !strings.Contains(row, "› ○ ubuntu") || !strings.Contains(row, "1 up") {
-		t.Errorf("ubuntu row = %q, want the ○ (its path is down) and 1 up", row)
+	if row := rowOf(t, view, "ubuntu"); !strings.Contains(row, "› ○ ubuntu") || !strings.Contains(row, " 1 up") || strings.Contains(row, "2 up") {
+		t.Errorf("ubuntu row = %q, want the ○ (its path is down) and exactly 1 up (the listening twin is not ours)", row)
+	}
+	if !strings.Contains(view, "listening") {
+		t.Fatalf("fixture: the stale twin should read listening in the detail pane:\n%s", view)
 	}
 	for _, alias := range []string{"bare", "spare"} {
 		if row := rowOf(t, view, alias); strings.Contains(row, " up") {
@@ -123,22 +129,25 @@ func TestModel_View_RowsCarryTunnelCount(t *testing.T) {
 	}
 }
 
-func TestModel_View_NarrowPaneDropsTheCountColumn(t *testing.T) {
+func TestModel_View_NarrowPaneDropsStatusColumns(t *testing.T) {
 	t.Parallel()
-	// At 80 columns the list pane cannot hold a real alias beside the
-	// count column, so the column goes whole and the alias stays whole;
-	// wider, the column is there (reserved, blank until a poll says up).
+	// A column that would leave the alias a stub goes whole instead: the
+	// count column first (the classic 80 columns cannot hold it beside a
+	// real alias), the latency next (a narrow split); the glyph and the
+	// whole alias stay at every width. Wide, both columns are there.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
-	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond)
+	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond).Up("192.0.2.10:22", 20*time.Millisecond)
 	stateDir := t.TempDir()
 	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41}]}`)
 	tests := []struct {
-		name      string
-		width     int
-		wantCount bool
+		name        string
+		width       int
+		wantLatency bool
+		wantCount   bool
 	}{
-		{name: "classic 80", width: 80, wantCount: false},
-		{name: "wide", width: 100, wantCount: true},
+		{name: "narrow split", width: 50, wantLatency: false, wantCount: false},
+		{name: "classic 80", width: 80, wantLatency: true, wantCount: false},
+		{name: "wide", width: 100, wantLatency: true, wantCount: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -147,11 +156,15 @@ func TestModel_View_NarrowPaneDropsTheCountColumn(t *testing.T) {
 			m = update(t, m, tea.WindowSizeMsg{Width: tt.width, Height: 24})
 			m = feed(t, m, m.Init())
 			row := rowOf(t, m.View(), "ubuntu")
-			if got := strings.Contains(row, "1 up"); got != tt.wantCount {
+			listPart := string([]rune(row)[:ui.ListPaneWidth(m)])
+			if got := strings.Contains(listPart, "20ms"); got != tt.wantLatency {
+				t.Errorf("row = %q, latency shown %v, want %v", row, got, tt.wantLatency)
+			}
+			if got := strings.Contains(listPart, "1 up"); got != tt.wantCount {
 				t.Errorf("row = %q, count shown %v, want %v", row, got, tt.wantCount)
 			}
-			if !strings.Contains(row, "› ○ ubuntu ") {
-				t.Errorf("row = %q, want the whole alias", row)
+			if !strings.Contains(listPart, "› ● ubuntu") {
+				t.Errorf("row = %q, want the glyph and the whole alias", row)
 			}
 		})
 	}
@@ -171,12 +184,35 @@ func TestModel_View_LongAliasKeepsTheStatusColumns(t *testing.T) {
 			continue
 		}
 		listPart := strings.TrimRight(string([]rune(line)[:lw]), " ")
-		if !strings.Contains(listPart, "…") || !strings.HasSuffix(listPart, "  …") {
-			t.Errorf("list part = %q, want the ellipsis in the alias and the pending column after it", listPart)
+		alias, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimLeft(listPart, " "), "› ◌ "), "  ")
+		if !strings.HasSuffix(alias, "…") || !strings.HasSuffix(listPart, "  …") {
+			t.Errorf("list part = %q (alias cell %q), want the alias cut with … and the pending column after it", listPart, alias)
 		}
 		return
 	}
 	t.Errorf("View() has no selected row for the long alias:\n%s", view)
+}
+
+func TestModel_View_RowsForgetTheRoundOnReload(t *testing.T) {
+	t.Parallel()
+	// A reload that changes a host's paths drops the last round (the
+	// statuses were index-aligned with the OLD paths); the rows must
+	// read pending at once — not the previous config's numbers under
+	// the new names — before the re-probe lands.
+	m := update(t, glanceModel(t), tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = update(t, m, m.Init()())
+	if row := rowOf(t, m.View(), "alpha"); !strings.Contains(row, "20ms") {
+		t.Fatalf("alpha row before the reload = %q, want its 20ms", row)
+	}
+	m = ui.WithLoadHosts(m, func() ([]hostmodel.Host, []error, error) {
+		return []hostmodel.Host{{Alias: "alpha", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.11"}}}}, nil, nil
+	})
+	next, reload := m.Update(ui.EditorExit(nil))
+	next, _ = next.(ui.Model).Update(reload()) // the re-probe cmd is NOT run
+	view := next.(ui.Model).View()
+	if row := rowOf(t, view, "alpha"); !strings.Contains(row, "› ◌ alpha") || strings.Contains(row, "20ms") {
+		t.Errorf("alpha row after the reload = %q, want pending, not the old round", row)
+	}
 }
 
 func TestModel_View_RowsNeverReadTheConfig(t *testing.T) {

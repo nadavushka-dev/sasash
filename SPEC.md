@@ -215,9 +215,13 @@ whole rather than clipping every alias), so the detail pane never shifts. The ro
 already reads — never a probe, poll, or config read of their own. The header is a slanted
 ascii wordmark with a `»` wake (palette-colored, plain ascii under `NO_COLOR`) when the
 terminal has at least 32 rows and the columns for it, else the one-line title; the tally
-rides the wordmark's baseline row. On a terminal wider than 120 columns the frame is centered
-horizontally (the cap places, it never cuts: a preview or plan row still runs to the
-terminal's edge); vertically the frame stays top-anchored.
+rides the wordmark's baseline row, and the wordmark yields to the plain title when the tally
+would not fit beside it. On a terminal wider than 120 columns the frame is centered
+horizontally. The cap places, it never cuts: every line is clamped at the terminal's width
+as before, and a line longer than the frame (a command preview, a plan row) shifts the whole
+frame left to fit whole rather than losing its tail; vertically the frame stays top-anchored.
+The status columns yield to alias room on a narrow pane — the count column first, then the
+latency; the glyph and a whole alias stay.
 
 The list is attention-ordered, not capability-ordered: *managed* hosts — declared in
 `sasash.conf`, or carrying any `@sasash` meta of their own — list first, in config order;

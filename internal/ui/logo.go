@@ -1,6 +1,10 @@
 package ui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // The wordmark (SASASH.4.29): a slanted figlet face — speed is the
 // product — with a chevron wake in the secondary accent. It replaces the
@@ -74,14 +78,17 @@ func logoWidth(f logoFace) int {
 }
 
 // logoFits reports whether the wordmark is shown at this frame size: the
-// rows must exist and the widest row (with its wake) must fit whole.
-func logoFits(f logoFace, width, height int) bool {
-	return height >= minLogoHeight && logoWidth(f)+1 <= width
+// rows must exist and the widest row (with its wake) must fit whole, as
+// must whatever rides the baseline row after it (tally is the header's
+// information; the wordmark is not allowed to evict it).
+func logoFits(f logoFace, width, height, baseline int) bool {
+	return height >= minLogoHeight && logoWidth(f)+1+baseline <= width
 }
 
 // renderLogo draws the face in the title color and the wake in the
 // secondary accent, one leading blank like the plain title. The last
-// row is returned unpadded so the header can append the tally to it.
+// row is the baseline: rendered without padding or wake (every face
+// declares it wake-free) so the header can append the tally to it.
 func renderLogo(st Styles, f logoFace) []string {
 	out := make([]string, len(f.rows))
 	for i, r := range f.rows {
@@ -96,21 +103,30 @@ func renderLogo(st Styles, f logoFace) []string {
 	return out
 }
 
+// showLogo reports whether this frame carries the wordmark: it fits
+// with the tally beside its baseline.
+func (m Model) showLogo() bool {
+	baseline := 0
+	if sum := m.summaryLine(); sum != "" {
+		baseline = 3 + lipgloss.Width(sum)
+	}
+	return logoFits(currentLogo(), m.width, m.height, baseline)
+}
+
 // logoLines is the header's wordmark block for this frame, nil when the
 // plain title is the right size.
 func (m Model) logoLines() []string {
-	f := currentLogo()
-	if !logoFits(f, m.width, m.height) {
+	if !m.showLogo() {
 		return nil
 	}
-	return renderLogo(m.styles, f)
+	return renderLogo(m.styles, currentLogo())
 }
 
 // headerHeight is the rows above the panes: the title (one line, or the
 // wordmark) and the blank under it.
 func (m Model) headerHeight() int {
-	if lines := m.logoLines(); lines != nil {
-		return len(lines) + 1
+	if m.showLogo() {
+		return len(currentLogo().rows) + 1
 	}
 	return 2
 }

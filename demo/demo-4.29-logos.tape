@@ -34,7 +34,7 @@ Screenshot demo/out/frame-logo-smslant.png
 Hide
 Type "q"
 Sleep 400ms
-Type `clear; HOME="$PWD/demo/out/home" demo/out/bin/sasash-speed`
+Type `clear; HOME="$PWD/demo/out/home" demo/out/bin/sasash-speed; kill %1 2>/dev/null`
 Enter
 Sleep 2s
 Show

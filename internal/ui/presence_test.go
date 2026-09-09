@@ -32,6 +32,9 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 		{name: "classic 80x24", width: 80, height: 24, wantLogo: false},
 		{name: "half of a 60-row screen", width: 200, height: 30, wantLogo: false},
 		{name: "tall but narrow", width: 40, height: 40, wantLogo: false},
+		// Room for the face but not for the tally beside its baseline:
+		// the wordmark never evicts the header's information.
+		{name: "tally would not fit beside the baseline", width: 55, height: 40, wantLogo: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,10 +51,10 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 				}
 			}
 			logo := ui.RenderLogo(ui.DefaultLogoFace(), tt.width, tt.height)
-			if (logo != nil) != tt.wantLogo {
-				t.Fatalf("RenderLogo() shown = %v, want %v", logo != nil, tt.wantLogo)
-			}
 			hh := ui.HeaderHeight(m)
+			if (hh > 2) != tt.wantLogo {
+				t.Fatalf("HeaderHeight() = %d (wordmark shown %v), want shown %v", hh, hh > 2, tt.wantLogo)
+			}
 			if !tt.wantLogo {
 				if hh != 2 || !strings.Contains(lines[0], "sasash") || !strings.Contains(lines[0], "2 hosts") {
 					t.Errorf("plain header: height %d, line 0 %q; want 2 and the title with its tally", hh, lines[0])
@@ -81,8 +84,8 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 }
 
 // Every shipped face renders on an 80-column full-screen terminal, with
-// a wake, and reads without color: what the styles emit in tests is the
-// plain text, exactly what NO_COLOR shows.
+// a wake. (Color is not asserted: go test renders in the ascii profile,
+// so the text here is the NO_COLOR text — plain ascii by construction.)
 func TestRenderLogo_EveryFace(t *testing.T) {
 	t.Parallel()
 	names := ui.LogoFaceNames()
@@ -103,9 +106,6 @@ func TestRenderLogo_EveryFace(t *testing.T) {
 		for i, r := range rows {
 			if w := lipgloss.Width(r); w > 79 {
 				t.Errorf("RenderLogo(%q) row %d width = %v, want < 80", name, i, w)
-			}
-			if strings.ContainsRune(r, '\x1b') {
-				t.Errorf("RenderLogo(%q) row %d carries an escape in a colorless test render: %q", name, i, r)
 			}
 		}
 	}
@@ -129,6 +129,7 @@ func TestModel_View_WideTerminalCentersTheFrame(t *testing.T) {
 		{name: "at the cap", width: ui.MaxFrameWidth, wantPad: 0},
 		{name: "one past the cap", width: ui.MaxFrameWidth + 1, wantPad: 0},
 		{name: "wide", width: 200, wantPad: (200 - ui.MaxFrameWidth) / 2},
+		{name: "one past a one-cell slack", width: ui.MaxFrameWidth + 2, wantPad: 1},
 		{name: "ultrawide", width: 300, wantPad: (300 - ui.MaxFrameWidth) / 2},
 	}
 	for _, tt := range tests {
@@ -170,14 +171,17 @@ func TestModel_View_FrameCapPlacesWithoutCutting(t *testing.T) {
 	m := ui.WithPreviewShown(ui.New(hosts, probe.Prober{Dialer: fakedial.New()}, fakerun.New(), ui.Config{Spawn: ui.SpawnConfig{Mux: ui.MuxTmux, Target: "tab"}}))
 	width := 240
 	m = update(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
-	pad := (width - ui.MaxFrameWidth) / 2
 	var preview string
 	for _, line := range strings.Split(m.View(), "\n") {
 		if strings.Contains(line, "$ tmux") {
 			preview = line
 		}
 	}
-	if w := lipgloss.Width(preview); w <= pad+ui.MaxFrameWidth || w > width || !strings.HasSuffix(preview, "(tmux window)") {
-		t.Errorf("preview width = %d (pad %d, cap %d), line %q; want it whole past the frame's edge within the terminal", w, pad, ui.MaxFrameWidth, preview)
+	// Whole — every segment main showed at this width — inside the
+	// terminal, and the frame shifted left to make the room: the line's
+	// indent is smaller than the cap's own centering would give.
+	lead := len(preview) - len(strings.TrimLeft(preview, " "))
+	if w := lipgloss.Width(preview); w > width || !strings.HasSuffix(preview, "(tmux window)") || w-lead <= ui.MaxFrameWidth || lead >= (width-ui.MaxFrameWidth)/2 {
+		t.Errorf("preview width = %d, lead %d (cap %d), line %q; want it whole within the terminal, longer than the cap, with the frame shifted left", w, lead, ui.MaxFrameWidth, preview)
 	}
 }

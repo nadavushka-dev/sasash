@@ -676,7 +676,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.termWidth, m.height = msg.Width, msg.Height
 		m.width = min(msg.Width, maxFrameWidth)
-		m.help.Width = m.lineWidth()
+		m.help.Width = m.termWidth
 		if m.popup.open() {
 			// The room changed (help width included): a parked offset
 			// would eat the next key.
@@ -1459,26 +1459,22 @@ const paneGap = 6
 // maxFrameWidth caps the frame — the width the pane proportions and the
 // centering are computed from: past it the panes gain nothing but
 // distance from each other, so a wider terminal centers the frame
-// instead (SASASH.4.29). The cap places, it never cuts: every line may
-// still run to the terminal's right edge (lineWidth), so a command
-// preview or a plan row that fit on the wide terminal before still
-// does — presentation changed, honesty did not. Narrow terminals keep
-// the existing clamps.
+// instead (SASASH.4.29). The cap places, it never cuts: every line is
+// clamped at the TERMINAL's width exactly as before, and centerFrame
+// gives a line longer than the frame its room by shifting the whole
+// frame left — so a command preview or a plan row that fit on the wide
+// terminal before still fits whole. Presentation changed, honesty did
+// not. Narrow terminals keep the existing clamps.
 const maxFrameWidth = 120
 
-// lineWidth is the room a line has: from the frame's left edge to the
-// terminal's right edge.
-func (m Model) lineWidth() int {
-	return m.termWidth - (m.termWidth-m.width)/2
-}
-
 // listWidth gives the left pane roughly a third of the frame, clamped
-// so short lists stay narrow and tiny terminals stay usable. The cap
-// leaves a status-bearing row (SASASH.4.29) room for a real alias.
+// so short lists stay narrow and tiny terminals stay usable. The cap is
+// what a status-bearing row (SASASH.4.29) needs for a real alias beside
+// its columns — every column past it belongs to the detail pane.
 func (m Model) listWidth() int {
 	w := m.width / 3
-	if w > 36 {
-		w = 36
+	if w > 32 {
+		w = 32
 	}
 	if w < 16 {
 		w = 16
@@ -1533,9 +1529,9 @@ func (m Model) helpView() string {
 	// in the ? panel. A keyboard owner or a pane focus keeps its one-line
 	// context help, because that line says what the keys do there.
 	if k == nil {
-		return m.styles.Clamp.MaxWidth(m.lineWidth()).Render(" " + m.whisper())
+		return m.styles.Clamp.MaxWidth(m.termWidth).Render(" " + m.whisper())
 	}
-	v := m.styles.Clamp.MaxWidth(m.lineWidth()).Render(" " + m.help.View(k))
+	v := m.styles.Clamp.MaxWidth(m.termWidth).Render(" " + m.help.View(k))
 	return clampHeight(v, m.height-4)
 }
 
@@ -1581,7 +1577,7 @@ func (m Model) View() string {
 		panes := lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), strings.Repeat(" ", paneGap), right)
 		// A long alias + hostname can outgrow the terminal; truncate every
 		// line so the frame never wraps and pushes the alt screen around.
-		panes = m.styles.Clamp.MaxWidth(m.lineWidth()).Render(panes)
+		panes = m.styles.Clamp.MaxWidth(m.termWidth).Render(panes)
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panes)
 	}
 	// On a very short terminal the panes can outgrow their slot.
@@ -1641,7 +1637,7 @@ func (m Model) View() string {
 	}
 	// The same kind of clamp as the panes: a long alias (or notice) must
 	// not wrap the preview line and push the alt screen around.
-	preview = m.styles.Clamp.MaxWidth(m.lineWidth()).Render(preview)
+	preview = m.styles.Clamp.MaxWidth(m.termWidth).Render(preview)
 	// A shorthand's full expansion gets a line of its own under the
 	// prompt — what enter will really use is never hidden — cut with a
 	// visible ellipsis rather than silently when even that is too long.
@@ -1649,7 +1645,7 @@ func (m Model) View() string {
 		preview += "\n" + line
 	}
 	frame := strings.Join([]string{header, "", body, preview, m.helpView()}, "\n")
-	return centerFrame(frame, m.termWidth-m.width)
+	return centerFrame(frame, m.width, m.termWidth)
 }
 
 // headerView is the top of the frame: the wordmark when it fits, else
@@ -1680,13 +1676,22 @@ func (m Model) headerView() string {
 
 // centerFrame indents every line by half the slack a wide terminal
 // leaves beside the frame, so the panes sit together mid-screen. The
-// vertical axis stays top-anchored: lists grow down.
-func centerFrame(frame string, slack int) string {
+// slack is measured against the frame's WIDEST line when that exceeds
+// the cap (a long command preview, a plan row): centering yields to
+// content — the frame shifts left rather than cutting a line that fits
+// the terminal. The vertical axis stays top-anchored: lists grow down.
+func centerFrame(frame string, width, termWidth int) string {
+	lines := strings.Split(frame, "\n")
+	widest := width
+	for _, l := range lines {
+		widest = max(widest, lipgloss.Width(l))
+	}
+	slack := termWidth - widest
 	if slack < 2 {
 		return frame
 	}
 	pad := strings.Repeat(" ", slack/2)
-	return pad + strings.ReplaceAll(frame, "\n", "\n"+pad)
+	return pad + strings.Join(lines, "\n"+pad)
 }
 
 // expansionLine renders promptExpansion for the frame, "" when none.
@@ -1696,9 +1701,9 @@ func (m Model) expansionLine() string {
 		return "" // no row to give up on a tiny terminal
 	}
 	line := " " + m.styles.PathExtra.Render("→ "+full)
-	if lipgloss.Width(line) > m.lineWidth() {
+	if lipgloss.Width(line) > m.termWidth {
 		r := []rune(" → " + full)
-		keep := max(m.lineWidth()-1, 1)
+		keep := max(m.termWidth-1, 1)
 		if keep < len(r) {
 			r = append(r[:keep], '…')
 		}
@@ -1792,7 +1797,7 @@ func (m Model) detailView() string {
 				tail = " " + r + tail
 			}
 			lineSoFar := lipgloss.Width(strings.TrimLeft(b.String()[strings.LastIndex(b.String(), "\n")+1:], "\n"))
-			room := m.lineWidth() - m.listWidth() - paneGap - lineSoFar - lipgloss.Width(tail) - 2
+			room := m.termWidth - m.listWidth() - paneGap - lineSoFar - lipgloss.Width(tail) - 2
 			// The tail is whole or absent: a count cut by the frame clamp
 			// would read as a smaller, plausible number.
 			if room >= 0 {
@@ -1840,7 +1845,7 @@ func (m Model) previewView() string {
 			// first, since the spawn line is the one that hides it.
 			if m.spawn.planFor(host.Alias) != nil {
 				seg := "   " + m.styles.HelpKey.Render("S") + " " + m.styles.HelpDesc.Render(strings.Join(sshCommand(host.Alias), " "))
-				if lipgloss.Width(v+seg) <= m.lineWidth() {
+				if lipgloss.Width(v+seg) <= m.termWidth {
 					v += seg
 				}
 			}
@@ -1852,13 +1857,13 @@ func (m Model) previewView() string {
 				hseg = strings.Join(plan.what, " ") + " (" + plan.where + ")"
 			}
 			seg := "   " + m.styles.HelpKey.Render("H") + " " + m.styles.HelpDesc.Render(hseg)
-			if lipgloss.Width(v+seg) <= m.lineWidth() {
+			if lipgloss.Width(v+seg) <= m.termWidth {
 				v += seg
 			}
 			// p's plan: the exact path it will make active, when it fits.
 			if plan := m.switchPlan(host); plan != "" {
 				seg := "   " + m.styles.HelpDesc.Render(plan)
-				if lipgloss.Width(v+seg) <= m.lineWidth() {
+				if lipgloss.Width(v+seg) <= m.termWidth {
 					v += seg
 				}
 			}
