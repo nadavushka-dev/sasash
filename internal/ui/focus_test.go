@@ -199,10 +199,10 @@ func TestModel_Update_FocusKeepsActionKeys(t *testing.T) {
 	}
 	next, cmd := m.Update(keyMsg(" "))
 	if cmd == nil {
-		t.Fatalf("space under tunnels focus cmd = nil, want the set action")
+		t.Fatalf("space under tunnels focus cmd = nil, want the forward action")
 	}
 	m = update(t, next.(ui.Model), cmd())
-	if view := m.View(); !strings.Contains(view, "web up") {
+	if view := m.View(); !strings.Contains(view, "web "+specWeb0+" up") {
 		t.Errorf("View() after space missing the outcome:\n%s", view)
 	}
 	m = press(t, m, "t")

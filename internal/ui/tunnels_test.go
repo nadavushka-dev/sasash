@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -247,19 +248,19 @@ func TestModel_Update_FocusMovesHighlightAndPreview(t *testing.T) {
 		wantMore    string
 	}{
 		{key: "", wantPreview: "$ ssh ubuntu"},
-		// l focuses the pane on the first row. web is partially up:
-		// space spawns only what is not up — web's second forward.
-		{key: "l", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		// l focuses the pane on the first row, web0, which is up: space
+		// kills that one process. The preview follows the highlight.
+		{key: "l", wantPreview: "$ kill -TERM 41"},
 		{key: "j", wantPreview: spawnArgv("ubuntu", specWeb1)},
 		{key: "j", wantPreview: spawnArgv("ubuntu", specAPI)},
 		{key: "j", wantPreview: spawnArgv("ubuntu", specAPI)}, // clamps at the last row
 		{key: "k", wantPreview: spawnArgv("ubuntu", specWeb1)},
 		{key: "G", wantPreview: spawnArgv("ubuntu", specAPI)},
-		{key: "g", wantPreview: spawnArgv("ubuntu", specWeb1)},
-		{key: "tab", wantPreview: spawnArgv("ubuntu", specWeb1)},
-		{key: "shift+tab", wantPreview: spawnArgv("ubuntu", specWeb1)},
+		{key: "g", wantPreview: "$ kill -TERM 41"},
+		{key: "tab", wantPreview: spawnArgv("ubuntu", specWeb1)}, // tab in the pane: next row
+		{key: "shift+tab", wantPreview: "$ kill -TERM 41"},
 		{key: "h", wantPreview: "$ ssh ubuntu"},
-		{key: "tab", wantPreview: spawnArgv("ubuntu", specWeb1)}, // tab from the list = l
+		{key: "tab", wantPreview: "$ kill -TERM 41"}, // tab from the list = l
 		{key: "esc", wantPreview: "$ ssh ubuntu"},
 	}
 	for i, st := range steps {
@@ -313,32 +314,33 @@ func TestModel_Update_CopyCmdCopiesPreview(t *testing.T) {
 	}
 }
 
-func TestModel_Update_SpaceBringsSetUp(t *testing.T) {
+func TestModel_Update_SetToggleBringsSetUp(t *testing.T) {
 	t.Parallel()
-	// Master dead, everything down: space on web spawns one process per
+	// Master dead, everything down: s on web spawns one process per
 	// spec, in order, runs nothing through the runner, then re-polls.
+	// The preview line is space's (one forward): the first spawn alone.
 	r := fakerun.New().StubExit(255, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New()
 	sp := fakespawn.New().Dial(d)
 	m := polledSpawn(t, r, sp, d, t.TempDir())
 	m = press(t, m, "l")
-	if view := m.View(); !strings.Contains(view, "$ "+spawnArgv("ubuntu", specWeb0)) || !strings.Contains(view, "+1 more") {
-		t.Fatalf("View() with web down should preview the first spawn:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ "+spawnArgv("ubuntu", specWeb0)) || strings.Contains(view, "more") {
+		t.Fatalf("View() with web down should preview the highlighted forward's spawn alone:\n%s", view)
 	}
 	before := len(r.CallKeys())
-	next, cmd := m.Update(keyMsg(" "))
+	next, cmd := m.Update(keyMsg("s"))
 	m = next.(ui.Model)
 	if cmd == nil {
-		t.Fatalf("Update(space) cmd = nil, want action cmd")
+		t.Fatalf("Update(s) cmd = nil, want action cmd")
 	}
 	next, refresh := m.Update(cmd())
 	m = next.(ui.Model)
 	want := []string{spawnArgv("ubuntu", specWeb0), spawnArgv("ubuntu", specWeb1)}
 	if got := sp.Spawned(); !reflect.DeepEqual(got, want) {
-		t.Errorf("space spawned = %v, want %v", got, want)
+		t.Errorf("s spawned = %v, want %v", got, want)
 	}
 	if got := r.CallKeys()[before:]; len(got) != 0 {
-		t.Errorf("space ran %v through the runner, want nothing", got)
+		t.Errorf("s ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "web up") {
 		t.Errorf("View() missing the success notice:\n%s", view)
@@ -348,9 +350,9 @@ func TestModel_Update_SpaceBringsSetUp(t *testing.T) {
 	}
 }
 
-func TestModel_Update_SpaceTakesSetDown(t *testing.T) {
+func TestModel_Update_SetToggleTakesSetDown(t *testing.T) {
 	t.Parallel()
-	// Every forward of web up, ours: space kills each process.
+	// Every forward of web up, ours: s kills each process.
 	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
 	d := fakedial.New().Up("127.0.0.1:3000", time.Millisecond).Up("127.0.0.1:3001", time.Millisecond)
 	sp := fakespawn.New().Dial(d).Live(41).Live(42)
@@ -358,21 +360,21 @@ func TestModel_Update_SpaceTakesSetDown(t *testing.T) {
 	writeState(t, stateDir, `{"forwards":[{"set":"web","spec":"`+specWeb0+`","pid":41},{"set":"web","spec":"`+specWeb1+`","pid":42}]}`)
 	m := polledSpawn(t, r, sp, d, stateDir)
 	m = press(t, m, "l")
-	if view := m.View(); !strings.Contains(view, "$ kill -TERM 41") || !strings.Contains(view, "+1 more") {
-		t.Fatalf("View() with web fully up should preview the kill:\n%s", view)
+	if view := m.View(); !strings.Contains(view, "$ kill -TERM 41") || strings.Contains(view, "more") {
+		t.Fatalf("View() with web0 up should preview its kill alone:\n%s", view)
 	}
 	before := len(r.CallKeys())
-	next, cmd := m.Update(keyMsg(" "))
+	next, cmd := m.Update(keyMsg("s"))
 	m = next.(ui.Model)
 	if cmd == nil {
-		t.Fatalf("Update(space) cmd = nil, want action cmd")
+		t.Fatalf("Update(s) cmd = nil, want action cmd")
 	}
 	m = update(t, m, cmd())
 	if got := sp.Killed(); !reflect.DeepEqual(got, []int{41, 42}) {
-		t.Errorf("space killed = %v, want [41 42]", got)
+		t.Errorf("s killed = %v, want [41 42]", got)
 	}
 	if got := r.CallKeys()[before:]; len(got) != 0 {
-		t.Errorf("space ran %v through the runner, want nothing", got)
+		t.Errorf("s ran %v through the runner, want nothing", got)
 	}
 	if view := m.View(); !strings.Contains(view, "web down") {
 		t.Errorf("View() missing the success notice:\n%s", view)
@@ -407,12 +409,12 @@ func readOnlyState(t *testing.T) string {
 	return dir
 }
 
-func TestModel_Update_SpaceOutcomes(t *testing.T) {
+func TestModel_Update_SetToggleOutcomes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
 		// webUp records both web forwards as ours and answering, so
-		// space goes down.
+		// s goes down.
 		webUp    bool
 		script   func(sp *fakespawn.Fake)
 		stateDir func(t *testing.T) string
@@ -471,10 +473,10 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 				m = press(t, m, "esc")
 			}
 			m = press(t, m, "l") // web
-			next, cmd := m.Update(keyMsg(" "))
+			next, cmd := m.Update(keyMsg("s"))
 			m = next.(ui.Model)
 			if cmd == nil {
-				t.Fatalf("Update(space) cmd = nil, want action cmd")
+				t.Fatalf("Update(s) cmd = nil, want action cmd")
 			}
 			m = update(t, m, cmd())
 			// A failure also opens the popup; closing it leaves the
@@ -511,15 +513,128 @@ func TestModel_Update_SpaceOutcomes(t *testing.T) {
 
 func TestModel_Update_SpaceNeedsHighlight(t *testing.T) {
 	t.Parallel()
-	m, r := aliveWeb0(t)
-	before := len(r.CallKeys())
-	next, cmd := m.Update(keyMsg(" "))
-	m = next.(ui.Model)
-	if cmd != nil || len(r.CallKeys()) != before {
-		t.Errorf("Update(space) without a highlight ran something: cmd %v, calls %v", cmd != nil, r.CallKeys()[before:])
+	for _, k := range []string{" ", "s"} {
+		t.Run(strconv.Quote(k), func(t *testing.T) {
+			t.Parallel()
+			m, r := aliveWeb0(t)
+			before := len(r.CallKeys())
+			next, cmd := m.Update(keyMsg(k))
+			m = next.(ui.Model)
+			if cmd != nil || len(r.CallKeys()) != before {
+				t.Errorf("Update(%q) without a highlight ran something: cmd %v, calls %v", k, cmd != nil, r.CallKeys()[before:])
+			}
+			if view := m.View(); !strings.Contains(view, "l cycles") {
+				t.Errorf("View() missing the tab hint:\n%s", view)
+			}
+		})
 	}
-	if view := m.View(); !strings.Contains(view, "l cycles") {
-		t.Errorf("View() missing the tab hint:\n%s", view)
+}
+
+func TestModel_Update_SpaceTogglesOneForward(t *testing.T) {
+	t.Parallel()
+	// Space is the per-forward toggle (SASASH.4.31): the highlighted row's
+	// one process, the set's other forwards untouched either way.
+	tests := []struct {
+		name        string
+		state       string
+		up          map[int]string // pid -> port answering
+		moves       []string       // after l
+		wantSpawned []string
+		wantKilled  []int
+		wantNotice  string
+	}{
+		{name: "a down forward starts alone", wantSpawned: []string{spawnArgv("ubuntu", specWeb0)},
+			wantNotice: "web " + specWeb0 + " up"},
+		{name: "an up forward stops alone, its sibling untouched",
+			state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41},{"set":"web","spec":"` + specWeb1 + `","pid":42}]}`,
+			up:    map[int]string{41: "3000", 42: "3001"}, wantKilled: []int{41}, wantNotice: "web " + specWeb0 + " down"},
+		{name: "a down sibling of an up forward starts alone",
+			state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41}]}`,
+			up:    map[int]string{41: "3000"}, moves: []string{"j"},
+			wantSpawned: []string{spawnArgv("ubuntu", specWeb1)}, wantNotice: "web " + specWeb1 + " up"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+			d := fakedial.New()
+			sp := fakespawn.New().Dial(d)
+			for pid, port := range tt.up {
+				d.Up("127.0.0.1:"+port, time.Millisecond)
+				sp.LiveOn(pid, port)
+			}
+			stateDir := t.TempDir()
+			if tt.state != "" {
+				writeState(t, stateDir, tt.state)
+			}
+			m := polledSpawn(t, r, sp, d, stateDir)
+			m = press(t, m, append([]string{"l"}, tt.moves...)...)
+			before := len(r.CallKeys())
+			next, cmd := m.Update(keyMsg(" "))
+			m = next.(ui.Model)
+			if cmd == nil {
+				t.Fatalf("Update(space) cmd = nil, want action cmd")
+			}
+			m = update(t, m, cmd())
+			if got := sp.Spawned(); !reflect.DeepEqual(got, tt.wantSpawned) {
+				t.Errorf("space spawned = %v, want %v", got, tt.wantSpawned)
+			}
+			if got := sp.Killed(); !reflect.DeepEqual(got, tt.wantKilled) {
+				t.Errorf("space killed = %v, want %v", got, tt.wantKilled)
+			}
+			if got := r.CallKeys()[before:]; len(got) != 0 {
+				t.Errorf("space ran %v through the runner, want nothing", got)
+			}
+			if view := m.View(); !strings.Contains(view, tt.wantNotice) {
+				t.Errorf("View() missing %q:\n%s", tt.wantNotice, view)
+			}
+		})
+	}
+}
+
+func TestModel_Update_SpaceUpDownUp(t *testing.T) {
+	t.Parallel()
+	// The same row, three presses: start, stop, start again — the port
+	// follows the process on the wired dialer, so each poll sees reality.
+	r := fakerun.New().StubExit(0, "ssh", "-O", "check", "ubuntu")
+	d := fakedial.New()
+	sp := fakespawn.New().Dial(d)
+	m := polledSpawn(t, r, sp, d, t.TempDir())
+	m = press(t, m, "l")
+	space := func(m ui.Model) ui.Model {
+		t.Helper()
+		next, cmd := m.Update(keyMsg(" "))
+		if cmd == nil {
+			t.Fatalf("Update(space) cmd = nil, want action cmd")
+		}
+		next, refresh := next.(ui.Model).Update(cmd()) // the outcome …
+		return feed(t, next.(ui.Model), refresh)       // … then its re-poll
+	}
+	// The notice takes the preview line after an action, so the row's
+	// own glyph and word are what say which way the next press goes.
+	m = space(m)
+	if view := m.View(); !strings.Contains(view, "› ● web "+specWeb0+" up") {
+		t.Fatalf("after the first space web0 should be up:\n%s", view)
+	}
+	m = space(m)
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{1000}) {
+		t.Errorf("second space killed = %v, want [1000]", got)
+	}
+	if view := m.View(); !strings.Contains(view, "› ○ web "+specWeb0+" down") {
+		t.Fatalf("after the second space web0 should be down:\n%s", view)
+	}
+	m = space(m)
+	want := []string{spawnArgv("ubuntu", specWeb0), spawnArgv("ubuntu", specWeb0)}
+	if got := sp.Spawned(); !reflect.DeepEqual(got, want) {
+		t.Errorf("spawned = %v, want %v", got, want)
+	}
+	if view := m.View(); !strings.Contains(view, "› ● web "+specWeb0+" up") {
+		t.Errorf("after the third space web0 should be up again:\n%s", view)
+	}
+	// A fourth press proves the third started a NEW process, not a stale record.
+	m = space(m)
+	if got := sp.Killed(); !reflect.DeepEqual(got, []int{1000, 1001}) {
+		t.Errorf("fourth space killed = %v, want [1000 1001]", got)
 	}
 }
 
@@ -774,7 +889,7 @@ func TestModel_View_HelpListsTunnelKeys(t *testing.T) {
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = press(t, m, "?")
 	view := m.View()
-	for _, want := range []string{"toggle set", "restart master", "delete forward set", "tunnels pane", "host list"} {
+	for _, want := range []string{"toggle forward", "toggle set", "restart master", "delete forward set", "tunnels pane", "host list"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}

@@ -26,6 +26,7 @@ type KeyMap struct {
 	FocusRight  key.Binding
 	FocusLeft   key.Binding
 	Toggle      key.Binding
+	ToggleSet   key.Binding
 	AddFwd      key.Binding
 	CancelFwd   key.Binding
 	EditFwd     key.Binding
@@ -65,7 +66,8 @@ func DefaultKeyMap() KeyMap {
 		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
 		FocusRight:  key.NewBinding(key.WithKeys("l", "tab"), key.WithHelp("l/tab", "paths / tunnels pane")),
 		FocusLeft:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "host list")),
-		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle set")),
+		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle forward")),
+		ToggleSet:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "toggle set")),
 		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward")),
 		CancelFwd:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill forward")),
 		EditFwd:     key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit forward")),
@@ -149,6 +151,7 @@ func (t tunnelsKeys) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "host list")),
 		moveKeys,
 		t.k.Toggle,
+		t.k.ToggleSet,
 		t.k.CancelFwd,
 		t.k.EditFwd,
 		t.k.DeclareFwd,

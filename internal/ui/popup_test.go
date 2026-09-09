@@ -344,7 +344,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		m = press(t, m, "l")
 		next, cmd := m.Update(keyMsg(" "))
 		m = update(t, next.(ui.Model), cmd())
-		if ui.PopupOpen(m) || !strings.Contains(m.View(), "web up") {
+		if ui.PopupOpen(m) || !strings.Contains(m.View(), "web "+specWeb0+" up") {
 			t.Errorf("a successful tunnel action is a one-liner: popup %v:\n%s", ui.PopupOpen(m), m.View())
 		}
 		// A successful -N through the engine on the selected host too.

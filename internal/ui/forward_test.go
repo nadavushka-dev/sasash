@@ -332,9 +332,9 @@ func TestModel_View_SharedPortDemoted(t *testing.T) {
 			t.Errorf("dead row carries a shared-port note: %q", line)
 		}
 	}
-	// The ad-hoc set is not "all up", so space previews a spawn, not a
-	// kill.
-	m = press(t, m, "l", "G")
+	// A listening row is not up (no process of ours), so space previews
+	// its spawn, not a kill.
+	m = press(t, m, "l", "G", "k")
 	if view := m.View(); !strings.Contains(view, "$ "+spawnArgv("ubuntu", "3000:localhost:9999")) {
 		t.Errorf("View() preview on the listening row should be a spawn:\n%s", view)
 	}

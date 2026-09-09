@@ -1337,6 +1337,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m, m.toggleCmd(host, row)
+			case key.Matches(msg, m.keys.ToggleSet):
+				host, ok := m.Selected()
+				if !ok || m.tunnels == nil {
+					return m, nil
+				}
+				row, ok := m.highlighted(host)
+				if !ok {
+					m.notice = "no forward highlighted — l cycles to the tunnels pane"
+					return m, nil
+				}
+				return m, m.toggleSetCmd(host, row)
 			case key.Matches(msg, m.keys.AddFwd):
 				host, ok := m.Selected()
 				if !ok || m.tunnels == nil {

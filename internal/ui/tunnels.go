@@ -234,9 +234,10 @@ func setLabel(set string) string {
 }
 
 // actionPreview is what the bottom line shows: enter's ssh when no forward
-// row is highlighted, otherwise the first command space will run and how
-// many follow it — one process per forward: a spawn per row that is not
-// up, or a kill per row when the set is fully up.
+// row is highlighted, otherwise the one command space will run on that
+// row (SASASH.4.31: space toggles the highlighted forward, one process) —
+// the kill of its process when it is up, else its spawn. more is what
+// follows the shown command; a single forward has nothing following.
 func (m Model) actionPreview() (argv []string, more int) {
 	host, ok := m.Selected()
 	if !ok {
@@ -246,18 +247,12 @@ func (m Model) actionPreview() (argv []string, more int) {
 	if !ok {
 		return m.enterPreview(host.Alias), 0
 	}
-	specs, allUp := m.setSpecs(host, row.Set)
-	if len(specs) == 0 {
-		return m.enterPreview(host.Alias), 0
+	if row.State == tunnel.Up && row.Pid > 0 {
+		return killArgv(row.Pid), 0
 	}
-	if allUp {
-		pids := m.setPids(host, row.Set)
-		return killArgv(pids[0]), len(pids) - 1
-	}
-	pending := m.notUp(host, specs)
 	// The parent alias: the spawn runs against the machine (toggleCmd
 	// canonicalizes), so the preview must not name the path-variant.
-	return spawnArgv(m.tunnelHost(host).Alias, pending[0]), len(pending) - 1
+	return spawnArgv(m.tunnelHost(host).Alias, row.Spec), 0
 }
 
 // setPids lists the live pids of a set's up rows, in row order.
@@ -308,12 +303,32 @@ func (m Model) enterPreview(alias string) []string {
 	return plan.preview()
 }
 
-// toggleCmd is space: bring the highlighted row's set up — one process per
-// forward that is not already up, the up ones untouched — or, when every
-// forward of the set is up, kill them all. A port someone else holds
-// comes back as the engine's refusal, which the notice shows rather than
-// hides.
+// toggleCmd is space: toggle the highlighted forward alone (SASASH.4.31 —
+// per-forward start and stop, symmetric). Up (a process of ours, its port
+// answering) is killed; anything else is spawned — one process for that
+// spec, the set's other forwards untouched. A port someone else holds
+// (a listening row) comes back as the engine's refusal, which the notice
+// shows rather than hides.
 func (m Model) toggleCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
+	host = m.tunnelHost(host)
+	eng, alias, set, spec := m.tunnels, host.Alias, row.Set, row.Spec
+	name := setLabel(set) // a failure is labelled by the set, as s's is; the argv in it names the spec
+	if row.State == tunnel.Up {
+		return m.tunnelActionCmd(alias, name, name+" "+spec+" down", func(ctx context.Context) error {
+			return eng.Kill(ctx, alias, spec)
+		})
+	}
+	return m.tunnelActionCmd(alias, name, name+" "+spec+" up", func(ctx context.Context) error {
+		return eng.Spawn(ctx, alias, set, spec)
+	})
+}
+
+// toggleSetCmd is s: bring the highlighted row's whole set up — one
+// process per forward that is not already up, the up ones untouched — or,
+// when every forward of the set is up, kill them all. A port someone else
+// holds comes back as the engine's refusal, which the notice shows rather
+// than hides.
+func (m Model) toggleSetCmd(host hostmodel.Host, row tunnel.Forward) tea.Cmd {
 	host = m.tunnelHost(host)
 	eng, alias, set := m.tunnels, host.Alias, row.Set
 	specs, allUp := m.setSpecs(host, set)
