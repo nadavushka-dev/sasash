@@ -236,23 +236,24 @@ func setLabel(set string) string {
 // actionPreview is what the bottom line shows: enter's ssh when no forward
 // row is highlighted, otherwise the one command space will run on that
 // row (SASASH.4.31: space toggles the highlighted forward, one process) —
-// the kill of its process when it is up, else its spawn. more is what
-// follows the shown command; a single forward has nothing following.
-func (m Model) actionPreview() (argv []string, more int) {
+// the kill of its process when it is up, else its spawn. The same
+// predicate as toggleCmd's, so the line can never advertise one and space
+// do the other.
+func (m Model) actionPreview() []string {
 	host, ok := m.Selected()
 	if !ok {
-		return nil, 0
+		return nil
 	}
 	row, ok := m.highlighted(host)
 	if !ok {
-		return m.enterPreview(host.Alias), 0
+		return m.enterPreview(host.Alias)
 	}
-	if row.State == tunnel.Up && row.Pid > 0 {
-		return killArgv(row.Pid), 0
+	if row.State == tunnel.Up {
+		return killArgv(row.Pid)
 	}
 	// The parent alias: the spawn runs against the machine (toggleCmd
 	// canonicalizes), so the preview must not name the path-variant.
-	return spawnArgv(m.tunnelHost(host).Alias, row.Spec), 0
+	return spawnArgv(m.tunnelHost(host).Alias, row.Spec)
 }
 
 // setPids lists the live pids of a set's up rows, in row order.
@@ -265,28 +266,6 @@ func (m Model) setPids(host hostmodel.Host, set string) []int {
 		}
 	}
 	return pids
-}
-
-// notUp filters specs down to the ones SpawnSet will actually spawn: every
-// spec whose row is not up. Before a poll lands nothing is known to be up,
-// so every spec counts.
-func (m Model) notUp(host hostmodel.Host, specs []string) []string {
-	rows, pending := m.forwardRows(host)
-	up := make(map[string]bool)
-	if !pending {
-		for _, f := range rows {
-			if f.State == tunnel.Up {
-				up[f.Spec] = true
-			}
-		}
-	}
-	var out []string
-	for _, s := range specs {
-		if !up[s] {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // enterPreview is what enter runs on the host row: the spawn plan when

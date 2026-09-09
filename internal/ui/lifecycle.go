@@ -34,7 +34,7 @@ type fwdDeletedMsg struct {
 // openDeclareFwd is n: declare a forward set on the host, desire only. It
 // reuses the settings add-tunnel flow from the set-name prompt on (the host
 // is the selected one, so the host prompt is skipped), and writes through
-// fwdset.Add; nothing is started (space connects it).
+// fwdset.Add; nothing is started (s connects it).
 func (m Model) openDeclareFwd(host hostmodel.Host) (Model, tea.Cmd) {
 	if m.saveForwardSet == nil {
 		m.notice = "declaring forward sets is not available"

@@ -539,7 +539,7 @@ func TestModel_Update_SettingsAddTunnel(t *testing.T) {
 	if !reflect.DeepEqual(calls, want) {
 		t.Errorf("hook calls = %+v, want %+v", calls, want)
 	}
-	if view := m.View(); !strings.Contains(view, "declared db on web") || !strings.Contains(view, "space starts it") {
+	if view := m.View(); !strings.Contains(view, "declared db on web") || !strings.Contains(view, "s starts it") {
 		t.Errorf("View() missing the declared notice:\n%s", view)
 	}
 	if reload == nil {

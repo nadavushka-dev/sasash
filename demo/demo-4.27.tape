@@ -49,7 +49,7 @@ Screenshot demo/out/frame-4.27-specs.png
 Enter
 Sleep 1.5s
 # The set is one row per forward under the tunnels section — all down (declared,
-# not started; space would connect the set).
+# not started; s would connect the set, space one forward).
 Screenshot demo/out/frame-4.27-set.png
 Sleep 800ms
 

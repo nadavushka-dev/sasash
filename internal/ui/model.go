@@ -770,7 +770,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.connErr != nil:
 			m.notice = "declared " + msg.name + " on " + msg.host + " but connect failed: " + oneLine(msg.connErr, msg.host)
 		default:
-			m.notice = "added " + strings.Join(msg.specs, " ") + " on " + msg.host + " as " + msg.name + " — persisted, space toggles it"
+			m.notice = "added " + strings.Join(msg.specs, " ") + " on " + msg.host + " as " + msg.name + " — persisted, s toggles it"
 		}
 		// The declaration changed the config: reload the host list (which
 		// re-polls), so the new set renders.
@@ -797,7 +797,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "not declared: " + msg.err.Error()
 			return m, nil
 		}
-		m.notice = "declared " + msg.name + " on " + msg.host + " — space starts it"
+		m.notice = "declared " + msg.name + " on " + msg.host + " — s starts it"
 		if m.loadHosts == nil {
 			return m, nil
 		}
@@ -1287,7 +1287,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, clipCmd(m.runner, s.Path.Host)
 			case key.Matches(msg, m.keys.CopyCmd):
-				argv, _ := m.actionPreview()
+				argv := m.actionPreview()
 				if argv == nil {
 					return m, nil
 				}
@@ -1818,20 +1818,17 @@ func (m Model) detailView() string {
 
 // previewView is the bottom command line: what enter will run, or — with
 // a forward row highlighted — what space will (SPEC §5, "always shows what
-// the highlighted action will run"). A set is one ssh call per forward;
-// the first is shown and the rest counted.
+// the highlighted action will run"). Space acts on the one highlighted
+// forward, so this is one command; s (the whole set) has no preview.
 func (m Model) previewView() string {
 	if host, ok := m.Selected(); ok && m.focus == focusPaths {
 		return " " + m.styles.HelpDesc.Render(m.pathPlan(host))
 	}
-	argv, more := m.actionPreview()
+	argv := m.actionPreview()
 	if argv == nil {
 		return ""
 	}
 	v := " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(argv, " "))
-	if more > 0 {
-		v += " " + m.styles.PathExtra.Render(fmt.Sprintf("+%d more", more))
-	}
 	// H is the other handoff on the host row: named beside enter's when
 	// it fits whole — a half-rendered command would be a lie, so a long
 	// alias drops it rather than clipping it.

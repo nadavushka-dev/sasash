@@ -151,8 +151,8 @@ func (t tunnelsKeys) ShortHelp() []key.Binding {
 		key.NewBinding(key.WithKeys("esc", "h"), key.WithHelp("esc/h", "host list")),
 		moveKeys,
 		t.k.Toggle,
+		t.k.CancelFwd, // the explicit stop beside its toggle: both fit an 80-column footer
 		t.k.ToggleSet,
-		t.k.CancelFwd,
 		t.k.EditFwd,
 		t.k.DeclareFwd,
 		t.k.DeleteFwd,

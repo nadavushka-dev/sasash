@@ -538,13 +538,20 @@ func TestModel_Update_SpaceTogglesOneForward(t *testing.T) {
 		name        string
 		state       string
 		up          map[int]string // pid -> port answering
+		listening   []string       // ports answering with no process of ours
 		moves       []string       // after l
 		wantSpawned []string
 		wantKilled  []int
 		wantNotice  string
+		wantState   string // in the state file afterwards
 	}{
 		{name: "a down forward starts alone", wantSpawned: []string{spawnArgv("ubuntu", specWeb0)},
-			wantNotice: "web " + specWeb0 + " up"},
+			wantNotice: "web " + specWeb0 + " up", wantState: `"set":"web"`}, // attributed to its set, not ad-hoc
+		// A listening row (port held, no process of ours) is not up: the
+		// spawn is refused by the engine and nothing is killed — never a
+		// false "down" while the listener lives.
+		{name: "a listening forward is refused, not killed", state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":0}]}`,
+			listening: []string{"3000"}, wantNotice: "already answers"},
 		{name: "an up forward stops alone, its sibling untouched",
 			state: `{"forwards":[{"set":"web","spec":"` + specWeb0 + `","pid":41},{"set":"web","spec":"` + specWeb1 + `","pid":42}]}`,
 			up:    map[int]string{41: "3000", 42: "3001"}, wantKilled: []int{41}, wantNotice: "web " + specWeb0 + " down"},
@@ -563,6 +570,9 @@ func TestModel_Update_SpaceTogglesOneForward(t *testing.T) {
 				d.Up("127.0.0.1:"+port, time.Millisecond)
 				sp.LiveOn(pid, port)
 			}
+			for _, port := range tt.listening {
+				d.Up("127.0.0.1:"+port, time.Millisecond)
+			}
 			stateDir := t.TempDir()
 			if tt.state != "" {
 				writeState(t, stateDir, tt.state)
@@ -576,8 +586,14 @@ func TestModel_Update_SpaceTogglesOneForward(t *testing.T) {
 				t.Fatalf("Update(space) cmd = nil, want action cmd")
 			}
 			m = update(t, m, cmd())
+			if ui.PopupOpen(m) { // a refusal opens the popup; the line keeps the outcome
+				m = press(t, m, "esc")
+			}
 			if got := sp.Spawned(); !reflect.DeepEqual(got, tt.wantSpawned) {
 				t.Errorf("space spawned = %v, want %v", got, tt.wantSpawned)
+			}
+			if b, _ := os.ReadFile(filepath.Join(stateDir, "ubuntu.json")); tt.wantState != "" && !strings.Contains(string(b), tt.wantState) {
+				t.Errorf("state after space = %s, want it to contain %s", b, tt.wantState)
 			}
 			if got := sp.Killed(); !reflect.DeepEqual(got, tt.wantKilled) {
 				t.Errorf("space killed = %v, want %v", got, tt.wantKilled)

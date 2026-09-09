@@ -61,7 +61,7 @@ func TestModel_Update_FocusFollowsHostChange(t *testing.T) {
 		t.Fatalf("after the filter accept: host %q, focused %v; want spare, list focus", host.Alias, ui.TunnelsFocused(m))
 	}
 	before := len(r.CallKeys())
-	for _, k := range []string{"x", " "} {
+	for _, k := range []string{"x", " ", "s"} {
 		next, cmd := m.Update(keyMsg(k))
 		m = next.(ui.Model)
 		if cmd != nil || len(r.CallKeys()) != before || !strings.Contains(m.View(), "no forward highlighted") {

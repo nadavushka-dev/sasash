@@ -69,7 +69,7 @@ func TestModel_Update_PopupOwnsTheKeyboard(t *testing.T) {
 	}
 	// Action keys are inert while it is open.
 	before := len(r.CallKeys())
-	for _, k := range []string{"S", "H", "o", "q", "a", "+", "x", "l", "t", "v", "p", "y", "c", " "} {
+	for _, k := range []string{"S", "H", "o", "q", "a", "+", "x", "s", "l", "t", "v", "p", "y", "c", " "} {
 		next, cmd := m.Update(keyMsg(k))
 		if cmd != nil || !ui.PopupOpen(next.(ui.Model)) {
 			t.Errorf("key %q under the popup: cmd %v, open %v", k, cmd != nil, ui.PopupOpen(next.(ui.Model)))
