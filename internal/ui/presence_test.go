@@ -3,7 +3,6 @@ package ui_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -15,10 +14,10 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
-// SASASH.4.29 presence: the wordmark shows only when the terminal has
-// the rows and columns for it, and the frame still fits the terminal
-// exactly — every line within the width, exactly height lines — at
-// every size, wordmark or not.
+// SASASH.4.29/4.32 presence: the wordmark band shows only when the
+// terminal has the rows and columns for it, and the frame still fits
+// the terminal exactly — every line within the width, exactly height
+// lines — at every size, band or not.
 func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -33,9 +32,9 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 		{name: "classic 80x24", width: 80, height: 24, wantLogo: false},
 		{name: "half of a 60-row screen", width: 200, height: 30, wantLogo: false},
 		{name: "tall but narrow", width: 40, height: 40, wantLogo: false},
-		// Room for the face but not for the tally beside its baseline:
-		// the wordmark never evicts the header's information.
-		{name: "tally would not fit beside the baseline", width: 55, height: 40, wantLogo: false},
+		// The face fits with nothing to spare; the tally has its own line,
+		// so nothing competes with it (4.32).
+		{name: "just the face's width", width: 48, height: 40, wantLogo: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -62,70 +61,60 @@ func TestModel_View_WordmarkFitsOrPlainTitle(t *testing.T) {
 				}
 				return
 			}
-			// The wordmark's rows, then the blank; the tally rides the
-			// baseline row (the last one), and the wake is above it.
-			if hh != len(logo)+1 {
-				t.Errorf("HeaderHeight() = %d, want the %d wordmark rows and a blank", hh, len(logo)+1)
+			// The band (4.32): the face's rows centered across the frame,
+			// then the wake leading the tally on its own centered line,
+			// then the blank. The face rows carry nothing else.
+			if hh != len(logo)+2 {
+				t.Errorf("HeaderHeight() = %d, want the %d face rows, the wake line and a blank", hh, len(logo)+2)
 			}
 			if strings.Contains(lines[0], "sasash") {
 				t.Errorf("line 0 = %q, want the wordmark's first row, not the plain title", lines[0])
 			}
-			base := lines[hh-2]
-			if !strings.Contains(base, "2 hosts") || strings.Contains(base, "»") {
-				t.Errorf("baseline row = %q, want the tally and no wake", base)
+			face := lines[:len(logo)]
+			if joined := strings.Join(face, "\n"); strings.Contains(joined, "hosts") || strings.Contains(joined, "»") {
+				t.Errorf("face rows carry the tally or the wake:\n%s", joined)
 			}
-			if !strings.Contains(strings.Join(lines[:hh-2], "\n"), "»") {
-				t.Errorf("View() wordmark has no wake:\n%s", view)
+			band := lines[hh-2]
+			if !strings.Contains(band, "»»»»") || !strings.Contains(band, "2 hosts") || strings.Index(band, "»") > strings.Index(band, "2 hosts") {
+				t.Errorf("wake line = %q, want the wake leading the tally", band)
 			}
 			if strings.TrimSpace(lines[hh-1]) != "" {
 				t.Errorf("line %d = %q, want the blank under the header", hh-1, lines[hh-1])
+			}
+			// Centered within the frame (plus the frame's own indent on
+			// an ultrawide terminal): the face block and the wake line
+			// each sit at half their slack.
+			frame := min(tt.width, ui.MaxFrameWidth)
+			framePad := (tt.width - frame) / 2
+			faceW, lead := 0, tt.width
+			for _, r := range face {
+				faceW = max(faceW, lipgloss.Width(strings.TrimSpace(r)))
+				lead = min(lead, len(r)-len(strings.TrimLeft(r, " ")))
+			}
+			if want := framePad + (frame-faceW)/2; lead != want {
+				t.Errorf("face block starts at column %d, want %d (frame %d, face %d):\n%s", lead, want, frame, faceW, strings.Join(face, "\n"))
+			}
+			bandLead := len(band) - len(strings.TrimLeft(band, " "))
+			if want := framePad + (frame-lipgloss.Width(strings.TrimSpace(band)))/2; bandLead != want {
+				t.Errorf("wake line starts at column %d, want %d: %q", bandLead, want, band)
 			}
 		})
 	}
 }
 
-// The default face is the human's pick (SASASH.4.29): a choice no other
-// test can see.
-func TestRenderLogo_DefaultFaceIsSmslant(t *testing.T) {
+// The default face is a product choice no other test can see (4.32:
+// the solid ANSI Shadow face).
+func TestRenderLogo_DefaultFaceIsANSIShadow(t *testing.T) {
 	t.Parallel()
-	if got := ui.DefaultLogoFace(); got != "smslant" {
-		t.Errorf("DefaultLogoFace() = %q, want smslant", got)
+	if got := ui.DefaultLogoFace(); got != "ansi-shadow" {
+		t.Errorf("DefaultLogoFace() = %q, want ansi-shadow", got)
 	}
 }
 
-// The wordmark yields to the tally, and the tally's text changes width
-// during a session (probing… → the round's counts): at a width where
-// that flips the header, the list must be re-sized to the pane area it
-// has now — not the one the last resize saw.
-func TestModel_Update_ListFollowsTheHeaderHeight(t *testing.T) {
-	t.Parallel()
-	// 57 cols: the wordmark (34) + 1 + 3 + "2 hosts · probing…" (19)
-	// fits exactly; the round's "2 hosts · 2 reachable" (21) does not.
-	hosts := []hostmodel.Host{
-		{Alias: "alpha", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.10"}}},
-		{Alias: "bravo", Paths: []probe.Path{{Name: "lan", Host: "192.0.2.20"}}},
-	}
-	d := fakedial.New().Up("192.0.2.10:22", 20*time.Millisecond).Up("192.0.2.20:22", 5*time.Millisecond)
-	m := ui.New(hosts, probe.Prober{Dialer: d, Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{})
-	m = update(t, m, tea.WindowSizeMsg{Width: 57, Height: 40})
-	if ui.HeaderHeight(m) <= 2 {
-		t.Fatalf("HeaderHeight() before the round = %d, want the wordmark (fixture geometry)", ui.HeaderHeight(m))
-	}
-	m = update(t, m, m.Init()())
-	if ui.HeaderHeight(m) != 2 {
-		t.Fatalf("HeaderHeight() after the round = %d, want the plain title (fixture geometry)", ui.HeaderHeight(m))
-	}
-	if got, want := ui.ListHeight(m), ui.ContentHeight(m); got != want {
-		t.Errorf("list height = %d after the header changed, want the pane area %d", got, want)
-	}
-	if lines := strings.Split(m.View(), "\n"); len(lines) != 40 {
-		t.Errorf("View() is %d lines, want 40", len(lines))
-	}
-}
-
-// Every shipped face renders on an 80-column full-screen terminal, with
-// a wake. (Color is not asserted: go test renders in the ascii profile,
-// so the text here is the NO_COLOR text — plain ascii by construction.)
+// Every shipped face renders on an 80-column full-screen terminal, its
+// rows one width (the block centers as a unit). (Color is not asserted:
+// go test renders in the ascii profile, so the text here is the
+// NO_COLOR text — the same solid glyphs.)
 func TestRenderLogo_EveryFace(t *testing.T) {
 	t.Parallel()
 	names := ui.LogoFaceNames()
@@ -140,12 +129,9 @@ func TestRenderLogo_EveryFace(t *testing.T) {
 			t.Errorf("RenderLogo(%q) at 80 cols = %d rows, want the face", name, len(rows))
 			continue
 		}
-		if !strings.Contains(strings.Join(rows, "\n"), "»") {
-			t.Errorf("RenderLogo(%q) has no wake", name)
-		}
 		for i, r := range rows {
-			if w := lipgloss.Width(r); w > 79 {
-				t.Errorf("RenderLogo(%q) row %d width = %v, want < 80", name, i, w)
+			if w := lipgloss.Width(r); w > 80 || w != lipgloss.Width(rows[0]) {
+				t.Errorf("RenderLogo(%q) row %d width = %v, want <= 80 and equal to row 0 (%d)", name, i, w, lipgloss.Width(rows[0]))
 			}
 		}
 	}

@@ -662,13 +662,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.list.Index()
 	next, cmd := m.update(msg)
 	n := next.(Model)
-	// The header's height follows its content (the wordmark yields to
-	// the tally, SASASH.4.29), so the pane area can change without a
-	// resize: keep the list sized to it, or its paging would trust a
-	// stale height and the frame clamp would swallow rows.
-	if h := n.contentHeight(); n.list.Height() != h {
-		n.list.SetSize(n.listWidth(), h)
-	}
 	// Backstop for the early-return paths (half pages, reloads, a
 	// filter clearing): the key path corrects itself before its
 	// selection tail, so this is a no-op there.
@@ -1667,16 +1660,18 @@ func (m Model) View() string {
 	return centerFrame(frame, m.width, m.termWidth)
 }
 
-// headerView is the top of the frame: the wordmark when it fits, else
-// the one-line title; the last row carries an applied filter term and
-// the tally (SASASH.4.8) — the tally is decoration next to the term,
-// which explains why the list is a subset, so it is appended only when
-// both fit whole. Under settings the row names the panel instead.
+// headerView is the top of the frame: the wordmark band when it fits —
+// the face centered on its own rows, then the wake leading a centered
+// line — else the one-line title. That last line carries an applied
+// filter term and the tally (SASASH.4.8) — the tally is decoration next
+// to the term, which explains why the list is a subset, so it is
+// appended only when both fit whole. Under settings the line names the
+// panel instead.
 func (m Model) headerView() string {
 	lines := m.logoLines()
 	last := " " + m.styles.Title.Render("sasash")
 	if lines != nil {
-		last, lines = lines[len(lines)-1], lines[:len(lines)-1]
+		last = m.styles.LogoWake.Render(wake)
 	}
 	if m.list.FilterState() == list.FilterApplied {
 		last += "   " + m.styles.CmdPreview.Render("/"+m.list.FilterValue())
@@ -1687,6 +1682,9 @@ func (m Model) headerView() string {
 		if with := last + "   " + m.styles.PathExtra.Render(sum); lipgloss.Width(with) <= m.width {
 			last = with
 		}
+	}
+	if lines != nil {
+		last = centered(last, m.width)
 	}
 	// The applied-filter term is user content: clamp like all chrome.
 	last = m.styles.Clamp.MaxWidth(m.width).Render(last)

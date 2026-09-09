@@ -212,12 +212,13 @@ never polled or none up). Rows are tabular over the longest listed alias, a long
 with `…` so the columns survive, and the count column is reserved whenever the tunnels
 section is on and the pane keeps 12 alias cells beside it (a narrower pane drops the column
 whole rather than clipping every alias), so the detail pane never shifts. The rows read the maps the detail pane
-already reads — never a probe, poll, or config read of their own. The header is a slanted
-ascii wordmark with a `»` wake (palette-colored, plain ascii under `NO_COLOR`) when the
-terminal has at least 32 rows and the columns for it, else the one-line title; the tally
-rides the wordmark's baseline row, and the wordmark yields to the plain title when the tally
-would not fit beside it. On a terminal wider than 120 columns the frame is centered
-horizontally. The cap places, it never cuts: every line is clamped at the terminal's width
+already reads — never a probe, poll, or config read of their own. The header is a wordmark
+band (SASASH.4.32): a filled figlet face (ANSI Shadow) centered across the frame on its own
+rows, then the `»»»»` wake leading the tally on a centered line under it — palette-colored,
+the same solid glyphs under `NO_COLOR` — when the terminal has at least 32 rows and the
+columns for the face, else the one-line title with the tally beside it; the tally has its
+own line, so the wordmark never evicts it. On a terminal wider than 120 columns the frame is
+centered horizontally. The cap places, it never cuts: every line is clamped at the terminal's width
 as before, and a line longer than the frame (a command preview, a plan row) shifts the whole
 frame left to fit whole rather than losing its tail; vertically the frame stays top-anchored.
 The status columns yield to alias room on a narrow pane — the count column first, then the

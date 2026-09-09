@@ -6,59 +6,66 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// The wordmark (SASASH.4.29): a slanted figlet face — speed is the
-// product — with a chevron wake in the secondary accent. It replaces the
-// one-line title only when the terminal has the rows and columns for it;
-// a short or narrow terminal keeps the plain title, so the panes never
-// pay for decoration they cannot afford. Under NO_COLOR the face is
-// still ascii and the wake still reads as motion.
+// The wordmark (SASASH.4.29, bolder and on its own band since 4.32): a
+// filled figlet face centered across the frame on its own rows, with
+// the » wake and the tally on the line under it. It replaces the
+// one-line title only when the terminal has the rows and columns for
+// it; a short or narrow terminal keeps the plain title, so the panes
+// never pay for decoration they cannot afford. The tally has its own
+// line, so the wordmark can never evict it. The face is palette-colored
+// and reads the same under NO_COLOR: solid glyphs need no color.
 
 // logoFace is one wordmark: figlet 2.2.5 output for "sasash" in the
-// named font (rows padded to one width), and the wake — chevrons per
-// row, the middle rows longest so the baseline stays clear for the tally.
+// named font, rows padded to one width so the block centers as a unit.
 type logoFace struct {
 	name string
 	rows []string
-	wake []int
 }
 
 // logoFaces are the shipped faces, the default first; logoFaceName picks
 // one and is a string so a demo build can select another with -ldflags -X.
 var logoFaces = []logoFace{
-	{name: "smslant", wake: []int{0, 2, 4, 0}, rows: []string{
-		"                         __ ",
-		"  ___ ___ ____ ___ ____ / / ",
-		" (_-</ _ `(_-</ _ `(_-</ _ \\",
-		"/___/\\_,_/___/\\_,_/___/_//_/",
+	// figlet "ANSI Shadow": solid blocks with a drop shadow (6 rows x 48).
+	{name: "ansi-shadow", rows: []string{
+		"███████╗ █████╗ ███████╗ █████╗ ███████╗██╗  ██╗",
+		"██╔════╝██╔══██╗██╔════╝██╔══██╗██╔════╝██║  ██║",
+		"███████╗███████║███████╗███████║███████╗███████║",
+		"╚════██║██╔══██║╚════██║██╔══██║╚════██║██╔══██║",
+		"███████║██║  ██║███████║██║  ██║███████║██║  ██║",
+		"╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝",
 	}},
-	{name: "slant", wake: []int{0, 2, 4, 2, 0}, rows: []string{
-		"                               __  ",
-		"   _________ __________ ______/ /_ ",
-		"  / ___/ __ `/ ___/ __ `/ ___/ __ \\",
-		" (__  ) /_/ (__  ) /_/ (__  ) / / /",
-		"/____/\\__,_/____/\\__,_/____/_/ /_/ ",
+	// figlet "ANSI Regular": the same strokes, no shadow (5 rows x 47).
+	{name: "ansi-regular", rows: []string{
+		"███████  █████  ███████  █████  ███████ ██   ██",
+		"██      ██   ██ ██      ██   ██ ██      ██   ██",
+		"███████ ███████ ███████ ███████ ███████ ███████",
+		"     ██ ██   ██      ██ ██   ██      ██ ██   ██",
+		"███████ ██   ██ ███████ ██   ██ ███████ ██   ██",
 	}},
-	{name: "speed", wake: []int{0, 2, 4, 2, 0}, rows: []string{
-		"                                   ______  ",
-		"_____________ _____________ __________  /_ ",
-		"__  ___/  __ `/_  ___/  __ `/_  ___/_  __ \\",
-		"_(__  )/ /_/ /_(__  )/ /_/ /_(__  )_  / / /",
-		"/____/ \\__,_/ /____/ \\__,_/ /____/ /_/ /_/ ",
+	// figlet "Banner3": plain-ascii hashes, the heaviest pure-ascii face (7 rows x 56).
+	{name: "banner3", rows: []string{
+		" ######     ###     ######     ###     ######  ##     ##",
+		"##    ##   ## ##   ##    ##   ## ##   ##    ## ##     ##",
+		"##        ##   ##  ##        ##   ##  ##       ##     ##",
+		" ######  ##     ##  ######  ##     ##  ######  #########",
+		"      ## #########       ## #########       ## ##     ##",
+		"##    ## ##     ## ##    ## ##     ## ##    ## ##     ##",
+		" ######  ##     ##  ######  ##     ##  ######  ##     ##",
 	}},
 }
 
-// logoFaceName is the shipped default: smslant, the human's pick from the
-// 4.29 candidates (slant and speed stay as demo alternates).
-var logoFaceName = "smslant"
+// logoFaceName is the shipped default: ANSI Shadow, the solid face the
+// 4.32 pin asked for (the others stay as demo alternates).
+var logoFaceName = "ansi-shadow"
 
-// minLogoHeight is the shortest terminal that shows the wordmark. It
-// costs rows over the plain title (three for smslant); a full-screen
-// terminal has them to spare, a classic 80x24 window or the half of a
-// split does not.
+// minLogoHeight is the shortest terminal that shows the wordmark. The
+// band costs rows over the plain title (six for ANSI Shadow: the face
+// and the wake line); a full-screen terminal has them to spare, a
+// classic 80x24 window or the half of a split does not.
 const minLogoHeight = 32
 
-// wakeGap separates the face from its chevrons.
-const wakeGap = 2
+// wake is the motion motif, leading the tally line under the face.
+const wake = "»»»»"
 
 func currentLogo() logoFace {
 	for _, f := range logoFaces {
@@ -69,51 +76,43 @@ func currentLogo() logoFace {
 	return logoFaces[0]
 }
 
-// logoWidth is the columns the wordmark takes, wake included.
+// logoWidth is the columns the face takes (its rows share one width).
 func logoWidth(f logoFace) int {
 	w := 0
-	for i, r := range f.rows {
-		if n := len(r) + wakeGap + f.wake[i]; n > w {
-			w = n
-		}
+	for _, r := range f.rows {
+		w = max(w, lipgloss.Width(r))
 	}
 	return w
 }
 
 // logoFits reports whether the wordmark is shown at this frame size: the
-// rows must exist and the widest row (with its wake) must fit whole, as
-// must whatever rides the baseline row after it (tally is the header's
-// information; the wordmark is not allowed to evict it).
-func logoFits(f logoFace, width, height, baseline int) bool {
-	return height >= minLogoHeight && logoWidth(f)+1+baseline <= width
+// rows must exist and the face must fit whole.
+func logoFits(f logoFace, width, height int) bool {
+	return height >= minLogoHeight && logoWidth(f) <= width
 }
 
-// renderLogo draws the face in the title color and the wake in the
-// secondary accent, one leading blank like the plain title. The last
-// row is the baseline: rendered without padding or wake (every face
-// declares it wake-free) so the header can append the tally to it.
-func renderLogo(st Styles, f logoFace) []string {
+// centered pads s to sit mid-frame: half the slack on the left, none on
+// the right (the frame is padded by its consumers).
+func centered(s string, width int) string {
+	if slack := width - lipgloss.Width(s); slack > 1 {
+		return strings.Repeat(" ", slack/2) + s
+	}
+	return s
+}
+
+// renderLogo draws the face in the title color, each row centered
+// across width. Rows share one width, so the block moves as a unit.
+func renderLogo(st Styles, f logoFace, width int) []string {
 	out := make([]string, len(f.rows))
 	for i, r := range f.rows {
-		line := " " + st.Title.Render(r)
-		if k := f.wake[i]; k > 0 {
-			line += strings.Repeat(" ", wakeGap) + st.LogoWake.Render(strings.Repeat("»", k))
-		}
-		out[i] = line
+		out[i] = centered(st.Title.Render(r), width)
 	}
-	last := len(out) - 1
-	out[last] = " " + st.Title.Render(strings.TrimRight(f.rows[last], " "))
 	return out
 }
 
-// showLogo reports whether this frame carries the wordmark: it fits
-// with the tally beside its baseline.
+// showLogo reports whether this frame carries the wordmark band.
 func (m Model) showLogo() bool {
-	baseline := 0
-	if sum := m.summaryLine(); sum != "" {
-		baseline = 3 + lipgloss.Width(sum)
-	}
-	return logoFits(currentLogo(), m.width, m.height, baseline)
+	return logoFits(currentLogo(), m.width, m.height)
 }
 
 // logoLines is the header's wordmark block for this frame, nil when the
@@ -122,14 +121,15 @@ func (m Model) logoLines() []string {
 	if !m.showLogo() {
 		return nil
 	}
-	return renderLogo(m.styles, currentLogo())
+	return renderLogo(m.styles, currentLogo(), m.width)
 }
 
-// headerHeight is the rows above the panes: the title (one line, or the
-// wordmark) and the blank under it.
+// headerHeight is the rows above the panes: the title line and the
+// blank under it — or the wordmark band: the face, the wake-and-tally
+// line, and the blank.
 func (m Model) headerHeight() int {
 	if m.showLogo() {
-		return len(currentLogo().rows) + 1
+		return len(currentLogo().rows) + 2
 	}
 	return 2
 }
