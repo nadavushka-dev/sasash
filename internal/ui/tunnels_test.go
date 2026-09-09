@@ -530,6 +530,17 @@ func TestModel_Update_SpaceNeedsHighlight(t *testing.T) {
 	}
 }
 
+func TestModel_View_TunnelsFooterKeepsStopAt80Columns(t *testing.T) {
+	t.Parallel()
+	// The footer cuts whole items past the width: x, the explicit stop
+	// kept beside space, must survive an 80-column terminal.
+	m, _ := aliveWeb0(t)
+	m = update(t, press(t, m, "l"), tea.WindowSizeMsg{Width: 80, Height: 30})
+	if view := m.View(); !strings.Contains(view, "space toggle forward") || !strings.Contains(view, "x kill forward") {
+		t.Errorf("View() footer at 80 columns should name space and x:\n%s", view)
+	}
+}
+
 func TestModel_Update_SpaceTogglesOneForward(t *testing.T) {
 	t.Parallel()
 	// Space is the per-forward toggle (SASASH.4.31): the highlighted row's
