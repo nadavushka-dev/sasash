@@ -22,21 +22,21 @@ type logoFace struct {
 	wake []int
 }
 
-// logoFaces are the shipped faces; logoFaceName picks one and is a
-// string so a demo build can select another with -ldflags -X.
+// logoFaces are the shipped faces, the default first; logoFaceName picks
+// one and is a string so a demo build can select another with -ldflags -X.
 var logoFaces = []logoFace{
+	{name: "smslant", wake: []int{0, 2, 4, 0}, rows: []string{
+		"                         __ ",
+		"  ___ ___ ____ ___ ____ / / ",
+		" (_-</ _ `(_-</ _ `(_-</ _ \\",
+		"/___/\\_,_/___/\\_,_/___/_//_/",
+	}},
 	{name: "slant", wake: []int{0, 2, 4, 2, 0}, rows: []string{
 		"                               __  ",
 		"   _________ __________ ______/ /_ ",
 		"  / ___/ __ `/ ___/ __ `/ ___/ __ \\",
 		" (__  ) /_/ (__  ) /_/ (__  ) / / /",
 		"/____/\\__,_/____/\\__,_/____/_/ /_/ ",
-	}},
-	{name: "smslant", wake: []int{0, 2, 4, 0}, rows: []string{
-		"                         __ ",
-		"  ___ ___ ____ ___ ____ / / ",
-		" (_-</ _ `(_-</ _ `(_-</ _ \\",
-		"/___/\\_,_/___/\\_,_/___/_//_/",
 	}},
 	{name: "speed", wake: []int{0, 2, 4, 2, 0}, rows: []string{
 		"                                   ______  ",
@@ -47,7 +47,9 @@ var logoFaces = []logoFace{
 	}},
 }
 
-var logoFaceName = "slant"
+// logoFaceName is the shipped default: smslant, the human's pick from the
+// 4.29 candidates (slant and speed stay as demo alternates).
+var logoFaceName = "smslant"
 
 // minLogoHeight is the shortest terminal that shows the wordmark. It
 // costs four rows over the plain title; a full-screen terminal has them
