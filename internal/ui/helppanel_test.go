@@ -17,7 +17,7 @@ import (
 // tallHelp opens the keys panel at a size where it fits whole.
 func tallHelp(t *testing.T) ui.Model {
 	t.Helper()
-	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 120, Height: 80})
+	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 120, Height: 100})
 	return press(t, m, "?")
 }
 

@@ -32,6 +32,7 @@ func (m Model) helpGroups() []helpGroup {
 		{"host list", []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.FocusRight, k.Filter, k.ClearFilter, k.Help, k.Settings, k.Theme, k.ShowAmbient, k.ShowPreview, k.Rename, k.Quit}},
 		{"paths (p)", pathsKeys{}.ShortHelp()},
 		{"tunnels (l)", append([]key.Binding{k.FocusRight, k.FocusLeft, k.AddFwd, k.DeclareFwd, k.DeleteFwd, k.Restart}, tunnelsKeys{k: k}.ShortHelp()...)},
+		{"copy files (C)", transferHelpKeys(k)},
 		{"prompts", promptGroupKeys()},
 		{"settings (o)", settingsKeys{}.ShortHelp()},
 		{"popups", append(popupKeys{}.ShortHelp(), key.NewBinding(key.WithKeys("enter", "esc"), key.WithHelp("enter/esc", "on a question: enter does what its title says · esc cancels")))},
@@ -43,6 +44,8 @@ func (m Model) helpGroups() []helpGroup {
 	switch {
 	case m.settings.pane != settingsOff:
 		first = "settings (o)"
+	case m.xfer.active():
+		first = "copy files (C)"
 	case m.focus == focusPaths:
 		first = "paths (p)"
 	case m.focus == focusTunnels:

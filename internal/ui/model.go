@@ -259,6 +259,10 @@ type Model struct {
 	// editing is the file the running editor handoff was opened on.
 	editing string
 
+	// xfer is the C flow (SASASH.4.33): the scp direction and the two
+	// pickers; zero when closed.
+	xfer xferState
+
 	// Popup (SASASH.4.11): the attention tier, open or zero; corruptSeen
 	// remembers which hosts' cache problems were already shown so the
 	// popup opens once per host per session, not on every poll.
@@ -674,6 +678,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// filter clearing): the key path corrects itself before its
 	// selection tail, so this is a no-op there.
 	skipDivider(&n.list, before)
+	// The filepicker reads directories through its own messages: every
+	// non-key message reaches it while it is on screen (keys go through
+	// transferKey, which is the one place a pick is judged).
+	if _, isKey := msg.(tea.KeyMsg); !isKey && n.xfer.step == xferLocal {
+		var fcmd tea.Cmd
+		n.xfer.local, fcmd = n.xfer.local.Update(msg)
+		cmd = tea.Batch(cmd, fcmd)
+	}
 	return n.settleFocus(), cmd
 }
 
@@ -695,7 +707,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// cursor past the terminal edge.
 		m.prompt.Width = max(10, m.width-14)
 		m.list.SetSize(m.listWidth(), m.contentHeight())
-		return m, nil
+		return m.transferResize(), nil
 
 	case probeDoneMsg:
 		m.statuses = msg.statuses
@@ -891,6 +903,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case copyDoneMsg:
 		return m.copied(msg), nil
+
+	case remoteListMsg:
+		return m.remoteListed(msg)
+
+	case scpExitMsg:
+		return m.scpReturned(msg)
 
 	case themeSavedMsg:
 		if msg.err != nil {
@@ -1120,6 +1138,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.popupKey(msg)
 		}
 		m.notice = ""
+		// The copy flow owns the keyboard while open (its confirm is a
+		// popup, routed above).
+		if m.xfer.active() {
+			return m.transferKey(msg)
+		}
 		// The settings panel owns the keyboard while open.
 		if m.settings.pane != settingsOff {
 			return m.settingsKey(msg)
@@ -1399,6 +1422,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.ExecProcess(m.editorExec(), func(err error) tea.Msg {
 					return editorExitMsg{err: err}
 				})
+			case key.Matches(msg, m.keys.Copy):
+				return m.openTransfer()
 			case key.Matches(msg, m.keys.Adhoc):
 				m.saveThenConnect = false // the ad-hoc flow connects first
 				m.mode = promptConnect
@@ -1534,6 +1559,8 @@ func (m Model) helpView() string {
 	switch {
 	case m.popup.open():
 		k = popupKeys{confirm: m.popup.confirm != nil, verb: m.popup.verb}
+	case m.xfer.active():
+		k = transferKeys{step: m.xfer.step}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:
@@ -1581,6 +1608,9 @@ func (m Model) View() string {
 		// The box floats centered over the body's place (4.14).
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.popupView())
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, panel)
+	} else if m.xfer.active() {
+		panel := m.styles.Clamp.MaxWidth(m.termWidth).Render(m.transferView())
+		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Left, lipgloss.Top, panel)
 	} else if m.settings.pane != settingsOff {
 		panel := m.styles.Clamp.MaxWidth(m.width).Render(m.settingsView())
 		body = lipgloss.Place(m.width, m.contentHeight(), lipgloss.Center, lipgloss.Center, panel)
@@ -1609,6 +1639,15 @@ func (m Model) View() string {
 	}
 	if m.settings.pane != settingsOff {
 		preview = "" // the panel's own footer says what enter does
+	}
+	if m.xfer.active() {
+		// The copy flow's line is the scp as it will run, the end not yet
+		// picked as a placeholder — shown whatever the $ toggle says, as a
+		// prompt's expansion is.
+		preview = ""
+		if argv := m.transferPreview(); argv != nil {
+			preview = " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(argv, " "))
+		}
 	}
 	// Under the popup the bottom line is its one-line partner: every
 	// popup sets one, and a notice replaces the preview below.

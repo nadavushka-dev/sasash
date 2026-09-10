@@ -1,0 +1,23 @@
+#!/bin/sh
+# Demo stand-in for scp (SASASH.4.33 tape only — never on a real PATH).
+# Copies between the fixture home and the fixture "remote" tree in
+# $SASASH_DEMO_REMOTE, printing one progress line the way scp does. The
+# argv sasash builds is the real one; only where it lands is faked.
+root=${SASASH_DEMO_REMOTE:?}
+recursive=
+if [ "$1" = "-r" ]; then
+	recursive=-R
+	shift
+fi
+src=$1
+dst=$2
+case "$src" in *:*) src="$root/${src#*:}" ;; esac
+case "$dst" in *:*) dst="$root/${dst#*:}" ;; esac
+name=$(basename "$src")
+printf '%-40s  0%%     0B     0.0KB/s   --:-- ETA\r' "$name"
+sleep 0.6
+printf '%-40s 48%%   6KB   9.8KB/s   00:00 ETA\r' "$name"
+sleep 0.6
+printf '%-40s 100%%  12KB  19.7KB/s   00:00    \n' "$name"
+sleep 0.4
+cp $recursive "$src" "$dst"

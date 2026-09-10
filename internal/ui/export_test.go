@@ -13,6 +13,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/transfer"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
@@ -77,7 +78,7 @@ func ContextKeymaps() []help.KeyMap {
 	// own footer.)
 	// (A question's footer names enter's deed per question — "run it",
 	// "write it" — and the panel carries one row for all of them.)
-	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}}
+	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}, transferKeys{step: xferDirection}, transferKeys{step: xferLocal}}
 	for mode := promptConnect; mode < promptModeCount; mode++ {
 		out = append(out, promptKeys{mode: mode})
 	}
@@ -400,3 +401,26 @@ func TunnelStatusKnown(m Model, alias string) bool { _, ok := m.tstatus[alias]; 
 // them: the ssh command in the created window/pane (H passes its own).
 func TmuxArgv(target, alias string) []string     { return tmuxArgv(target, alias, sshCommand(alias)) }
 func HerdrRunArgv(paneID, alias string) []string { return herdrRunArgv(paneID, sshCommand(alias)) }
+
+// The copy flow (SASASH.4.33): TransferActive reports C's flow open;
+// TransferStep names its step; TransferSource is the picked source;
+// TransferRemotePath is the remote browser's directory; TransferPreview
+// is the bottom line's argv; ScpExec is the process the confirm builds;
+// ScpExit replays the terminal coming back from scp.
+func TransferActive(m Model) bool { return m.xfer.active() }
+func TransferStep(m Model) string {
+	return [...]string{"off", "direction", "local", "remote"}[m.xfer.step]
+}
+func TransferSource(m Model) (path string, isDir, picked bool) {
+	return m.xfer.src, m.xfer.srcDir, m.xfer.srcPicked
+}
+func TransferRemotePath(m Model) string { return m.xfer.remote.path }
+func TransferLocalDir(m Model) string   { return m.xfer.local.CurrentDirectory }
+func TransferPreview(m Model) []string  { return m.transferPreview() }
+func ScpExec(spec transfer.Spec) *exec.Cmd {
+	cmd, _ := scpExec(spec)
+	return cmd
+}
+func ScpExit(spec transfer.Spec, err error, stderr string) tea.Msg {
+	return scpExitMsg{spec: spec, err: err, stderr: stderr}
+}
