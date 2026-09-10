@@ -196,22 +196,21 @@ func TestModel_Update_FocusCycle(t *testing.T) {
 			t.Errorf("without tunnels the shadow diagnostic should still be the notice:\n%s", m2.View())
 		}
 	})
-	t.Run("the keys panel says what l does at both ends of the cycle", func(t *testing.T) {
+	t.Run("the keys panel names the pane in its heading, not a motion row", func(t *testing.T) {
 		t.Parallel()
 		m, _ := cycleModel(t)
 		inner := strings.Join(boxLines(press(t, update(t, m, tea.WindowSizeMsg{Width: 120, Height: 80}), "?").View()), "\n")
-		for _, want := range []string{"l/tab      paths / tunnels pane", "l          host list (the cycle closes)", "l          tunnels pane"} {
+		// The pane-switch keys are self-evident (SASASH.4.35): the panel
+		// omits the l/h motion rows and names each pane in its heading.
+		for _, want := range []string{"paths (p)", "tunnels (l)"} {
 			if !strings.Contains(inner, want) {
-				t.Errorf("keys panel missing %q:\n%s", want, inner)
+				t.Errorf("keys panel missing the pane heading %q:\n%s", want, inner)
 			}
 		}
-		// The way in is listed under the host list itself, before the
-		// pane groups — not only inside the tunnels group.
-		if !order(inner, "host list", "l/tab      paths / tunnels pane", "paths (p)") {
-			t.Errorf("l/tab should be a host-list row:\n%s", inner)
-		}
-		if strings.Contains(inner, "l/tab      tunnels pane") {
-			t.Errorf("keys panel still gives l/tab its old meaning:\n%s", inner)
+		for _, not := range []string{"l/tab      paths / tunnels pane", "host list (the cycle closes)", "l          tunnels pane"} {
+			if strings.Contains(inner, not) {
+				t.Errorf("keys panel should omit the motion row %q:\n%s", not, inner)
+			}
 		}
 	})
 	t.Run("a running switch refuses l as it refuses p", func(t *testing.T) {

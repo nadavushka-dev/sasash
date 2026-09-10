@@ -155,7 +155,7 @@ func TestModel_View_BoxSurfacesReachTheirRoles(t *testing.T) {
 		{name: "spawn picker", keys: []string{"o", "j", "j", "j", "enter"},
 			want: []string{"› «UP»● «SEL»tab", "  «OFF»○ «NAME»pane"}},
 		{name: "keys panel", keys: []string{"?"},
-			want:    []string{"«REF»", "«TITLE»? keys", "«HEAD»host list", "«KEY»↑/k", "«DESC»up"},
+			want:    []string{"«REF»", "«TITLE»? keys", "«HEAD»host list", "«KEY»enter", "«DESC»spawn ssh"},
 			wantNot: []string{"«ALERT»"}},
 	}
 	for _, tt := range tests {

@@ -347,12 +347,12 @@ func TestModel_Update_HelpPanelSearch(t *testing.T) {
 	})
 	t.Run("a description matches too, spaces included", func(t *testing.T) {
 		t.Parallel()
-		inner := strings.Join(boxLines(press(t, wide(t), "?", "/", "page").View()), "\n")
-		if !strings.Contains(inner, "½ page down") || !strings.Contains(inner, "½ page up") || strings.Contains(inner, "spawn ssh") {
-			t.Errorf("box rows after /page should be the two half pages:\n%s", inner)
+		inner := strings.Join(boxLines(press(t, wide(t), "?", "/", "yank").View()), "\n")
+		if !strings.Contains(inner, "yank host") || !strings.Contains(inner, "yank command") || strings.Contains(inner, "spawn ssh") {
+			t.Errorf("box rows after /yank should be the two yanks:\n%s", inner)
 		}
-		if inner := strings.Join(boxLines(press(t, wide(t), "?", "/", "page", " ", "d").View()), "\n"); !strings.Contains(inner, "½ page down") || strings.Contains(inner, "½ page up") {
-			t.Errorf("box rows after /page d should be the one half page:\n%s", inner)
+		if inner := strings.Join(boxLines(press(t, wide(t), "?", "/", "yank", " ", "h").View()), "\n"); !strings.Contains(inner, "yank host") || strings.Contains(inner, "yank command") {
+			t.Errorf("box rows after /yank h should be the one yank:\n%s", inner)
 		}
 	})
 	t.Run("matching groups stay set apart by a blank", func(t *testing.T) {
@@ -384,8 +384,8 @@ func TestModel_Update_HelpPanelSearch(t *testing.T) {
 			t.Errorf("j after enter should not type:\n%s", inner)
 		}
 		m = press(t, m, "esc")
-		if inner := strings.Join(boxLines(m.View()), "\n"); !ui.HelpOpen(m) || !strings.Contains(inner, "↑/k") || !strings.Contains(inner, "j/k scroll") || strings.Contains(inner, "/yank") {
-			t.Errorf("View() after esc should show every row again (scrolling):\n%s", m.View())
+		if inner := strings.Join(boxLines(m.View()), "\n"); !ui.HelpOpen(m) || !strings.Contains(inner, "ssh here") || strings.Contains(inner, "/yank") {
+			t.Errorf("View() after esc should show every row again:\n%s", m.View())
 		}
 		if m = press(t, m, "esc"); ui.HelpOpen(m) {
 			t.Errorf("HelpOpen() = true after the second esc, want closed")

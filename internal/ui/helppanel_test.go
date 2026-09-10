@@ -25,8 +25,9 @@ func tallHelp(t *testing.T) ui.Model {
 
 func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 	t.Parallel()
-	// Generated, never hand-maintained: every named binding of the
-	// KeyMap that carries help text appears with its key and description.
+	// Generated, never hand-maintained: every ACTION binding of the
+	// KeyMap appears with its key and description; the vim motion keys
+	// (SASASH.4.35) are omitted — advertised only in the footers.
 	m := tallHelp(t)
 	view := m.View()
 	if !ui.HelpOpen(m) || !strings.Contains(view, "? keys — ? q esc closes") {
@@ -43,26 +44,47 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 		}
 		return false
 	}
+	// The panel lists actions, not motion (SASASH.4.35): these vim
+	// navigation keys are advertised only in the contextual footers.
+	omitted := map[string]bool{
+		"↑/k": true, "↓/j": true, "j/k": true,
+		"g": true, "G": true, "ctrl+d": true, "ctrl+u": true,
+		"l/tab": true, "h": true, "l": true, "u/d": true,
+	}
 	km := reflect.ValueOf(ui.DefaultKeyMap())
-	listed := 0
+	actions := 0
 	for i := 0; i < km.NumField(); i++ {
 		b, ok := km.Field(i).Interface().(key.Binding)
 		if !ok || b.Help().Key == "" {
 			continue // ctrl+c carries no help text on purpose
 		}
-		listed++
-		if h := b.Help(); !row(h) {
+		h := b.Help()
+		if omitted[h.Key] {
+			if row(h) {
+				t.Errorf("panel should omit the motion key %q %q", h.Key, h.Desc)
+			}
+			continue
+		}
+		actions++
+		if !row(h) {
 			t.Errorf("panel missing %s as a row: %q %q", km.Type().Field(i).Name, h.Key, h.Desc)
 		}
 	}
-	if listed < 25 {
-		t.Errorf("only %d bindings carry help text; the reflection walk found too few", listed)
+	if actions < 20 {
+		t.Errorf("only %d action bindings listed; the reflection walk found too few", actions)
 	}
-	// The context keymaps too: every hint a surface's footer can show is
-	// a row here (the prompts' verbs are unioned into one row).
+	// The context keymaps too: every non-motion hint a surface's footer
+	// can show is a row here (the prompts' verbs are unioned into one
+	// row); a motion row must NOT appear.
 	for _, km := range ui.ContextKeymaps() {
 		for _, b := range km.ShortHelp() {
 			h := b.Help()
+			if omitted[h.Key] {
+				if row(h) {
+					t.Errorf("panel should omit the motion row %q %q", h.Key, h.Desc)
+				}
+				continue
+			}
 			if h.Key == "enter" || h.Key == "esc" {
 				if !strings.Contains(view, h.Desc) {
 					t.Errorf("panel missing the prompt verb %q", h.Desc)
@@ -82,11 +104,11 @@ func TestModel_View_HelpPanelListsEveryBinding(t *testing.T) {
 	if !strings.Contains(view, "connect / save / add / next / declare") || !strings.Contains(view, "cancel / skip") || !strings.Contains(view, "the prompt's own line says which") {
 		t.Errorf("panel prompts row should union the verbs:\n%s", view)
 	}
-	// Cells, not bytes: the arrow rows' descriptions start in the same
-	// column as everyone else's.
+	// Cells, not bytes: action rows of different key widths align their
+	// descriptions to the same column.
 	col := -1
 	for _, l := range inner {
-		for _, k := range []string{"↑/k ", "ctrl+d ", "g "} {
+		for _, k := range []string{"enter ", "S ", "esc "} {
 			if strings.HasPrefix(l, "   "+k) {
 				rest := strings.TrimLeft(l[3+len(k):], " ")
 				c := lipgloss.Width(l[:len(l)-len(rest)])

@@ -916,7 +916,7 @@ func TestModel_View_HelpListsTunnelKeys(t *testing.T) {
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 100, Height: 60})
 	m = press(t, m, "?")
 	view := m.View()
-	for _, want := range []string{"toggle forward", "toggle set", "restart master", "delete forward set", "tunnels pane", "host list"} {
+	for _, want := range []string{"toggle forward", "toggle set", "restart master", "delete forward set", "host list"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() keys panel missing %q:\n%s", want, view)
 		}

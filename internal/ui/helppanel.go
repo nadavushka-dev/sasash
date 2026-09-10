@@ -7,14 +7,27 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// The ? panel (SASASH.4.13): every named binding, grouped by the surface
-// it belongs to, generated from the bindings themselves — never hand-
+// The ? panel (SASASH.4.13): the action bindings, grouped by the surface
+// they belong to, generated from the bindings themselves — never hand-
 // maintained — and shown in the 4.11 popup (so it scrolls, owns the
 // keyboard, closes on esc — ? closes it too — and / narrows its rows to
 // the ones naming a key or a verb, 4.14). The group for the
 // surface that holds the keys right now comes first. The inline
 // expanding help is retired: the main view's footer is a whisper and
-// this panel is where every key is advertised.
+// this panel is where the actions are advertised.
+//
+// The panel lists ACTIONS, not motion (SASASH.4.35): vim movement is
+// self-evident and every pane-switch key already names its pane in a
+// group heading (paths (p), tunnels (l)), so the navigation rows are
+// omitted here — they stay live and keep their place in the contextual
+// footers. Groups still PROPOSE their full key set below; the panel
+// PRESENTS the actions, dropping any row in panelOmit.
+var panelOmit = map[string]bool{
+	"↑/k": true, "↓/j": true, "j/k": true, // list / scroll motion
+	"g": true, "G": true, "ctrl+d": true, "ctrl+u": true, // first / last / half-page
+	"l/tab": true, "h": true, "l": true, // pane and directory hops
+	"u/d": true, // the transfer's own two options already show the direction
+}
 
 // helpGroup is one section of the panel.
 type helpGroup struct {
@@ -33,9 +46,9 @@ func (m Model) helpGroups() []helpGroup {
 		{"paths (p)", pathsKeys{}.ShortHelp()},
 		// Only the tunnel keys the pane's own footer (tunnelsKeys) does not
 		// already carry: +/r are unique here; n and X come from tunnelsKeys
-		// below, and l (paths/tunnels pane) is the host-list group's row —
-		// in this pane l closes the cycle to the host list, which
-		// tunnelsKeys spells. FocusLeft (h) stays: it lives only here.
+		// below. The pane hops (h back to the host list, l on it) are
+		// proposed but panelOmit drops them — the '(l)' heading already
+		// names the pane.
 		{"tunnels (l)", append([]key.Binding{k.FocusLeft, k.AddFwd, k.Restart}, tunnelsKeys{k: k}.ShortHelp()...)},
 		{"copy files (C)", transferHelpKeys(k)},
 		{"prompts", promptGroupKeys()},
@@ -98,19 +111,29 @@ func (m Model) helpLines() []popupLine {
 	width := 0
 	for _, g := range groups {
 		for _, b := range g.keys {
-			width = max(width, lipgloss.Width(b.Help().Key))
+			if h := b.Help(); !panelOmit[h.Key] {
+				width = max(width, lipgloss.Width(h.Key))
+			}
 		}
 	}
 	var out []popupLine
-	for i, g := range groups {
-		if i > 0 {
+	for _, g := range groups {
+		var rows []popupLine
+		for _, b := range g.keys {
+			h := b.Help()
+			if panelOmit[h.Key] {
+				continue // motion is self-evident; the panel lists actions
+			}
+			rows = append(rows, popupLine{text: m.styles.BoxKey.Render(padRight(h.Key, width)) + "  " + m.styles.BoxDesc.Render(h.Desc), plain: h.Key + "  " + h.Desc})
+		}
+		if len(rows) == 0 {
+			continue // every row was motion — no heading for an empty group
+		}
+		if len(out) > 0 {
 			out = append(out, popupLine{})
 		}
 		out = append(out, popupLine{text: m.styles.BoxHeading.Render(g.name), plain: g.name, heading: true})
-		for _, b := range g.keys {
-			h := b.Help()
-			out = append(out, popupLine{text: m.styles.BoxKey.Render(padRight(h.Key, width)) + "  " + m.styles.BoxDesc.Render(h.Desc), plain: h.Key + "  " + h.Desc})
-		}
+		out = append(out, rows...)
 	}
 	if line := actionsLine(m.actions); line != "" {
 		line = strings.TrimSpace(line)
