@@ -216,6 +216,20 @@ func TestModel_Update_DownloadFileFlow(t *testing.T) {
 	if !strings.Contains(m.View(), "nothing copied") {
 		t.Errorf("esc on the confirm: no notice saying nothing ran")
 	}
+	// enter on a directory as the dest selects AND descends (bubbles'
+	// picker): after a declined confirm the rows are that directory's,
+	// the one the path line names, and . picks it.
+	m = drive(t, m, "enter", "esc")
+	if got := ui.TransferLocalDir(m); got != filepath.Join(home, "proj") {
+		t.Fatalf("TransferLocalDir() = %q, want proj after enter on it", got)
+	}
+	if v := m.View(); !strings.Contains(v, "a.txt") || strings.Contains(v, "notes.txt") {
+		t.Errorf("after enter on proj the rows are not proj's:\n%s", v)
+	}
+	m = drive(t, m, ".")
+	if want := "scp host0:readme " + filepath.Join(home, "proj"); !boxSays(m.View(), want) {
+		t.Errorf("confirm popup does not show %q:\n%s", want, m.View())
+	}
 }
 
 // The remote browser descends with l and climbs with h, each a listing
@@ -468,6 +482,24 @@ func TestModel_Update_StaleListingIsDropped(t *testing.T) {
 	}
 	if v := m.View(); strings.Contains(v, "docs/") || !strings.Contains(v, "other/") {
 		t.Errorf("host0's stale listing replaced host1's rows:\n%s", v)
+	}
+	// The race the alias check alone catches: both homes are ".", so
+	// host0's listing landing while host1's own is still in flight is
+	// told apart by the alias, nothing else.
+	m = ui.New(testHosts(2), probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, f, ui.Config{Home: xferHome(t)})
+	m = ui.StaticCursor(update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24}))
+	next, pending = m.Update(keyMsg("C"))
+	next, pending = next.(ui.Model).Update(keyMsg("d"))
+	stale = drain(pending)
+	m = drive(t, next.(ui.Model), "esc", "esc", "j")
+	next, _ = m.Update(keyMsg("C"))
+	next, _ = next.(ui.Model).Update(keyMsg("d")) // host1's listing left in flight
+	m = next.(ui.Model)
+	for _, msg := range stale {
+		m = update(t, m, msg)
+	}
+	if v := m.View(); strings.Contains(v, "docs/") || strings.Contains(v, "readme") {
+		t.Errorf("host0's listing landed in host1's browser while its own was in flight:\n%s", v)
 	}
 	// Two moves in a row: the first's listing lands after the second was asked for.
 	m2 := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j")

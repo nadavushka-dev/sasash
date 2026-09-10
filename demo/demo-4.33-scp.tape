@@ -2,7 +2,7 @@
 # Drives the BUILT ./sasash against the RFC 5737 fixture in demo/home.
 #
 # The recorder has no sshd to reach, so demo/bin/ssh and demo/bin/scp stand
-# in on PATH: the `ssh <alias> ls -1Ap -- <path>` listing runs the same ls
+# in on PATH: the `ssh -o BatchMode=yes <alias> ls -1Ap -- <path>` listing runs the same ls
 # against demo/remote (copied to demo/out/remote), and scp copies between the
 # fixture home and that tree with a progress line. The argv sasash builds is
 # the real one (the confirm popup and the $ line show it); only where it

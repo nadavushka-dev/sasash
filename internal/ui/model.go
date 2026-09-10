@@ -1650,9 +1650,10 @@ func (m Model) View() string {
 	if m.xfer.active() {
 		// The copy flow's line is the scp as it will run, the end not yet
 		// picked as a placeholder — shown whatever the $ toggle says, as a
-		// prompt's expansion is.
+		// prompt's expansion is. Under the confirm the popup names the
+		// real dest, so the placeholder line yields to it.
 		preview = ""
-		if argv := m.transferPreview(); argv != nil {
+		if argv := m.transferPreview(); argv != nil && !m.popup.open() {
 			preview = " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(argv, " "))
 		}
 	}

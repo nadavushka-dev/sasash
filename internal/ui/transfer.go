@@ -153,7 +153,11 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.notice = "cannot read " + path + ": " + cleanLine(err.Error())
 				return m, cmd
 			}
-			return m.transferChose(path, info.IsDir())
+			// enter on a directory selects AND descends in bubbles' picker:
+			// its directory read rides along, so a declined confirm shows
+			// the directory the path line names, not the parent's rows.
+			next, pick := m.transferChose(path, info.IsDir())
+			return next, tea.Batch(cmd, pick)
 		}
 		return m, cmd
 
