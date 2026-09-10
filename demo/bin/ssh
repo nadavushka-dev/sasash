@@ -1,15 +1,22 @@
 #!/bin/sh
 # Demo stand-in for ssh (SASASH.4.33 tape only — never on a real PATH).
-# The recorder has no sshd to reach, so `ssh <alias> ls -1Ap -- <path>` runs
-# the same ls against the fixture tree in $SASASH_DEMO_REMOTE, the way a
-# remote login shell would run the words sasash hands it. The argv sasash
-# builds is the real one; only where it lands is faked.
-case "$1" in
--O)
-	echo "Control socket connect: No such file or directory" >&2
-	exit 255
-	;;
-esac
+# The recorder has no sshd to reach, so `ssh -o BatchMode=yes <alias> ls -1Ap
+# -- <path>` runs the same ls against the fixture tree in $SASASH_DEMO_REMOTE,
+# the way a remote login shell would run the words sasash hands it. The argv
+# sasash builds is the real one; only where it lands is faked. The guard
+# comes first: without the fixture variable this refuses every invocation.
+set -eu
+root=${SASASH_DEMO_REMOTE:?demo stand-in: SASASH_DEMO_REMOTE not set}
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-O)
+		echo "Control socket connect: No such file or directory" >&2
+		exit 255
+		;;
+	-o) shift 2 ;;
+	-*) shift ;;
+	*) break ;;
+	esac
+done
 shift # the alias
-root=${SASASH_DEMO_REMOTE:?}
 eval "cd \"$root\" && $*"

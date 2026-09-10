@@ -681,10 +681,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// The filepicker reads directories through its own messages: every
 	// non-key message reaches it while it is on screen (keys go through
 	// transferKey, which is the one place a pick is judged).
-	if _, isKey := msg.(tea.KeyMsg); !isKey && n.xfer.step == xferLocal {
-		var fcmd tea.Cmd
-		n.xfer.local, fcmd = n.xfer.local.Update(msg)
-		cmd = tea.Batch(cmd, fcmd)
+	// A resize stays out: transferResize already sized the picker, and
+	// bubbles' filepicker answers a WindowSizeMsg by resetting its window
+	// end below a scrolled start, which blanks every row.
+	switch msg.(type) {
+	case tea.KeyMsg, tea.WindowSizeMsg:
+	default:
+		if n.xfer.step == xferLocal {
+			var fcmd tea.Cmd
+			n.xfer.local, fcmd = n.xfer.local.Update(msg)
+			cmd = tea.Batch(cmd, fcmd)
+		}
 	}
 	return n.settleFocus(), cmd
 }

@@ -98,15 +98,15 @@ func TestListArgv_Exact(t *testing.T) {
 		dir   string
 		want  []string
 	}{
-		{name: "home", alias: "api", dir: ".", want: []string{"ssh", "api", "ls", "-1Ap", "--", "."}},
-		{name: "relative dir", alias: "api", dir: "etc/nginx", want: []string{"ssh", "api", "ls", "-1Ap", "--", "etc/nginx"}},
-		{name: "absolute dir", alias: "api", dir: "/var/log", want: []string{"ssh", "api", "ls", "-1Ap", "--", "/var/log"}},
-		{name: "above home", alias: "api", dir: "..", want: []string{"ssh", "api", "ls", "-1Ap", "--", ".."}},
-		{name: "leading dash is guarded by --", alias: "api", dir: "-n", want: []string{"ssh", "api", "ls", "-1Ap", "--", "-n"}},
-		{name: "a space is quoted for the remote shell", alias: "api", dir: "my docs", want: []string{"ssh", "api", "ls", "-1Ap", "--", "'my docs'"}},
-		{name: "a quote is spliced", alias: "api", dir: "it's", want: []string{"ssh", "api", "ls", "-1Ap", "--", `'it'\''s'`}},
-		{name: "a glob is quoted", alias: "api", dir: "a*b", want: []string{"ssh", "api", "ls", "-1Ap", "--", "'a*b'"}},
-		{name: "empty is an empty word", alias: "api", dir: "", want: []string{"ssh", "api", "ls", "-1Ap", "--", "''"}},
+		{name: "home", alias: "api", dir: ".", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "."}},
+		{name: "relative dir", alias: "api", dir: "etc/nginx", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "etc/nginx"}},
+		{name: "absolute dir", alias: "api", dir: "/var/log", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "/var/log"}},
+		{name: "above home", alias: "api", dir: "..", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", ".."}},
+		{name: "leading dash is guarded by --", alias: "api", dir: "-n", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "-n"}},
+		{name: "a space is quoted for the remote shell", alias: "api", dir: "my docs", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "'my docs'"}},
+		{name: "a quote is spliced", alias: "api", dir: "it's", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", `'it'\''s'`}},
+		{name: "a glob is quoted", alias: "api", dir: "a*b", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "'a*b'"}},
+		{name: "empty is an empty word", alias: "api", dir: "", want: []string{"ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "''"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -198,7 +198,7 @@ func TestDescend_Parent(t *testing.T) {
 
 func TestLister_List_ParsesAndRecordsArgv(t *testing.T) {
 	t.Parallel()
-	f := fakerun.New().StubOut("bin/\nnotes.txt\n", "ssh", "api", "ls", "-1Ap", "--", ".")
+	f := fakerun.New().StubOut("bin/\nnotes.txt\n", "ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", ".")
 	got, err := transfer.Lister{Runner: f}.List(context.Background(), "api", transfer.Home)
 	if err != nil {
 		t.Fatalf("List() err = %v", err)
@@ -207,7 +207,7 @@ func TestLister_List_ParsesAndRecordsArgv(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("List() = %+v, want %+v", got, want)
 	}
-	if keys := f.CallKeys(); !reflect.DeepEqual(keys, []string{"ssh api ls -1Ap -- ."}) {
+	if keys := f.CallKeys(); !reflect.DeepEqual(keys, []string{"ssh -o BatchMode=yes api ls -1Ap -- ."}) {
 		t.Errorf("CallKeys() = %q, want the one listing", keys)
 	}
 }
@@ -254,7 +254,7 @@ func TestLister_List_NonZeroExitIsListError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := fakerun.New().Stub(tt.reply, "ssh", "api", "ls", "-1Ap", "--", "/root")
+			f := fakerun.New().Stub(tt.reply, "ssh", "-o", "BatchMode=yes", "api", "ls", "-1Ap", "--", "/root")
 			got, err := transfer.Lister{Runner: f}.List(context.Background(), "api", "/root")
 			if got != nil {
 				t.Errorf("List() = %+v, want nil entries on failure", got)

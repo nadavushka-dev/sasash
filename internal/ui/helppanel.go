@@ -44,8 +44,6 @@ func (m Model) helpGroups() []helpGroup {
 	switch {
 	case m.settings.pane != settingsOff:
 		first = "settings (o)"
-	case m.xfer.active():
-		first = "copy files (C)"
 	case m.focus == focusPaths:
 		first = "paths (p)"
 	case m.focus == focusTunnels:

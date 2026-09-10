@@ -2,6 +2,7 @@ package ui_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,7 +67,7 @@ func drive(t *testing.T, m ui.Model, keys ...string) ui.Model {
 
 // homeListing is the stub for host0's login directory.
 func homeListing() *fakerun.Fake {
-	return fakerun.New().StubOut("docs/\nreadme\n", "ssh", "host0", "ls", "-1Ap", "--", ".")
+	return fakerun.New().StubOut("docs/\nreadme\n", "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", ".")
 }
 
 func TestModel_Update_CopyOpensDirectionStep(t *testing.T) {
@@ -151,7 +152,7 @@ func TestModel_Update_UploadDirectoryFlow(t *testing.T) {
 	if got := ui.TransferStep(m); got != "remote" {
 		t.Fatalf("after the source: step = %q, want remote", got)
 	}
-	if got := f.CallKeys(); !reflect.DeepEqual(got, []string{"ssh host0 ls -1Ap -- ."}) {
+	if got := f.CallKeys(); !reflect.DeepEqual(got, []string{"ssh -o BatchMode=yes host0 ls -1Ap -- ."}) {
 		t.Errorf("CallKeys() = %q, want the home listing", got)
 	}
 	// The line shows the scp as it stands: -r, the dest still a placeholder.
@@ -221,7 +222,7 @@ func TestModel_Update_DownloadFileFlow(t *testing.T) {
 // through the run seam with the exact argv.
 func TestModel_Update_RemoteBrowserDescendsAndClimbs(t *testing.T) {
 	t.Parallel()
-	f := homeListing().StubOut("guide.md\n", "ssh", "host0", "ls", "-1Ap", "--", "docs")
+	f := homeListing().StubOut("guide.md\n", "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", "docs")
 	m := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "l")
 	if got := ui.TransferRemotePath(m); got != "docs" {
 		t.Fatalf("after l on docs/: path = %q, want docs", got)
@@ -242,7 +243,7 @@ func TestModel_Update_RemoteBrowserDescendsAndClimbs(t *testing.T) {
 	if got := ui.TransferRemotePath(m); got != "." {
 		t.Errorf("after enter on ../: path = %q, want .", got)
 	}
-	want := []string{"ssh host0 ls -1Ap -- .", "ssh host0 ls -1Ap -- docs", "ssh host0 ls -1Ap -- .", "ssh host0 ls -1Ap -- docs", "ssh host0 ls -1Ap -- ."}
+	want := []string{"ssh -o BatchMode=yes host0 ls -1Ap -- .", "ssh -o BatchMode=yes host0 ls -1Ap -- docs", "ssh -o BatchMode=yes host0 ls -1Ap -- .", "ssh -o BatchMode=yes host0 ls -1Ap -- docs", "ssh -o BatchMode=yes host0 ls -1Ap -- ."}
 	if got := f.CallKeys(); !reflect.DeepEqual(got, want) {
 		t.Errorf("CallKeys() = %q, want %q", got, want)
 	}
@@ -272,7 +273,7 @@ func TestModel_Update_RemoteRefusalIsANotice(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			f := homeListing().Stub(tt.reply, "ssh", "host0", "ls", "-1Ap", "--", "docs")
+			f := homeListing().Stub(tt.reply, "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", "docs")
 			m := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "l")
 			if !ui.TransferActive(m) || ui.TransferRemotePath(m) != "." {
 				t.Errorf("after the refusal: active = %v, path = %q; want the browser still at .", ui.TransferActive(m), ui.TransferRemotePath(m))
@@ -419,4 +420,134 @@ func TestModel_Update_HelpInertInsideFlow(t *testing.T) {
 
 func runResult(code int, stderr string) run.Result {
 	return run.Result{Code: code, Stderr: []byte(stderr)}
+}
+
+// A resize while the local picker is scrolled keeps its rows on screen:
+// bubbles' filepicker answers a WindowSizeMsg by resetting its window end
+// below a scrolled start, which blanks every row, so the resize stays
+// with transferResize and never reaches the picker.
+func TestModel_Update_LocalPickerSurvivesResizeWhileScrolled(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	for i := 0; i < 40; i++ {
+		if err := os.WriteFile(filepath.Join(home, fmt.Sprintf("file-%02d.txt", i)), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := update(t, xferModel(t, home, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 40})
+	m = drive(t, m, "C", "u", "G")
+	if !strings.Contains(m.View(), "› ") || !strings.Contains(m.View(), "file-39.txt") {
+		t.Fatalf("G did not reach the last row:\n%s", m.View())
+	}
+	m = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 14})
+	if v := m.View(); !strings.Contains(v, "file-") {
+		t.Errorf("after shrinking, the picker lists no rows:\n%s", v)
+	}
+}
+
+// A listing that lands after the browser moved on — another host, or
+// another directory — is dropped, so enter can never copy a path the
+// user did not pick.
+func TestModel_Update_StaleListingIsDropped(t *testing.T) {
+	t.Parallel()
+	f := homeListing().
+		StubOut("guide.md\n", "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", "docs").
+		StubOut("other/\n", "ssh", "-o", "BatchMode=yes", "host1", "ls", "-1Ap", "--", ".")
+	m := ui.New(testHosts(2), probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, f, ui.Config{Home: xferHome(t)})
+	m = ui.StaticCursor(update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24}))
+	// host0's listing in flight, then out, over to host1, in again.
+	next, pending := m.Update(keyMsg("C"))
+	next, pending = next.(ui.Model).Update(keyMsg("d"))
+	stale := drain(pending)
+	m = drive(t, next.(ui.Model), "esc", "esc", "j", "C", "d")
+	if got := ui.TransferRemotePath(m); got != "." || !strings.Contains(m.View(), "other/") {
+		t.Fatalf("host1's browser: path = %q, view:\n%s", got, m.View())
+	}
+	for _, msg := range stale {
+		m = update(t, m, msg)
+	}
+	if v := m.View(); strings.Contains(v, "docs/") || !strings.Contains(v, "other/") {
+		t.Errorf("host0's stale listing replaced host1's rows:\n%s", v)
+	}
+	// Two moves in a row: the first's listing lands after the second was asked for.
+	m2 := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j")
+	next, pending = m2.Update(keyMsg("l")) // docs, in flight
+	late := drain(pending)
+	m2 = drive(t, next.(ui.Model), "h") // back to ., asked for after
+	for _, msg := range late {
+		m2 = update(t, m2, msg)
+	}
+	if got := ui.TransferRemotePath(m2); got != "." || strings.Contains(m2.View(), "guide.md") {
+		t.Errorf("the late docs listing moved the browser: path = %q, view:\n%s", got, m2.View())
+	}
+}
+
+// Under BatchMode a host that needs to ask (passphrase, password, host
+// key) fails with ssh's 255: the notice points at S, the one connect
+// that opens a master for the listing to ride.
+func TestModel_Update_RemoteRefusalByConnectionHintsAtMaster(t *testing.T) {
+	t.Parallel()
+	f := fakerun.New().Stub(fakerun.Reply{Result: runResult(255, "host0: Permission denied (publickey).\n")}, "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", ".")
+	m := drive(t, xferModel(t, xferHome(t), f), "C", "d")
+	if got := ui.PopupTitle(m); got != "could not list host0:." {
+		t.Fatalf("PopupTitle() = %q, want the refusal popup", got)
+	}
+	for _, want := range []string{"ssh -o BatchMode=yes host0 ls -1Ap -- .", "Permission denied (publickey)", "connect once with S"} {
+		if !boxSays(m.View(), want) {
+			t.Errorf("popup lacks %q:\n%s", want, m.View())
+		}
+	}
+	// esc leaves the outcome on the line, the browser still open at .
+	m = drive(t, m, "esc")
+	if want := "host0: host0: Permission denied (publickey). — S once (a master), then C"; !strings.Contains(m.View(), want) {
+		t.Errorf("view lacks the notice %q:\n%s", want, m.View())
+	}
+	if !ui.TransferActive(m) || ui.TransferRemotePath(m) != "." {
+		t.Errorf("after the refusal: active = %v, path = %q", ui.TransferActive(m), ui.TransferRemotePath(m))
+	}
+}
+
+// Action keys are inert inside the flow (SPEC §5): the theme, quit,
+// settings, the path picker and the ambient toggle all stay put.
+func TestModel_Update_ActionKeysInertInsideFlow(t *testing.T) {
+	t.Parallel()
+	for _, step := range []struct {
+		name string
+		keys []string
+	}{
+		{name: "local picker", keys: []string{"C", "u"}},
+		{name: "remote browser", keys: []string{"C", "d"}},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			t.Parallel()
+			m := drive(t, xferModel(t, xferHome(t), homeListing()), step.keys...)
+			step := ui.TransferStep(m)
+			for _, k := range []string{"t", "q", "o", "p", "?", "$", "R", "a"} {
+				next, cmd := m.Update(keyMsg(k))
+				n := next.(ui.Model)
+				if !ui.TransferActive(n) || ui.TransferStep(n) != step || ui.PopupOpen(n) || ui.ThemeName(n) != "gruvbox" {
+					t.Errorf("%q inside the flow: active = %v, step = %q, popup = %v, theme = %q", k, ui.TransferActive(n), ui.TransferStep(n), ui.PopupOpen(n), ui.ThemeName(n))
+				}
+				for _, msg := range drain(cmd) {
+					if _, quit := msg.(tea.QuitMsg); quit {
+						t.Errorf("%q inside the flow quit the program", k)
+					}
+				}
+			}
+		})
+	}
+}
+
+// tab/shift+tab move the remote browser's highlight like j/k (the pane
+// convention); tab never opens a directory.
+func TestModel_Update_RemoteBrowserTabMoves(t *testing.T) {
+	t.Parallel()
+	m := drive(t, xferModel(t, xferHome(t), homeListing()), "C", "d", "tab")
+	if !strings.Contains(m.View(), "› docs/") || ui.TransferRemotePath(m) != "." {
+		t.Errorf("tab: want the highlight on docs/ at .:\n%s", m.View())
+	}
+	m = drive(t, m, "shift+tab")
+	if !strings.Contains(m.View(), "› ../") {
+		t.Errorf("shift+tab: want the highlight back on ../:\n%s", m.View())
+	}
 }

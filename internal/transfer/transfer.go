@@ -88,15 +88,20 @@ func CopyArgv(s Spec) []string {
 
 // ListArgv is the exact remote listing the browser runs (SPEC §4):
 //
-//	ssh <alias> ls -1Ap -- <path>
+//	ssh -o BatchMode=yes <alias> ls -1Ap -- <path>
 //
-// -1 one name per line, -A every entry but . and .., -p a trailing slash
-// on each directory (the one fact the browser needs — never `ls -l`, whose
-// columns are locale- and platform-shaped), -- so a path starting with
-// a dash is a path. The path is quoted for the remote shell only when it
-// needs to be: the command line after the alias is what that shell runs.
+// BatchMode because the listing runs behind the TUI with no tty to prompt
+// on (SPEC §4's rule): a host that needs a passphrase, a password or a
+// host-key answer fails at once with ssh's reason instead of painting a
+// prompt over the alt screen and eating the keys — connect once with S
+// and the master carries the listing. -1 one name per line, -A every
+// entry but . and .., -p a trailing slash on each directory (the one fact
+// the browser needs — never `ls -l`, whose columns are locale- and
+// platform-shaped), -- so a path starting with a dash is a path. The path
+// is quoted for the remote shell only when it needs to be: the command
+// line after the alias is what that shell runs.
 func ListArgv(alias, dir string) []string {
-	return []string{"ssh", alias, "ls", "-1Ap", "--", ShellQuote(dir)}
+	return []string{"ssh", "-o", "BatchMode=yes", alias, "ls", "-1Ap", "--", ShellQuote(dir)}
 }
 
 // ShellQuote makes s one word for a POSIX shell: unchanged when it is

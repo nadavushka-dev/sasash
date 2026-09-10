@@ -2,8 +2,10 @@
 # Demo stand-in for scp (SASASH.4.33 tape only — never on a real PATH).
 # Copies between the fixture home and the fixture "remote" tree in
 # $SASASH_DEMO_REMOTE, printing one progress line the way scp does. The
-# argv sasash builds is the real one; only where it lands is faked.
-root=${SASASH_DEMO_REMOTE:?}
+# argv sasash builds is the real one; only where it lands is faked. The
+# guard comes first: without the fixture variable this refuses to run.
+set -eu
+root=${SASASH_DEMO_REMOTE:?demo stand-in: SASASH_DEMO_REMOTE not set}
 recursive=
 if [ "$1" = "-r" ]; then
 	recursive=-R

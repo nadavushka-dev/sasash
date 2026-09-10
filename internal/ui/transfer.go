@@ -247,13 +247,19 @@ func (m Model) transferEnterRemote() (Model, tea.Cmd) {
 	return m.transferList(transfer.Home)
 }
 
+// listTimeout bounds one remote listing: a host that does not answer
+// must not hold the browser on "listing …" past what a poll would wait.
+const listTimeout = tunnelStatusTimeout
+
 // transferList runs one listing through the run seam; the browser keeps
 // showing where it is until the result lands.
 func (m Model) transferList(path string) (Model, tea.Cmd) {
 	m.xfer.remote.loading = path
 	alias, runner := m.xfer.alias, m.runner
 	return m, func() tea.Msg {
-		entries, err := transfer.Lister{Runner: runner}.List(context.Background(), alias, path)
+		ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
+		defer cancel()
+		entries, err := transfer.Lister{Runner: runner}.List(ctx, alias, path)
 		return remoteListMsg{alias: alias, path: path, entries: entries, err: err}
 	}
 }
@@ -268,6 +274,20 @@ func (m Model) remoteListed(msg remoteListMsg) (Model, tea.Cmd) {
 	b.loading = ""
 	if msg.err != nil {
 		m.notice = m.xfer.alias + ":" + msg.path + " — " + cleanLine(msg.err.Error())
+		// ssh's own exit (255) rather than ls's: the connection, not the
+		// directory — under BatchMode that is a passphrase, a password or
+		// a host key it could not ask for; a master answers all three.
+		// The line points at S; the popup carries the argv and the words.
+		var le *transfer.ListError
+		if errors.As(msg.err, &le) && le.Code == 255 {
+			m.notice = m.xfer.alias + ": " + cleanLine(msg.err.Error()) + " — S once (a master), then C"
+			m = m.show("could not list "+m.xfer.alias+":"+msg.path,
+				append(append([]string{strings.Join(transfer.ListArgv(m.xfer.alias, msg.path), " "), ""}, reasonLines(msg.err)...),
+					"",
+					"the listing runs behind the TUI with BatchMode, so ssh cannot ask for a",
+					"passphrase, a password or a host-key answer here; connect once with S,",
+					"and the master it opens carries the listing (and the copy) — then C again")...)
+		}
 		return m, nil
 	}
 	b.path, b.entries, b.idx = msg.path, msg.entries, 0
@@ -509,20 +529,18 @@ func (t transferKeys) ShortHelp() []key.Binding {
 
 func (t transferKeys) FullHelp() [][]key.Binding { return [][]key.Binding{t.ShortHelp()} }
 
-// transferHelpKeys is the keys panel's group: C, then the union of both
-// footers' keys (esc's two verbs are the panel's one esc row: the
-// footer says which applies, as the prompts group has it).
+// transferHelpKeys is the keys panel's group: C and the keys that mean
+// something only here — j/k and enter are the panel's usual rows, and
+// esc's two verbs are one row (the footer says which applies, as the
+// prompts group has it).
 func transferHelpKeys(k KeyMap) []key.Binding {
 	out := []key.Binding{k.Copy}
-	seen := map[string]bool{}
 	for _, t := range []transferKeys{{step: xferDirection}, {step: xferLocal}} {
 		for _, b := range t.ShortHelp() {
-			h := b.Help()
-			if h.Key == "esc" || seen[h.Key+h.Desc] {
-				continue
+			switch b.Help().Key {
+			case "u/d", "l", "h", ".":
+				out = append(out, b)
 			}
-			seen[h.Key+h.Desc] = true
-			out = append(out, b)
 		}
 	}
 	return append(out, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel / back — the footer says which")))

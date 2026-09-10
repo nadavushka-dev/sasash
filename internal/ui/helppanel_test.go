@@ -14,7 +14,9 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
-// tallHelp opens the keys panel at a size where it fits whole.
+// tallHelp opens the keys panel at a size where it fits whole (100 rows
+// since the copy-files group, SASASH.4.33: on a shorter terminal the
+// 4.11 popup scrolls, and j/k reach every row).
 func tallHelp(t *testing.T) ui.Model {
 	t.Helper()
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 120, Height: 100})
