@@ -31,7 +31,12 @@ func (m Model) helpGroups() []helpGroup {
 	groups := []helpGroup{
 		{"host list", []key.Binding{k.Up, k.Down, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Connect, k.Handoff, k.Herdr, k.PickPath, k.Adhoc, k.CopyAddr, k.CopyCmd, k.Edit, k.FocusRight, k.Filter, k.ClearFilter, k.Help, k.Settings, k.Theme, k.ShowAmbient, k.ShowPreview, k.Rename, k.Quit}},
 		{"paths (p)", pathsKeys{}.ShortHelp()},
-		{"tunnels (l)", append([]key.Binding{k.FocusRight, k.FocusLeft, k.AddFwd, k.DeclareFwd, k.DeleteFwd, k.Restart}, tunnelsKeys{k: k}.ShortHelp()...)},
+		// Only the tunnel keys the pane's own footer (tunnelsKeys) does not
+		// already carry: +/r are unique here; n and X come from tunnelsKeys
+		// below, and l (paths/tunnels pane) is the host-list group's row —
+		// in this pane l closes the cycle to the host list, which
+		// tunnelsKeys spells. FocusLeft (h) stays: it lives only here.
+		{"tunnels (l)", append([]key.Binding{k.FocusLeft, k.AddFwd, k.Restart}, tunnelsKeys{k: k}.ShortHelp()...)},
 		{"copy files (C)", transferHelpKeys(k)},
 		{"prompts", promptGroupKeys()},
 		{"settings (o)", settingsKeys{}.ShortHelp()},
