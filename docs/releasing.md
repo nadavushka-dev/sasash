@@ -53,6 +53,16 @@ Only the automatic `GITHUB_TOKEN`; the release workflow grants it `contents: wri
   quarantine bit, so nothing blocks today. Revisit when there is an Apple
   developer identity.
 - Homebrew. The human chose prebuilt + curl|sh only; no tap, no cask.
-- Self-update. Re-run the installer.
+
+## Self-update
+
+`sasash update` (SASASH.4.38) is the installer in Go: it resolves the latest tag through
+the same `releases/latest` redirect, downloads `sasash_<version>_<os>_<arch>.tar.gz` and
+`checksums.txt` from the same URLs (`SASASH_BASE_URL` overrides them, as for `install.sh`),
+verifies the sha256, extracts the binary and renames it over the running executable —
+temp file beside it, mode 0755, rename — after a y/N confirmation (`-y` skips it,
+`--check` only reports, `sasash update v0.3.0` pins a tag). A directory it cannot write
+sends the user back to the installer, which falls back to sudo. Transient 5xx answers from
+GitHub's release path are retried three times, as `install.sh`'s `curl --retry` does.
 - A `LICENSE` file: the repo has none, so the archives declare none. Add one
   before announcing the release.

@@ -68,11 +68,12 @@ fetch() { # fetch URL DEST
 }
 
 # GitHub redirects <releases>/latest to <releases>/tag/<tag>; following the
-# redirect avoids the API and its rate limit.
+# redirect avoids the API and its rate limit. --retry, as fetch has it: the
+# release path answers 504 now and then, and one retry is all it takes.
 latest_tag() {
 	url=
 	if have curl; then
-		url=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$BASE_URL/latest") || url=
+		url=$(curl -fsSIL --retry 3 -o /dev/null -w '%{url_effective}' "$BASE_URL/latest") || url=
 	elif have wget; then
 		url=$(wget -q -S --spider "$BASE_URL/latest" 2>&1 | sed -n 's/^ *Location: *//p' | tail -n 1)
 	fi

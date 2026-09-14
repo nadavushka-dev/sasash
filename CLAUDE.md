@@ -30,7 +30,8 @@ other dependency requires explicit approval.
 |---|---|
 | `cmd/sasash` | stdlib subcommand dispatch; each subcommand self-registers from its OWN file — adding a subcommand must not edit `main.go` |
 | `internal/run` | the ONLY importer of `os/exec`; every process goes through `run.Runner` |
-| `internal/probe` | the only network dialing; paths are opaque data |
+| `internal/probe` | the only network dialing for hosts; paths are opaque data |
+| `internal/update` | the one HTTP client: the GitHub release for `sasash update`; tests serve a release from `httptest` |
 | `internal/sshconf` | lossless parser + atomic writer; do NOT edit `sshconf.go` — extend the package with new files |
 | `internal/hostmodel` | domain model over sshconf meta; no I/O beyond config reads, no dialing |
 | `internal/setup` | one-time bootstrap; pure check/ensure functions over a `setup.Env` (home + config.toml path) |

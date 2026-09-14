@@ -461,6 +461,7 @@ sasash addr <host>        # active address to stdout  →  $(sasash addr ubuntu)
 sasash up   <host> [set]  # start master + forward set
 sasash down <host>        # ssh -O exit
 sasash status             # one line per host, scriptable
+sasash update             # this binary → the latest release, the installer's checks, asks first
 ```
 
 `sasash addr` is what replaces "searching for the IP for other needs."
@@ -516,6 +517,7 @@ internal/sshconf/    parse + round-trip-faithful write of ssh_config
 internal/probe/      parallel TCP dial, latency, caching
 internal/tunnel/     control-master ops, live state verification
 internal/action/     command templates: actions.toml + the spawn_window template
+internal/update/     self-update from the GitHub release: latest tag, asset, sha256, atomic swap
 internal/toml/       the TOML scalar subset actions.toml and config.toml share
 internal/config/     ~/.config/sasash/config.toml: key registry, lossless line rewrite
 internal/ui/         bubbletea models

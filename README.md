@@ -63,8 +63,11 @@ sudo), prints a PATH hint if that directory is not on your PATH, and offers to r
 From source instead (Go 1.26.4+):
 `go install github.com/nadavushka-dev/sasash/cmd/sasash@latest`.
 
-`sasash version` prints the release tag the binary was built from. Binaries are not signed or
-notarized yet; a curl|sh download never carries the macOS quarantine bit.
+`sasash version` prints the release tag the binary was built from, and `sasash update` moves
+an installed binary to the latest release in place — it downloads the same asset the installer
+would, verifies it against `checksums.txt`, and swaps the file atomically after asking.
+Binaries are not signed or notarized yet; a curl|sh download never carries the macOS
+quarantine bit.
 
 ## Usage
 
@@ -104,6 +107,7 @@ Beyond the TUI, the same engine is scriptable:
 | `sasash up <host>` | bring a host's declared forward sets up (`ssh -N` per port) |
 | `sasash down <host>` | kill every tunnel process of a host |
 | `sasash setup` | one-time bootstrap (the `Include` line, `sasash.conf`, `~/.ssh/cm/`, `config.toml`) |
+| `sasash update` | replace this binary with the latest release — same asset and sha256 check as the installer; asks first (`-y` skips, `--check` only reports, a tag pins) |
 | `sasash version` | print the version |
 
 ## How it works
