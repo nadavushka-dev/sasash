@@ -140,6 +140,7 @@ func TestSetupHome_ConfigToml(t *testing.T) {
 	tests := []struct {
 		name       string
 		legacy     []setup.Legacy
+		existing   string // config.toml before, "" for none
 		wantStdout []string
 		wantLine   string // in config.toml afterwards
 	}{
@@ -152,12 +153,25 @@ func TestSetupHome_ConfigToml(t *testing.T) {
 			legacy:     []setup.Legacy{{Path: "@HOME@/.local/state/sasash/theme", Key: "theme"}},
 			wantStdout: []string{"remove ~/.local/state/sasash/theme (it names nothing sasash can keep)"},
 			wantLine:   "# theme = \"gruvbox\"\n"},
+		{name: "a key already set by hand is announced as a remove, and kept",
+			legacy:     []setup.Legacy{{Path: "@HOME@/.local/state/sasash/theme", Key: "theme", Value: "nord"}},
+			existing:   "theme = \"mocha\"\n",
+			wantStdout: []string{"remove ~/.local/state/sasash/theme (theme is already set in config.toml)"},
+			wantLine:   "theme = \"mocha\"\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			home := t.TempDir()
 			env := testEnv(home)
+			if tt.existing != "" {
+				if err := os.MkdirAll(filepath.Dir(env.Config), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(env.Config, []byte(tt.existing), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			for _, l := range tt.legacy {
 				l.Path = strings.Replace(l.Path, "@HOME@", home, 1)
 				if err := os.MkdirAll(filepath.Dir(l.Path), 0o755); err != nil {
@@ -184,7 +198,7 @@ func TestSetupHome_ConfigToml(t *testing.T) {
 			if !strings.Contains(string(data), tt.wantLine) {
 				t.Errorf("config.toml =\n%s\nwant it to contain %q", data, tt.wantLine)
 			}
-			if !strings.HasPrefix(string(data), config.Header) {
+			if tt.existing == "" && !strings.HasPrefix(string(data), config.Header) {
 				t.Errorf("config.toml does not start with the template header:\n%s", data)
 			}
 			for _, l := range env.Legacy {
@@ -201,14 +215,10 @@ func TestSetupHome_ConfigToml(t *testing.T) {
 }
 
 func TestSetupEnv(t *testing.T) {
-	// Not parallel: themeStatePath reads XDG_STATE_HOME via t.Setenv.
+	t.Parallel()
 	home := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
 	getenv := func(k string) string {
-		if k == "XDG_CONFIG_HOME" {
-			return filepath.Join(home, "cfg")
-		}
-		return ""
+		return map[string]string{"XDG_CONFIG_HOME": filepath.Join(home, "cfg"), "XDG_STATE_HOME": filepath.Join(home, "state")}[k]
 	}
 	write := func(path, v string) {
 		t.Helper()
@@ -223,34 +233,49 @@ func TestSetupEnv(t *testing.T) {
 	themePath := filepath.Join(home, "state", "sasash", "theme")
 	targetPath := filepath.Join(home, "state", "sasash", "spawn-target")
 	windowPath := filepath.Join(home, "cfg", "sasash", "spawn-window")
-	values := func() []any {
-		env := setupEnv(home, getenv)
+	values := func() ([]any, []string) {
+		env, problems := setupEnv(home, getenv)
 		if env.Home != home || env.Config != wantConfig {
 			t.Errorf("setupEnv() = %+v, want home and %q", env, wantConfig)
 		}
 		var out []any
-		for i, want := range []setup.Legacy{{Path: themePath, Key: "theme"}, {Path: targetPath, Key: "spawn_target"}, {Path: windowPath, Key: "spawn_window"}} {
-			if env.Legacy[i].Path != want.Path || env.Legacy[i].Key != want.Key {
-				t.Errorf("setupEnv().Legacy[%d] = %+v, want %s at %s", i, env.Legacy[i], want.Key, want.Path)
-			}
-			out = append(out, env.Legacy[i].Value)
+		for _, l := range env.Legacy {
+			out = append(out, l.Value)
 		}
-		return out
+		return out, problems
 	}
-	if got := values(); !reflect.DeepEqual(got, []any{nil, nil, nil}) {
-		t.Errorf("values without old files = %v, want all nil", got)
+	if got, problems := values(); !reflect.DeepEqual(got, []any{nil, nil, nil}) || problems != nil {
+		t.Errorf("values without old files = %v, %v; want all nil and no problems", got, problems)
+	}
+	env, _ := setupEnv(home, getenv)
+	for i, want := range []setup.Legacy{{Path: themePath, Key: "theme"}, {Path: targetPath, Key: "spawn_target"}, {Path: windowPath, Key: "spawn_window"}} {
+		if env.Legacy[i].Path != want.Path || env.Legacy[i].Key != want.Key {
+			t.Errorf("setupEnv().Legacy[%d] = %+v, want %s at %s", i, env.Legacy[i], want.Key, want.Path)
+		}
 	}
 	write(themePath, "solarized\n")
 	write(targetPath, "floating\n")
 	write(windowPath, "\n")
-	if got := values(); !reflect.DeepEqual(got, []any{nil, nil, ""}) {
+	if got, _ := values(); !reflect.DeepEqual(got, []any{nil, nil, ""}) {
 		t.Errorf("values with stale files = %v, want nil, nil and an empty window", got)
 	}
 	write(themePath, "nord\n")
 	write(targetPath, "workspace\n")
 	write(windowPath, "kitty ssh {host}\n")
-	if got := values(); !reflect.DeepEqual(got, []any{"nord", "workspace", "kitty ssh {host}"}) {
+	if got, _ := values(); !reflect.DeepEqual(got, []any{"nord", "workspace", "kitty ssh {host}"}) {
 		t.Errorf("values with good files = %v", got)
+	}
+	// A directory at a legacy path is a problem, not a file to remove:
+	// it leaves the list and is named.
+	if err := os.Remove(themePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(themePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, problems := values()
+	if len(got) != 2 || !reflect.DeepEqual(problems, []string{"cannot read ~/state/sasash/theme: it is a directory — left as is"}) {
+		t.Errorf("values with a directory = %v, problems %q; want two entries and the directory named", got, problems)
 	}
 }
 

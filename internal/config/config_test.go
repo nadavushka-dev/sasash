@@ -3,6 +3,8 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -403,4 +405,97 @@ func TestKeys_Documented(t *testing.T) {
 			t.Errorf("docs/configuration.md documents %q, which config.Keys lacks", name)
 		}
 	}
+}
+
+func TestLive(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		want    []string
+		wantErr bool
+	}{
+		{name: "template sets nothing", content: config.Template()},
+		{name: "live keys in effect", content: "theme = \"nord\"\nshow_hidden = true\n", want: []string{"show_hidden", "theme"}},
+		{name: "an unknown key does not count", content: "font = \"x\"\ntheme = \"nord\"\n", want: []string{"theme"}},
+		{name: "a value of the wrong kind does not count", content: "spawn_window = true\n"},
+		{name: "a rejected file is an error", content: "[ui]\n", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := config.Live(write(t, tt.content))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Live() err = %v, want error %v", err, tt.wantErr)
+			}
+			var keys []string
+			for k := range got {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if !reflect.DeepEqual(keys, tt.want) {
+				t.Errorf("Live() = %v, want %v", keys, tt.want)
+			}
+		})
+	}
+	t.Run("missing sets nothing, a directory errors", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if got, err := config.Live(filepath.Join(dir, "none.toml")); err != nil || len(got) != 0 {
+			t.Errorf("Live(missing) = %v, %v; want empty, nil", got, err)
+		}
+		if _, err := config.Live(dir); err == nil {
+			t.Errorf("Live(directory) err = nil, want an error")
+		}
+	})
+}
+
+func TestSetIfUnset(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		content     string // "" for no file
+		wantWritten bool
+		wantLine    string
+		notLine     string
+	}{
+		{name: "missing file starts from the template and writes", wantWritten: true, wantLine: "theme = \"nord\"\n"},
+		{name: "unset key is written", content: "editor = \"vim\"\n", wantWritten: true, wantLine: "theme = \"nord\"\n"},
+		{name: "a key in effect is kept", content: "theme = \"mocha\"\n", wantLine: "theme = \"mocha\"\n", notLine: "nord"},
+		{name: "a line of the wrong kind is not in effect", content: "theme = true\n", wantWritten: true, wantLine: "theme = \"nord\"\n", notLine: "true"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if tt.content != "" {
+				if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			}
+			written, err := config.SetIfUnset(path, "theme", "nord")
+			if err != nil {
+				t.Fatalf("SetIfUnset() err = %v", err)
+			}
+			if written != tt.wantWritten {
+				t.Errorf("SetIfUnset() written = %v, want %v", written, tt.wantWritten)
+			}
+			data, _ := os.ReadFile(path)
+			if !strings.Contains(string(data), tt.wantLine) || (tt.notLine != "" && strings.Contains(string(data), tt.notLine)) {
+				t.Errorf("config.toml =\n%s\nwant %q and not %q", data, tt.wantLine, tt.notLine)
+			}
+		})
+	}
+	t.Run("errors", func(t *testing.T) {
+		t.Parallel()
+		if _, err := config.SetIfUnset(write(t, "[ui]\n"), "theme", "nord"); err == nil {
+			t.Errorf("SetIfUnset(rejected file) err = nil, want the parse error")
+		}
+		if _, err := config.SetIfUnset(t.TempDir(), "theme", "nord"); err == nil {
+			t.Errorf("SetIfUnset(directory) err = nil, want an error")
+		}
+		if _, err := config.SetIfUnset(filepath.Join(t.TempDir(), "c.toml"), "font", "x"); err == nil {
+			t.Errorf("SetIfUnset(unknown key) err = nil, want an error")
+		}
+	})
 }

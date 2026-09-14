@@ -130,8 +130,16 @@ func TestTuiConfig_SetupWarnNamesOldFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := tuiConfig(home, filepath.Join(home, "xdg", "sasash", "config.toml"), "", config.Config{}, "", getenv)
-	if !strings.Contains(cfg.SetupWarn, "old settings files: ~/xdg/sasash/spawn-window") || !strings.Contains(cfg.SetupWarn, "o → setup") {
-		t.Errorf("tuiConfig().SetupWarn = %q, want the old file named and the way to move it", cfg.SetupWarn)
+	if !strings.Contains(cfg.SetupWarn, "old settings files: ~/xdg/sasash/spawn-window — not in effect until o → setup") {
+		t.Errorf("tuiConfig().SetupWarn = %q, want the old file named, the consequence and the way to move it", cfg.SetupWarn)
+	}
+	// A directory where a file should be is named, and left alone.
+	if err := os.MkdirAll(filepath.Join(home, ".local", "state", "sasash", "theme"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg = tuiConfig(home, filepath.Join(home, "xdg", "sasash", "config.toml"), "", config.Config{}, "", getenv)
+	if !strings.Contains(cfg.SetupWarn, "cannot read ~/.local/state/sasash/theme: it is a directory — left as is") || !strings.Contains(cfg.SetupWarn, "spawn-window") {
+		t.Errorf("tuiConfig().SetupWarn = %q, want the directory named as a problem beside the movable file", cfg.SetupWarn)
 	}
 	// Named, never read: the TUI's window template is still the platform default.
 	if _, err := os.Stat(old); err != nil {
@@ -140,13 +148,12 @@ func TestTuiConfig_SetupWarnNamesOldFiles(t *testing.T) {
 }
 
 func TestThemeStatePath(t *testing.T) {
-	// Not parallel: mutates XDG_STATE_HOME via t.Setenv.
-	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-state")
-	if got, want := themeStatePath("/home/x"), filepath.Join("/tmp/xdg-state", "sasash", "theme"); got != want {
+	t.Parallel()
+	xdg := func(k string) string { return map[string]string{"XDG_STATE_HOME": "/tmp/xdg-state"}[k] }
+	if got, want := themeStatePath("/home/x", xdg), filepath.Join("/tmp/xdg-state", "sasash", "theme"); got != want {
 		t.Errorf("themeStatePath() = %q, want %q", got, want)
 	}
-	t.Setenv("XDG_STATE_HOME", "")
-	if got, want := themeStatePath("/home/x"), filepath.Join("/home/x", ".local", "state", "sasash", "theme"); got != want {
+	if got, want := themeStatePath("/home/x", func(string) string { return "" }), filepath.Join("/home/x", ".local", "state", "sasash", "theme"); got != want {
 		t.Errorf("themeStatePath() = %q, want %q", got, want)
 	}
 }

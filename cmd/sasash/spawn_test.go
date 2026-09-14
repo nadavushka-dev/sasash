@@ -79,7 +79,7 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 	t.Run("the legacy paths setup moves", func(t *testing.T) {
 		t.Parallel()
 		home := t.TempDir()
-		if got, want := spawnStatePath(home), filepath.Join(home, ".local", "state", "sasash", "spawn-target"); got != want {
+		if got, want := spawnStatePath(home, func(string) string { return "" }), filepath.Join(home, ".local", "state", "sasash", "spawn-target"); got != want {
 			t.Errorf("spawnStatePath() = %q, want %q", got, want)
 		}
 		xdg := func(k string) string { return map[string]string{"XDG_CONFIG_HOME": "/x"}[k] }

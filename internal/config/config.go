@@ -43,7 +43,7 @@ var Keys = []Key{
 	{Name: "spawn_target", Kind: toml.String, Default: `"tab"`,
 		Doc: "where enter opens the ssh session inside herdr or tmux: pane, tab or workspace (o → spawn target writes it here)"},
 	{Name: "spawn_window", Kind: toml.String, Default: `""`,
-		Doc: "command that opens an OS window running ssh outside any multiplexer, {host} is the alias; unset means the platform default (Terminal on macOS, x-terminal-emulator or gnome-terminal on Linux, Windows Terminal under WSL), \"\" turns that off so enter hands off instead"},
+		Doc: "command that opens an OS window running ssh outside any multiplexer, {host} is the alias; leave it commented out for the platform default (Terminal on macOS, x-terminal-emulator or gnome-terminal on Linux, Windows Terminal under WSL) — a live \"\" turns that off so enter hands off instead"},
 }
 
 // Header opens a freshly created config.toml.
@@ -130,9 +130,11 @@ func Load(path string) (Config, []string, error) {
 	return cfg, warns, nil
 }
 
-// Live reports which keys the file at path sets with a live line — what
+// Live reports which keys the file at path sets in effect — a live line
+// Load would apply: a known key with a value of its kind. It is what
 // setup asks before moving an old settings file in, so a value the user
-// already wrote is never overwritten. A missing file sets nothing.
+// already wrote is never overwritten, and a line Load ignores (unknown
+// key, wrong kind) does not count as set. A missing file sets nothing.
 func Live(path string) (map[string]bool, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -141,17 +143,49 @@ func Live(path string) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines, err := parse(string(data))
+	return live(string(data))
+}
+
+func live(data string) (map[string]bool, error) {
+	lines, err := parse(data)
 	if err != nil {
 		return nil, err
 	}
-	live := map[string]bool{}
+	out := map[string]bool{}
 	for _, l := range lines {
-		if l.key != "" {
-			live[l.key] = true
+		if k, ok := lookup(l.key); ok && l.val.Kind == k.Kind {
+			out[l.key] = true
 		}
 	}
-	return live, nil
+	return out, nil
+}
+
+// SetIfUnset is Set for a key not yet in effect: under the same lock as
+// Set it re-reads the file and writes value only when Live would not
+// list key, reporting whether it wrote. Setup's legacy moves use it so
+// a value the user set meanwhile is never overwritten.
+func SetIfUnset(path, key string, value any) (bool, error) {
+	setMu.Lock()
+	defer setMu.Unlock()
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		data = []byte(Template())
+	case err != nil:
+		return false, err
+	}
+	set, err := live(string(data))
+	if err != nil {
+		return false, err
+	}
+	if set[key] {
+		return false, nil
+	}
+	out, err := Apply(string(data), key, value)
+	if err != nil {
+		return false, err
+	}
+	return true, WriteAtomic(path, out)
 }
 
 // Template is the file setup writes: the header, then each key's doc

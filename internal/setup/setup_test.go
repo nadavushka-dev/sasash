@@ -541,15 +541,17 @@ func writeFile(t *testing.T, path, content string) {
 func TestEnsure_MovesLegacy(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name     string
-		value    any    // the Legacy entry's Value; nil means nothing to keep
-		existing string // config.toml before, "" for none
-		wantLine string // a line config.toml must hold afterwards
-		notLine  string // a line it must not hold
+		name       string
+		value      any    // the Legacy entry's Value; nil means nothing to keep
+		existing   string // config.toml before, "" for none
+		wantLine   string // a line config.toml must hold afterwards
+		notLine    string // a line it must not hold
+		wantReason string // the announced reason for a remove without a write; "" for a write
 	}{
 		{name: "a theme is written live", value: "nord", wantLine: "theme = \"nord\"\n", notLine: "# theme ="},
-		{name: "nothing to keep is removed without a write", value: nil, wantLine: "# theme = \"gruvbox\"\n", notLine: "\ntheme ="},
-		{name: "a live line the user set wins", value: "nord", existing: "theme = \"mocha\"\n", wantLine: "theme = \"mocha\"\n", notLine: "nord"},
+		{name: "nothing to keep is removed without a write", value: nil, wantLine: "# theme = \"gruvbox\"\n", notLine: "\ntheme =", wantReason: "it names nothing sasash can keep"},
+		{name: "a live line the user set wins", value: "nord", existing: "theme = \"mocha\"\n", wantLine: "theme = \"mocha\"\n", notLine: "nord", wantReason: "theme is already set in config.toml"},
+		{name: "a live line of the wrong kind is not in effect", value: "nord", existing: "theme = true\n", wantLine: "theme = \"nord\"\n", notLine: "true"},
 		{name: "a commented line is revived", value: "nord", existing: config.Template(), wantLine: "theme = \"nord\"\n", notLine: "# theme ="},
 	}
 	for _, tt := range tests {
@@ -567,8 +569,14 @@ func TestEnsure_MovesLegacy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Check() before: %v", err)
 			}
-			if !reflect.DeepEqual(before.Legacy, []string{old}) || before.Done() {
-				t.Errorf("Check() before = %+v; want the one present legacy file listed and not Done", before)
+			// The announced move is the one Ensure makes: a write, or a
+			// remove with its reason.
+			wantMove := setup.Move{Path: old, Key: "theme", Value: tt.value, Reason: tt.wantReason}
+			if tt.wantReason != "" {
+				wantMove.Value = nil
+			}
+			if !reflect.DeepEqual(before.Legacy, []setup.Move{wantMove}) || before.Done() {
+				t.Errorf("Check() before = %+v; want %+v listed and not Done", before.Legacy, wantMove)
 			}
 			if err := setup.Ensure(e); err != nil {
 				t.Fatalf("Ensure() = %v", err)
@@ -634,11 +642,19 @@ func TestEnsure_ConfigTomlErrors(t *testing.T) {
 		old := filepath.Join(home, "state", "theme")
 		writeFile(t, old, "nord\n")
 		e.Legacy = []setup.Legacy{{Path: old, Key: "theme", Value: "nord"}}
+		if _, err := setup.Check(e); err == nil {
+			t.Errorf("Check() = nil, want the parse error (nothing to announce from a file that cannot be read)")
+		}
 		if err := setup.Ensure(e); err == nil {
 			t.Fatalf("Ensure() = nil, want the parse error")
 		}
 		if _, err := os.Lstat(old); err != nil {
 			t.Errorf("legacy file removed although its value was not written: %v", err)
+		}
+		// With nothing to write, the rejected config.toml is not consulted.
+		e.Legacy = []setup.Legacy{{Path: old, Key: "theme"}}
+		if st, err := setup.Check(e); err != nil || len(st.Legacy) != 1 {
+			t.Errorf("Check() with only a remove = %+v, %v; want the remove listed", st, err)
 		}
 	})
 }

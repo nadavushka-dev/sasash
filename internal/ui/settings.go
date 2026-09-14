@@ -415,13 +415,10 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 		// Old settings files still to move into config.toml (4.36): known
 		// only once the check lands, and gone once setup has run.
 		if s.status != nil && s.checkErr == nil {
-			for _, l := range m.setupEnv.Legacy {
-				if !slices.Contains(s.status.Legacy, l.Path) {
-					continue
-				}
-				verb := "move " + m.underHome(l.Path) + " → " + l.Key + " in config.toml"
-				if l.Value == nil {
-					verb = "remove " + m.underHome(l.Path) + "  (names nothing to keep)"
+			for _, mv := range s.status.Legacy {
+				verb := "move " + m.underHome(mv.Path) + " → " + mv.Key + " in config.toml"
+				if mv.Value == nil {
+					verb = "remove " + m.underHome(mv.Path) + "  (" + mv.Reason + ")"
 				}
 				rows = append(rows, m.styles.StatusDown.Render("○")+" "+m.styles.PathAddr.Render(verb)+" "+m.styles.PathExtra.Render("pending"))
 			}

@@ -138,7 +138,8 @@ func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string, 
 	sd := stateDir(home)
 	store := stats.Store{Dir: sd}
 	editor, editorHint := resolveEditor(uc.Editor, editorEnv)
-	env := setup.Env{Home: home, Config: cfgPath, Legacy: legacyFiles(home, getenv)}
+	files, problems := legacyFiles(home, getenv)
+	env := setup.Env{Home: home, Config: cfgPath, Legacy: files}
 	// An edit ssh cannot see (the Include is not in ~/.ssh/config) must
 	// come back with an explanation, not a silently unchanged list. A
 	// missing sasash.conf alone is fine: ssh ignores an Include of a
@@ -151,11 +152,14 @@ func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string, 
 		}
 		if len(st.Legacy) > 0 {
 			names := make([]string, len(st.Legacy))
-			for i, p := range st.Legacy {
-				names[i] = tilde(home, p)
+			for i, m := range st.Legacy {
+				names[i] = tilde(home, m.Path)
 			}
-			setupWarn = "old settings files: " + strings.Join(names, ", ") + " — o → setup moves them into config.toml"
+			setupWarn = "old settings files: " + strings.Join(names, ", ") + " — not in effect until o → setup moves them into config.toml"
 		}
+	}
+	if len(problems) > 0 {
+		setupWarn = startupJoin(setupWarn, "old settings "+strings.Join(problems, "; "))
 	}
 	cfg := ui.Config{
 		Theme:          theme,
@@ -201,6 +205,17 @@ func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string, 
 	}
 	cfg.Actions, cfg.ActionsWarn = loadActionNames(home)
 	return cfg
+}
+
+// startupJoin joins two notices, either possibly empty.
+func startupJoin(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + " · " + b
 }
 
 // pathBlockIn reads a host's sasash.conf block for the p preview: its
@@ -399,7 +414,7 @@ func spawnConfig(cfgPath string, uc config.Config, getenv func(string) string) u
 // WSL_DISTRO_NAME set and cmd.exe on PATH) Windows Terminal opens a tab
 // running ssh in this distro; on Linux the x-terminal-emulator
 // alternative runs it; on macOS Terminal does. Anything else has no
-// default, so enter hands off until ~/.config/sasash/spawn-window says
+// default, so enter hands off until config.toml's spawn_window says
 // otherwise. {host} lands in the command unescaped — an alias is a
 // plain ssh_config word, never quoted (aliasProblem enforces that for
 // the ones sasash writes), the same trust actions.toml extends.
@@ -420,7 +435,7 @@ func defaultWindowTemplate(goos string, getenv func(string) string) string {
 		}
 		// The Debian alternative first, then gnome-terminal by name;
 		// probed on PATH once here, so the default is a terminal that
-		// exists (other desktops set ~/.config/sasash/spawn-window).
+		// exists (other desktops set spawn_window in config.toml).
 		switch {
 		case onPath(getenv("PATH"), "x-terminal-emulator"):
 			return "x-terminal-emulator -e ssh {host}"
@@ -447,8 +462,8 @@ func onPath(path, name string) bool {
 
 // spawnStatePath is where the settings picker persisted the spawn
 // target before config.toml (SASASH.4.36): setup moves it.
-func spawnStatePath(home string) string {
-	return filepath.Join(filepath.Dir(themeStatePath(home)), "spawn-target")
+func spawnStatePath(home string, getenv func(string) string) string {
+	return filepath.Join(filepath.Dir(themeStatePath(home, getenv)), "spawn-target")
 }
 
 // spawnWindowPath is where the OS-window template lived before
@@ -462,28 +477,11 @@ func spawnWindowPath(home string, getenv func(string) string) string {
 
 // themeStatePath is where the `t` key persisted the choice before
 // config.toml (SASASH.4.36): setup moves it, the TUI never reads it.
-func themeStatePath(home string) string {
-	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
+func themeStatePath(home string, getenv func(string) string) string {
+	if x := getenv("XDG_STATE_HOME"); x != "" {
 		return filepath.Join(x, "sasash", "theme")
 	}
 	return filepath.Join(home, ".local", "state", "sasash", "theme")
-}
-
-// readState returns a one-line legacy settings file's content, or ""
-// when there is none (the theme name, the spawn target).
-func readState(path string) string {
-	v, _ := readStateFound(path)
-	return v
-}
-
-// readStateFound also says whether the file exists, for the one reader
-// that treats an empty file differently from a missing one.
-func readStateFound(path string) (string, bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimSpace(string(b)), true
 }
 
 func themeNames() string {

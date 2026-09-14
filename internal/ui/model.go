@@ -897,7 +897,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = cleanLine(msg.err.Error())
 			lines := []string{}
 			if len(msg.argv) > 0 {
-				// The argv comes from the spawn-window file: cleaned.
+				// The argv comes from the user's spawn_window line: cleaned.
 				lines = append(lines, "ran: "+cleanLine(strings.Join(msg.argv, " ")))
 			}
 			lines = append(lines, reasonLines(msg.err)...)

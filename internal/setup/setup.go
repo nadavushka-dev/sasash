@@ -32,15 +32,28 @@ type Env struct {
 }
 
 // Legacy is one pre-config settings file to move into config.toml:
-// while Path exists, Check lists it and Ensure writes Value as Key —
-// unless config.toml already has a live line for Key, which the user
-// chose and keeps — then removes the file. A nil Value (the file names
-// nothing sasash can keep, a stale theme say) is removed without a
-// write. config.toml is then the one place settings live.
+// while Path exists, Check lists what Ensure will do with it (a Move)
+// and Ensure does exactly that — writes Value as Key, unless config.toml
+// already sets Key in effect (the user's choice, kept), then removes the
+// file. A nil Value (the file names nothing sasash can keep, a stale
+// theme say) is removed without a write. config.toml is then the one
+// place settings live.
 type Legacy struct {
 	Path  string
 	Key   string
 	Value any
+}
+
+// Move is what Ensure does with one legacy file that still exists:
+// write Value as Key and remove the file — or, Value nil, remove it
+// alone, Reason saying why nothing is written. Check and Ensure derive
+// the moves from the same function, so what is announced is what
+// happens.
+type Move struct {
+	Path   string
+	Key    string
+	Value  any
+	Reason string
 }
 
 // IncludeLine is what Ensure inserts at the top of ~/.ssh/config. ssh_config
@@ -62,9 +75,9 @@ type Status struct {
 	CMDirPresent bool
 	// ConfigPresent is true when config.toml exists.
 	ConfigPresent bool
-	// Legacy holds the paths of Env.Legacy files still present — each
-	// one a move Ensure has yet to make.
-	Legacy []string
+	// Legacy holds the moves Ensure has yet to make, one per Env.Legacy
+	// file still present.
+	Legacy []Move
 }
 
 // Done reports whether nothing is left for Ensure to do.
@@ -103,15 +116,43 @@ func Check(env Env) (Status, error) {
 		return Status{}, err
 	}
 
-	for _, l := range env.Legacy {
-		if _, err := os.Lstat(l.Path); err == nil {
-			s.Legacy = append(s.Legacy, l.Path)
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return Status{}, err
-		}
+	if s.Legacy, err = legacyMoves(env); err != nil {
+		return Status{}, err
 	}
 
 	return s, nil
+}
+
+// legacyMoves resolves what Ensure will do with each Env.Legacy file
+// still present. config.toml is read (config.Live) only when a file
+// carries a value, so a file the parser rejects blocks setup only when
+// there is something to move into it.
+func legacyMoves(env Env) ([]Move, error) {
+	var moves []Move
+	var live map[string]bool
+	for _, l := range env.Legacy {
+		if _, err := os.Lstat(l.Path); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		m := Move{Path: l.Path, Key: l.Key, Value: l.Value}
+		if l.Value == nil {
+			m.Reason = "it names nothing sasash can keep"
+		} else {
+			if live == nil {
+				var err error
+				if live, err = config.Live(env.Config); err != nil {
+					return nil, err
+				}
+			}
+			if live[l.Key] {
+				m.Value, m.Reason = nil, l.Key+" is already set in config.toml"
+			}
+		}
+		moves = append(moves, m)
+	}
+	return moves, nil
 }
 
 // Ensure brings home to the bootstrapped state. It is idempotent: pieces
@@ -146,29 +187,22 @@ func ensureConfig(path string) error {
 	return config.WriteAtomic(path, config.Template())
 }
 
-// moveLegacy carries each pre-config settings file that still exists
-// into config.toml and removes it (see Legacy). The write goes through
-// config.Set — the same lossless line rewrite the TUI uses — and the
-// file is removed only once the write is durable.
+// moveLegacy performs the moves Check announced (see Move). The write
+// goes through config.SetIfUnset — the TUI's lossless line rewrite,
+// under its lock, so a value set meanwhile still wins — and the file is
+// removed only once the write is durable.
 func moveLegacy(env Env) error {
-	for _, l := range env.Legacy {
-		if _, err := os.Lstat(l.Path); errors.Is(err, fs.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return err
-		}
-		if l.Value != nil {
-			live, err := config.Live(env.Config)
-			if err != nil {
+	moves, err := legacyMoves(env)
+	if err != nil {
+		return err
+	}
+	for _, m := range moves {
+		if m.Value != nil {
+			if _, err := config.SetIfUnset(env.Config, m.Key, m.Value); err != nil {
 				return err
 			}
-			if !live[l.Key] {
-				if err := config.Set(env.Config, l.Key, l.Value); err != nil {
-					return err
-				}
-			}
 		}
-		if err := os.Remove(l.Path); err != nil {
+		if err := os.Remove(m.Path); err != nil {
 			return err
 		}
 	}
