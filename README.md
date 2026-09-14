@@ -57,8 +57,11 @@ The installer picks the asset for your OS and architecture, verifies its sha256 
 release's `checksums.txt`, installs to `~/.local/bin` (falling back to `/usr/local/bin` with
 sudo), prints a PATH hint if that directory is not on your PATH, and offers to run
 `sasash setup` — the one-time bootstrap that adds a single confirmed `Include` line to
-`~/.ssh/config` and creates `config.toml`. `SASASH_VERSION=v0.3.0` pins a release;
+`~/.ssh/config` and creates `config.toml`. `SASASH_VERSION=v0.3.1` pins a release;
 `sh install.sh --help` lists the other knobs.
+
+Already installed? `sasash update` moves the binary to the latest release in place — the
+same asset and sha256 check, after asking (`sasash update --check` only reports).
 
 From source instead (Go 1.26.4+):
 `go install github.com/nadavushka-dev/sasash/cmd/sasash@latest`.
