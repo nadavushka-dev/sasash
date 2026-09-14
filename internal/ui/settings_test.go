@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
 	"github.com/nadavushka-dev/sasash/internal/setup"
@@ -98,6 +99,14 @@ func homeWith(t *testing.T, include, conf, cm bool) string {
 		if err := os.WriteFile(filepath.Join(sshDir, "config.d", "sasash.conf"), []byte(setup.Header+"\n"), 0o600); err != nil {
 			t.Fatalf("write: %v", err)
 		}
+		// config.toml rides with sasash.conf here: both are "the config".
+		cfg := filepath.Join(home, ".config", "sasash", "config.toml")
+		if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(cfg, []byte(config.Template()), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
 	}
 	if cm {
 		if err := os.Mkdir(filepath.Join(sshDir, "cm"), 0o700); err != nil {
@@ -120,7 +129,7 @@ func TestModel_Update_SettingsCreateConfig(t *testing.T) {
 	}{
 		{
 			name:         "bare home writes all three",
-			wantMissing:  []string{setup.IncludeLine, "sasash.conf", "cm/"},
+			wantMissing:  []string{setup.IncludeLine, "sasash.conf", "cm/", "config.toml"},
 			wantEnsure:   true,
 			wantNotice:   "set up",
 			wantLoadCall: true,
@@ -128,7 +137,7 @@ func TestModel_Update_SettingsCreateConfig(t *testing.T) {
 		{
 			name:        "include and conf present writes the socket dir",
 			include:     true,
-			wantPresent: []string{setup.IncludeLine, "sasash.conf"},
+			wantPresent: []string{setup.IncludeLine, "sasash.conf", "config.toml"},
 			wantMissing: []string{"cm/"},
 			wantEnsure:  true, wantNotice: "set up", wantLoadCall: true,
 		},
@@ -136,7 +145,7 @@ func TestModel_Update_SettingsCreateConfig(t *testing.T) {
 			name:        "already set up writes nothing",
 			include:     true,
 			cm:          true,
-			wantPresent: []string{setup.IncludeLine, "cm/"},
+			wantPresent: []string{setup.IncludeLine, "cm/", "config.toml"},
 			wantNotice:  "already set up",
 		},
 	}
@@ -186,7 +195,7 @@ func TestModel_Update_SettingsCreateConfig(t *testing.T) {
 				next, after := m.Update(ensure()) // setupDoneMsg -> re-check + reload
 				m = next.(ui.Model)
 				m = feed(t, m, after)
-				st, err := setup.Check(home)
+				st, err := setup.Check(setup.Env{Home: home, Config: filepath.Join(home, ".config", "sasash", "config.toml")})
 				if err != nil || !st.Done() {
 					t.Errorf("setup.Check() after enter = %+v, %v; want done", st, err)
 				}
@@ -436,7 +445,7 @@ func TestModel_Update_SettingsCreateConfigCheckFails(t *testing.T) {
 	next, check := m.Update(keyMsg("enter"))
 	m = update(t, next.(ui.Model), check())
 	view := m.View()
-	if strings.Contains(view, "missing") || strings.Count(view, "◌") != 3 || !strings.Contains(view, "! ") {
+	if strings.Contains(view, "missing") || strings.Count(view, "◌") != 4 || !strings.Contains(view, "! ") {
 		t.Errorf("View() after a failed check should keep the pieces unknown and show the error:\n%s", view)
 	}
 	before := sshTreeBytes(t, home)

@@ -63,9 +63,13 @@ notarized yet; a curl|sh download never carries the macOS quarantine bit.
 ## Usage
 
 Run `sasash` (or `sasash tui`) to open the browser. First run, `sasash setup` writes exactly
-one file — `~/.ssh/config.d/sasash.conf` — and adds a single confirmed `Include` line to
-`~/.ssh/config`. sasash edits only that one file, atomically, and re-reads before every write,
-so your hand-edits always win.
+one ssh config file — `~/.ssh/config.d/sasash.conf` — and adds a single confirmed `Include`
+line to `~/.ssh/config`. sasash edits only that one file, atomically, and re-reads before
+every write, so your hand-edits always win.
+
+Its own settings — theme, editor, whether the file picker lists dotfiles — live in
+`~/.config/sasash/config.toml`, which `setup` also creates with every option commented out.
+See [docs/configuration.md](docs/configuration.md).
 
 ### Keys
 
@@ -90,7 +94,7 @@ Beyond the TUI, the same engine is scriptable:
 | `sasash status` | one line per host: alias, active path, dead paths |
 | `sasash up <host>` | bring a host's declared forward sets up (`ssh -N` per port) |
 | `sasash down <host>` | kill every tunnel process of a host |
-| `sasash setup` | one-time bootstrap (the `Include` line + `sasash.conf`) |
+| `sasash setup` | one-time bootstrap (the `Include` line, `sasash.conf`, `~/.ssh/cm/`, `config.toml`) |
 | `sasash version` | print the version |
 
 ## How it works

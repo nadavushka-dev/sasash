@@ -182,6 +182,12 @@ type Model struct {
 	themeIdx  int                     // index into Themes
 	saveTheme func(name string) error // nil -> theme choice not persisted
 
+	// C's local picker: config.toml's show_hidden and its write-back.
+	showHidden     bool
+	saveShowHidden func(bool) error
+
+	setupEnv setup.Env // what the settings panel's create entry bootstraps
+
 	// Ad-hoc connect (SPEC §5 `a`): a prompt takes over the preview line;
 	// while it is focused, action keys are inert exactly as while
 	// filtering. pending holds the parsed target between the handoff and
@@ -351,9 +357,21 @@ type Config struct {
 	// startup — under the alt screen stderr is invisible.
 	Actions     []string
 	ActionsWarn string
-	// Home is the directory setup.Check/Ensure inspect and bootstrap from
-	// the settings panel; "" disables that entry.
+	// ConfigWarn is a config.toml problem to show at startup the same
+	// way (SASASH.4.36): a rejected file or the keys it skipped.
+	ConfigWarn string
+	// Home is the user's home: where C's local picker opens and how
+	// paths under it are spelled.
 	Home string
+	// Setup is what the settings panel's "create config file" entry
+	// inspects and writes (setup.Check/Ensure); a zero Home disables
+	// the entry.
+	Setup setup.Env
+	// ShowHidden is config.toml's show_hidden: whether C's local file
+	// picker lists dotfiles. SaveShowHidden persists the H toggle there
+	// (SASASH.4.36); nil leaves the toggle session-only.
+	ShowHidden     bool
+	SaveShowHidden func(bool) error
 	// SaveForwardSet declares a named forward set for a host (the settings
 	// "add new tunnel" entry) — desire only, nothing is started; nil
 	// disables the entry. The cmd layer wires fwdset.Add on sasash.conf.
@@ -496,6 +514,9 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 		tinflight:      make(map[string]bool),
 		actions:        cfg.Actions,
 		home:           cfg.Home,
+		setupEnv:       cfg.Setup,
+		showHidden:     cfg.ShowHidden,
+		saveShowHidden: cfg.SaveShowHidden,
 
 		saveForwardSet:   cfg.SaveForwardSet,
 		removeForwardSet: cfg.RemoveForwardSet,
@@ -522,7 +543,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 			target:     cfg.Spawn.Target,
 			saveTarget: cfg.Spawn.SaveTarget,
 		},
-		notice: cfg.ActionsWarn,
+		notice: startupNotice(cfg.ConfigWarn, cfg.ActionsWarn),
 		fwdIdx: -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
@@ -837,7 +858,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notice = "set up — sasash.conf is wired into ssh"
 		m.editorWarn = "" // the reason for that warning is gone
 		// The include may now bring hosts in; and re-check for the panel.
-		cmds := []tea.Cmd{setupCheckCmd(m.home)}
+		cmds := []tea.Cmd{setupCheckCmd(m.setupEnv)}
 		if m.loadHosts != nil {
 			cmds = append(cmds, m.reloadCmd(false))
 		}
@@ -920,6 +941,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case themeSavedMsg:
 		if msg.err != nil {
 			m.notice = "theme not saved: " + msg.err.Error()
+		}
+		return m, nil
+
+	case showHiddenSavedMsg:
+		if msg.err != nil {
+			m.notice = "show_hidden not saved: " + msg.err.Error()
 		}
 		return m, nil
 
@@ -1047,12 +1074,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.notice = "saved " + msg.alias
-		if m.home != "" {
+		if m.setupEnv.Home != "" {
 			// The saved block's ControlPath points under ~/.ssh/cm: setup's
 			// directory, said here when it is not there yet (4.18). One
 			// read of ~/.ssh/config per save; an unreadable config is the
 			// setup pane's story, so its error is not repeated here.
-			if st, err := setup.Check(m.home); err == nil && !st.CMDirPresent {
+			if st, err := setup.Check(m.setupEnv); err == nil && !st.CMDirPresent {
 				m.notice += " — ~/.ssh/cm is missing: o → create config file, or `sasash setup`"
 			}
 		}
@@ -1939,4 +1966,16 @@ func (m Model) previewView() string {
 		}
 	}
 	return v
+}
+
+// startupNotice joins the load problems the cmd layer found (config.toml,
+// actions.toml) into the one notice the first frame shows; "" for none.
+func startupNotice(warns ...string) string {
+	var out []string
+	for _, w := range warns {
+		if w != "" {
+			out = append(out, w)
+		}
+	}
+	return strings.Join(out, " · ")
 }

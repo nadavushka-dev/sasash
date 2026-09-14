@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+
+	"github.com/nadavushka-dev/sasash/internal/toml"
 )
 
 // Load parses actions.toml under home. A missing file is (nil, nil): a fresh
@@ -57,7 +59,7 @@ func parseActions(data string) ([]Action, error) {
 				return nil, &ParseError{ln, "malformed table header"}
 			}
 			name := strings.TrimSpace(s[1 : len(s)-1])
-			if !bareKey(name) {
+			if !toml.BareKey(name) {
 				return nil, &ParseError{ln, fmt.Sprintf("unsupported table name %q (bare names only)", name)}
 			}
 			if seen[name] {
@@ -74,7 +76,7 @@ func parseActions(data string) ([]Action, error) {
 		}
 		key = strings.TrimSpace(key)
 		rest = strings.TrimSpace(rest)
-		if !bareKey(key) {
+		if !toml.BareKey(key) {
 			return nil, &ParseError{ln, fmt.Sprintf("unsupported key %q (bare keys only)", key)}
 		}
 		if cur < 0 {
@@ -86,11 +88,11 @@ func parseActions(data string) ([]Action, error) {
 			if a.Cmd != "" {
 				return nil, &ParseError{ln, fmt.Sprintf("duplicate key cmd in [%s]", a.Name)}
 			}
-			val, rem, err := parseString(rest)
+			val, rem, err := toml.ParseString(rest)
 			if err != nil {
 				return nil, &ParseError{ln, err.Error()}
 			}
-			if !trailingOK(rem) {
+			if !toml.TrailingOK(rem) {
 				return nil, &ParseError{ln, fmt.Sprintf("unexpected trailing content %q", rem)}
 			}
 			if strings.TrimSpace(val) == "" {
@@ -118,53 +120,6 @@ func parseActions(data string) ([]Action, error) {
 	return actions, nil
 }
 
-// parseString consumes one "basic" or 'literal' string at the start of s and
-// returns the value and the unconsumed remainder. Basic strings recognize the
-// escapes \\ \" \n \t; any other escape is unsupported.
-func parseString(s string) (val, rest string, err error) {
-	if s == "" {
-		return "", "", fmt.Errorf("expected a string value")
-	}
-	switch s[0] {
-	case '\'':
-		end := strings.IndexByte(s[1:], '\'')
-		if end < 0 {
-			return "", "", fmt.Errorf("unterminated ' string")
-		}
-		return s[1 : 1+end], s[end+2:], nil
-	case '"':
-		var b strings.Builder
-		for i := 1; i < len(s); i++ {
-			switch s[i] {
-			case '\\':
-				if i+1 >= len(s) {
-					return "", "", fmt.Errorf(`unterminated " string`)
-				}
-				switch s[i+1] {
-				case '\\':
-					b.WriteByte('\\')
-				case '"':
-					b.WriteByte('"')
-				case 'n':
-					b.WriteByte('\n')
-				case 't':
-					b.WriteByte('\t')
-				default:
-					return "", "", fmt.Errorf(`unsupported escape \%c`, s[i+1])
-				}
-				i++
-			case '"':
-				return b.String(), s[i+1:], nil
-			default:
-				b.WriteByte(s[i])
-			}
-		}
-		return "", "", fmt.Errorf(`unterminated " string`)
-	default:
-		return "", "", fmt.Errorf("unsupported value %q (strings only)", s)
-	}
-}
-
 // parseInlineTable parses { KEY = "value", … } of string pairs, on one line.
 func parseInlineTable(s string) (map[string]string, error) {
 	if !strings.HasPrefix(s, "{") {
@@ -177,7 +132,7 @@ func parseInlineTable(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("unterminated inline table")
 		}
 		if s[0] == '}' {
-			if !trailingOK(s[1:]) {
+			if !toml.TrailingOK(s[1:]) {
 				return nil, fmt.Errorf("unexpected trailing content %q", s[1:])
 			}
 			return env, nil
@@ -187,13 +142,13 @@ func parseInlineTable(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("expected KEY = \"value\" in inline table")
 		}
 		key = strings.TrimSpace(key)
-		if !bareKey(key) {
+		if !toml.BareKey(key) {
 			return nil, fmt.Errorf("unsupported env key %q (bare keys only)", key)
 		}
 		if _, dup := env[key]; dup {
 			return nil, fmt.Errorf("duplicate env key %q", key)
 		}
-		val, rem, err := parseString(strings.TrimSpace(rest))
+		val, rem, err := toml.ParseString(strings.TrimSpace(rest))
 		if err != nil {
 			return nil, err
 		}
@@ -206,27 +161,6 @@ func parseInlineTable(s string) (map[string]string, error) {
 		}
 		s = rem
 	}
-}
-
-func bareKey(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// trailingOK allows only whitespace or a comment after a parsed value.
-func trailingOK(s string) bool {
-	s = strings.TrimSpace(s)
-	return s == "" || s[0] == '#'
 }
 
 // lineOfTable finds the header line for the missing-cmd error, recognizing

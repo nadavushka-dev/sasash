@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/charmbracelet/bubbles/cursor"
@@ -13,6 +14,7 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/transfer"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
@@ -366,8 +368,19 @@ func WithSaveForwardSet(m Model, f func(alias, name string, specs []string) erro
 // WithHome sets the directory the settings panel bootstraps.
 func WithHome(m Model, home string) Model {
 	m.home = home
+	m.setupEnv = setup.Env{Home: home, Config: filepath.Join(home, ".config", "sasash", "config.toml")}
 	return m
 }
+
+// WithShowHidden seeds config.toml's show_hidden and the H toggle's
+// write-back hook.
+func WithShowHidden(m Model, on bool, save func(bool) error) Model {
+	m.showHidden, m.saveShowHidden = on, save
+	return m
+}
+
+// LocalPickerShowsHidden reports whether C's local picker lists dotfiles.
+func LocalPickerShowsHidden(m Model) bool { return m.xfer.local.ShowHidden }
 
 // Prompting and PromptingSave expose which prompt, if any, owns the keys.
 func Prompting(m Model) bool     { return m.mode != promptNone }

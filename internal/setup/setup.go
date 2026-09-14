@@ -1,10 +1,13 @@
 // Package setup performs sasash's one-time bootstrap (SPEC.md §2): an
 // Include line at the top of ~/.ssh/config, the managed
-// ~/.ssh/config.d/sasash.conf, and the ~/.ssh/cm control-socket directory.
+// ~/.ssh/config.d/sasash.conf, the ~/.ssh/cm control-socket directory,
+// and sasash's own config.toml with every option commented out
+// (SASASH.4.36).
 //
-// Every function takes the home directory explicitly so tests run against
-// t.TempDir(). Confirmation lives in the caller; Check and Ensure are pure
-// do/check functions and both are idempotent.
+// Every function takes an Env — the home directory and the config.toml
+// path — explicitly so tests run against t.TempDir() and setup never
+// reads the environment itself. Confirmation lives in the caller; Check
+// and Ensure are pure do/check functions and both are idempotent.
 package setup
 
 import (
@@ -14,8 +17,20 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/sshconf"
 )
+
+// Env names what setup inspects and writes. Config is config.toml's
+// path, resolved by the cmd layer ($XDG_CONFIG_HOME moves it). Theme
+// seeds a fresh config.toml with a live `theme = …` line — the choice
+// `t` persisted to the pre-config state file, carried over once; ""
+// leaves the template's commented default.
+type Env struct {
+	Home   string
+	Config string
+	Theme  string
+}
 
 // IncludeLine is what Ensure inserts at the top of ~/.ssh/config. ssh_config
 // is first-value-wins, so the managed file must precede any "Host *" defaults.
@@ -34,14 +49,19 @@ type Status struct {
 	ConfPresent bool
 	// CMDirPresent is true when ~/.ssh/cm exists and is a directory.
 	CMDirPresent bool
+	// ConfigPresent is true when config.toml exists.
+	ConfigPresent bool
 }
 
 // Done reports whether nothing is left for Ensure to do.
-func (s Status) Done() bool { return s.IncludePresent && s.ConfPresent && s.CMDirPresent }
+func (s Status) Done() bool {
+	return s.IncludePresent && s.ConfPresent && s.CMDirPresent && s.ConfigPresent
+}
 
-// Check inspects home without changing anything.
-func Check(home string) (Status, error) {
+// Check inspects env without changing anything.
+func Check(env Env) (Status, error) {
 	var s Status
+	home := env.Home
 
 	data, err := os.ReadFile(configPath(home))
 	switch {
@@ -63,6 +83,12 @@ func Check(home string) (Status, error) {
 		return Status{}, err
 	}
 
+	if _, err := os.Lstat(env.Config); err == nil {
+		s.ConfigPresent = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return Status{}, err
+	}
+
 	return s, nil
 }
 
@@ -70,14 +96,36 @@ func Check(home string) (Status, error) {
 // already in place are left byte-for-byte untouched, and an effective
 // equivalent Include in ~/.ssh/config means the config is not rewritten.
 // The Include target is created before the line that points at it.
-func Ensure(home string) error {
-	if err := ensureConf(home); err != nil {
+func Ensure(env Env) error {
+	if err := ensureConf(env.Home); err != nil {
 		return err
 	}
-	if err := ensureInclude(home); err != nil {
+	if err := ensureInclude(env.Home); err != nil {
 		return err
 	}
-	return os.MkdirAll(cmDir(home), 0o700)
+	if err := os.MkdirAll(cmDir(env.Home), 0o700); err != nil {
+		return err
+	}
+	return ensureConfig(env)
+}
+
+// ensureConfig creates config.toml from the template — every option
+// commented out beside its default, the seeded theme live when there is
+// one. An existing file is never overwritten, whatever it contains.
+func ensureConfig(env Env) error {
+	if _, err := os.Lstat(env.Config); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	data := config.Template()
+	if env.Theme != "" {
+		var err error
+		if data, err = config.Apply(data, "theme", env.Theme); err != nil {
+			return err
+		}
+	}
+	return config.WriteAtomic(env.Config, data)
 }
 
 // ensureInclude puts IncludeLine at the top of ~/.ssh/config. The rewrite

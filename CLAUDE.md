@@ -14,8 +14,11 @@ connection info lives.
 - Shell out to `/usr/bin/ssh`. **Never use `golang.org/x/crypto/ssh`** (it ignores
   ssh_config, ssh-agent, ProxyJump, ControlMaster — everything this design is built on).
 - No background daemon, no auto-reconnect, no ProxyCommand dialer, no secret storage.
-- sasash writes exactly one config file (`~/.ssh/config.d/sasash.conf`) plus a single
-  one-time confirmed `Include` insertion into `~/.ssh/config`.
+- sasash writes exactly one ssh config file (`~/.ssh/config.d/sasash.conf`) plus a single
+  one-time confirmed `Include` insertion into `~/.ssh/config`. Its own settings live in
+  `~/.config/sasash/config.toml` (`internal/config`): TOML, every option registered in
+  `config.Keys` and documented in `docs/configuration.md` (a test keeps them in step),
+  rewritten one line at a time, re-read first, atomically.
 
 ## Stack and layout
 
@@ -29,7 +32,9 @@ other dependency requires explicit approval.
 | `internal/probe` | the only network dialing; paths are opaque data |
 | `internal/sshconf` | lossless parser + atomic writer; do NOT edit `sshconf.go` — extend the package with new files |
 | `internal/hostmodel` | domain model over sshconf meta; no I/O beyond config reads, no dialing |
-| `internal/setup` | one-time bootstrap; pure check/ensure functions over a home-dir parameter |
+| `internal/setup` | one-time bootstrap; pure check/ensure functions over a `setup.Env` (home + config.toml path) |
+| `internal/config` | config.toml: `Keys` registry, `Load`, lossless `Set`; new options go in `Keys` AND `docs/configuration.md` |
+| `internal/toml` | the TOML scalar subset `action` and `config` share; no full TOML, no new dependency |
 | `internal/ui` | Bubbletea models; smoke-tested only |
 
 ## The seams

@@ -65,20 +65,20 @@ type setupStatusMsg struct {
 }
 type setupDoneMsg struct{ err error }
 
-// setupCheckCmd inspects home off the UI thread; nil without a home.
-func setupCheckCmd(home string) tea.Cmd {
-	if home == "" {
+// setupCheckCmd inspects env off the UI thread; nil without a home.
+func setupCheckCmd(env setup.Env) tea.Cmd {
+	if env.Home == "" {
 		return nil
 	}
 	return func() tea.Msg {
-		st, err := setup.Check(home)
+		st, err := setup.Check(env)
 		return setupStatusMsg{status: st, err: err}
 	}
 }
 
 // setupEnsureCmd runs the one-time bootstrap off the UI thread.
-func setupEnsureCmd(home string) tea.Cmd {
-	return func() tea.Msg { return setupDoneMsg{err: setup.Ensure(home)} }
+func setupEnsureCmd(env setup.Env) tea.Cmd {
+	return func() tea.Msg { return setupDoneMsg{err: setup.Ensure(env)} }
 }
 
 // openSettings is `o`. The panel supplies its own help, so an expanded
@@ -213,12 +213,12 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 	case settingsMenu:
 		switch s.cursor {
 		case entryCreate:
-			if m.home == "" {
+			if m.setupEnv.Home == "" {
 				m.notice = "no home directory known — cannot set up"
 				return m, nil
 			}
 			s.pane, s.status, s.checkErr = settingsSetup, nil, nil
-			return m, setupCheckCmd(m.home)
+			return m, setupCheckCmd(m.setupEnv)
 		case entryEdit:
 			if len(m.editor) == 0 || m.confPath == "" {
 				m.notice = "no editor configured"
@@ -263,7 +263,7 @@ func (m Model) settingsEnter() (tea.Model, tea.Cmd) {
 			m.notice = "already set up — nothing to write"
 			return m, nil
 		}
-		return m, setupEnsureCmd(m.home)
+		return m, setupEnsureCmd(m.setupEnv)
 	case settingsTheme:
 		return m.setTheme(s.cursor)
 	case settingsSpawn:
@@ -398,6 +398,7 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 			{setup.IncludeLine + "  → top of " + m.tildePath("config"), func(st setup.Status) bool { return st.IncludePresent }},
 			{m.tildePath("config.d", "sasash.conf") + "  (one managed-header comment line)", func(st setup.Status) bool { return st.ConfPresent }},
 			{m.tildePath("cm") + "/  (control sockets)", func(st setup.Status) bool { return st.CMDirPresent }},
+			{m.underHome(m.setupEnv.Config) + "  (every option commented out)", func(st setup.Status) bool { return st.ConfigPresent }},
 		}
 		for _, p := range pieces {
 			glyph, word := m.styles.StatusWait.Render("◌"), "…"

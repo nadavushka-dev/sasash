@@ -156,15 +156,15 @@ func TestModel_View_SettingsPickerKeepsTheHighlightInView(t *testing.T) {
 func TestModel_View_SettingsSetupRowsReachableOnAShortFrame(t *testing.T) {
 	t.Parallel()
 	// At 80x10 the box holds one piece at a time: the hint says so, j
-	// walks the other two into view, the footer stays on the bottom line
+	// walks the other three into view, the footer stays on the bottom line
 	// throughout, and the inspection error is reachable the same way.
 	short := ui.WithHome(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 10}), homeWith(t, false, false, false))
 	next, check := press(t, short, "o").Update(keyMsg("enter"))
 	short = update(t, next.(ui.Model), check())
-	pieces := []string{"Include ~/.ssh/config.d/sasash.conf", "~/.ssh/config.d/sasash.conf  (one", "~/.ssh/cm/"}
+	pieces := []string{"Include ~/.ssh/config.d/sasash.conf", "~/.ssh/config.d/sasash.conf  (one", "~/.ssh/cm/", "config.toml"}
 	for i, want := range pieces {
 		view := short.View()
-		if !strings.Contains(view, want) || !strings.Contains(view, "enter writes") || !strings.Contains(view, "of 3 · j/k scroll") {
+		if !strings.Contains(view, want) || !strings.Contains(view, "enter writes") || !strings.Contains(view, "of 4 · j/k scroll") {
 			t.Errorf("View() at row %d should show %q with the footer and the hint:\n%s", i, want, view)
 		}
 		// The bottom line is longer than the frame here: clamped inside

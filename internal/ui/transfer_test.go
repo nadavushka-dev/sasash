@@ -583,3 +583,71 @@ func TestModel_Update_RemoteBrowserTabMoves(t *testing.T) {
 		t.Errorf("shift+tab: want the highlight back on ../:\n%s", m.View())
 	}
 }
+
+func TestModel_Update_LocalPickerHiddenToggle(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var saved []bool
+	m := ui.WithShowHidden(xferModel(t, home, homeListing()), false, func(v bool) error {
+		saved = append(saved, v)
+		return nil
+	})
+	m = drive(t, m, "C", "u")
+	if view := m.View(); strings.Contains(view, ".secret") {
+		t.Fatalf("show_hidden off, yet the picker lists the dotfile:\n%s", view)
+	}
+	if view := m.View(); !strings.Contains(view, "H dotfiles") {
+		t.Errorf("local picker footer does not advertise H:\n%s", view)
+	}
+	m = drive(t, m, "H")
+	if !ui.LocalPickerShowsHidden(m) {
+		t.Errorf("after H: LocalPickerShowsHidden() = false, want true")
+	}
+	if view := m.View(); !strings.Contains(view, ".secret") || !strings.Contains(view, "hidden files: on") {
+		t.Errorf("after H: the dotfile and the notice should show:\n%s", view)
+	}
+	if got := ui.TransferLocalDir(m); got != home {
+		t.Errorf("after H: TransferLocalDir() = %q, want the same directory %q", got, home)
+	}
+	m = drive(t, m, "H")
+	if view := m.View(); strings.Contains(view, ".secret") || !strings.Contains(view, "hidden files: off") {
+		t.Errorf("after the second H: the dotfile should be gone and the notice say off:\n%s", view)
+	}
+	if want := []bool{true, false}; !reflect.DeepEqual(saved, want) {
+		t.Errorf("SaveShowHidden calls = %v, want %v", saved, want)
+	}
+}
+
+func TestModel_Update_LocalPickerHiddenFromConfig(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// show_hidden = true in config.toml, no write-back hook: H still
+	// flips the session and nothing is saved.
+	m := ui.WithShowHidden(xferModel(t, home, homeListing()), true, nil)
+	m = drive(t, m, "C", "u")
+	if view := m.View(); !strings.Contains(view, ".secret") {
+		t.Fatalf("show_hidden on, yet the picker hides the dotfile:\n%s", view)
+	}
+	m = drive(t, m, "H")
+	if view := m.View(); strings.Contains(view, ".secret") {
+		t.Errorf("after H: the dotfile should be hidden:\n%s", view)
+	}
+}
+
+func TestModel_Update_LocalPickerHiddenSaveFailureNotice(t *testing.T) {
+	t.Parallel()
+	m := ui.WithShowHidden(xferModel(t, xferHome(t), homeListing()), false, func(bool) error { return errTest })
+	m = drive(t, m, "C", "u", "H")
+	if view := m.View(); !strings.Contains(view, "show_hidden not saved: ") {
+		t.Errorf("View() missing the not-saved notice:\n%s", view)
+	}
+	if !ui.LocalPickerShowsHidden(m) {
+		t.Errorf("a failed save must not undo the session toggle")
+	}
+}

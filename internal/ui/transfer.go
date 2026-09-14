@@ -144,6 +144,8 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m.transferBack()
 		case msg.String() == ".":
 			return m.transferChose(x.local.CurrentDirectory, true)
+		case msg.String() == "H":
+			return m.transferToggleHidden()
 		}
 		var cmd tea.Cmd
 		x.local, cmd = x.local.Update(msg)
@@ -218,30 +220,61 @@ func (m Model) transferBack() (Model, tea.Cmd) {
 	return m, nil
 }
 
+// showHiddenSavedMsg reports the outcome of persisting the H toggle.
+type showHiddenSavedMsg struct{ err error }
+
 // transferEnterLocal opens the filepicker in the user's home.
 func (m Model) transferEnterLocal() (Model, tea.Cmd) {
 	x := &m.xfer
 	x.step = xferLocal
-	fp := filepicker.New()
-	fp.CurrentDirectory = m.home
-	if fp.CurrentDirectory == "" {
-		fp.CurrentDirectory = "."
+	dir := m.home
+	if dir == "" {
+		dir = "."
 	}
+	x.local = m.newLocalPicker(dir)
+	return m, x.local.Init()
+}
+
+// transferToggleHidden is H in the local picker: dotfiles on or off for
+// the session, written back to config.toml's show_hidden (SASASH.4.36)
+// the way t writes the theme. The picker is rebuilt on its directory —
+// bubbles' picker has no re-read of its own, and a fresh one ignores
+// the old one's in-flight listing.
+func (m Model) transferToggleHidden() (Model, tea.Cmd) {
+	x := &m.xfer
+	m.showHidden = !m.showHidden
+	x.local = m.newLocalPicker(x.local.CurrentDirectory)
+	m.notice = "hidden files: off"
+	if m.showHidden {
+		m.notice = "hidden files: on"
+	}
+	cmds := []tea.Cmd{x.local.Init()}
+	if m.saveShowHidden != nil {
+		save, v := m.saveShowHidden, m.showHidden
+		cmds = append(cmds, func() tea.Msg { return showHiddenSavedMsg{err: save(v)} })
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// newLocalPicker builds the local browser on dir with the flow's keys
+// and the palette's styles; hidden entries follow show_hidden.
+func (m Model) newLocalPicker(dir string) filepicker.Model {
+	fp := filepicker.New()
+	fp.CurrentDirectory = dir
 	fp.DirAllowed, fp.FileAllowed = true, true
-	fp.ShowPermissions, fp.ShowSize, fp.ShowHidden = true, true, false
+	fp.ShowPermissions, fp.ShowSize, fp.ShowHidden = true, true, m.showHidden
 	fp.AutoHeight = false
 	fp.Cursor = "›"
 	fp.Styles = m.pickerStyles()
 	// esc leaves the picker's keymap: it is the flow's way back, not a
 	// directory up (h/backspace/left do that); ctrl+d/u page like the
 	// list's.
-	fp.KeyMap.Back = key.NewBinding(key.WithKeys("h", "backspace", "left"), key.WithHelp("h", "up a dir"))
+	fp.KeyMap.Back = key.NewBinding(key.WithKeys("h", "backspace", "left"), key.WithHelp("h", "up"))
 	fp.KeyMap.Open = key.NewBinding(key.WithKeys("l", "right", "enter"), key.WithHelp("l", "open"))
 	fp.KeyMap.PageDown = key.NewBinding(key.WithKeys("J", "pgdown", "ctrl+d"), key.WithHelp("ctrl+d", "½ page down"))
 	fp.KeyMap.PageUp = key.NewBinding(key.WithKeys("K", "pgup", "ctrl+u"), key.WithHelp("ctrl+u", "½ page up"))
 	fp.SetHeight(m.transferRoom())
-	x.local = fp
-	return m, fp.Init()
+	return fp
 }
 
 // transferEnterRemote opens the remote browser at the login home.
@@ -521,14 +554,20 @@ func (t transferKeys) ShortHelp() []key.Binding {
 			key.NewBinding(key.WithKeys("u", "d"), key.WithHelp("u/d", "upload / download")),
 		}
 	}
-	return []key.Binding{
+	keys := []key.Binding{
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		moveKeys,
-		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "open dir")),
-		key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "up a dir")),
+		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "open")),
+		key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "up")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		key.NewBinding(key.WithKeys("."), key.WithHelp(".", "this dir")),
 	}
+	if t.step == xferLocal {
+		// The remote listing (ls -A) always shows dotfiles; only the
+		// local picker has a switch.
+		keys = append(keys, key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "dotfiles")))
+	}
+	return keys
 }
 
 func (t transferKeys) FullHelp() [][]key.Binding { return [][]key.Binding{t.ShortHelp()} }
@@ -542,7 +581,7 @@ func transferHelpKeys(k KeyMap) []key.Binding {
 	for _, t := range []transferKeys{{step: xferDirection}, {step: xferLocal}} {
 		for _, b := range t.ShortHelp() {
 			switch b.Help().Key {
-			case "u/d", "l", "h", ".":
+			case "u/d", "l", "h", ".", "H":
 				out = append(out, b)
 			}
 		}

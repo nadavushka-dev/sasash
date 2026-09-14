@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/action"
+	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/controlmaster"
 	"github.com/nadavushka-dev/sasash/internal/fwdset"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
@@ -41,10 +42,14 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "sasash:", err)
 		return 1
 	}
+	// config.toml is read once here; a problem with it is a startup
+	// notice (stderr is invisible under the alt screen) and the defaults
+	// apply — a bad file never keeps the TUI from starting.
+	cfgPath := config.Path(home, os.Getenv)
+	uc, cfgWarns, cfgErr := config.Load(cfgPath)
 	// Flag validation precedes the terminal guard: a typoed -theme should
 	// report usage whether or not stdout is a tty.
-	statePath := themeStatePath(home)
-	theme, warn, fatal := resolveTheme(*themeFlag, os.Getenv("SASASH_THEME"), statePath)
+	theme, warn, fatal := resolveTheme(*themeFlag, os.Getenv("SASASH_THEME"), uc, themeStatePath(home))
 	if warn != "" {
 		fmt.Fprintln(stderr, "sasash:", warn)
 	}
@@ -66,7 +71,8 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
-	cfg := tuiConfig(home, statePath, theme, os.Getenv("EDITOR"))
+	cfg := tuiConfig(home, cfgPath, theme, uc, os.Getenv("EDITOR"))
+	cfg.ConfigWarn = configWarn(cfgErr, cfgWarns)
 	cfg.Spawn = spawnConfig(home, os.Getenv)
 	m := ui.New(hosts, probe.Prober{}, run.OS{}, cfg)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
@@ -77,58 +83,88 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// resolveTheme picks the theme name: flag > SASASH_THEME > persisted state
-// > default. A flag naming an unknown theme is fatal (typos should fail
-// loudly); a bad env or state value degrades to the next source with a
-// warning, so a stale file can never keep the TUI from starting.
-func resolveTheme(flagVal, envVal, statePath string) (name, warn string, fatal bool) {
+// resolveTheme picks the theme name: flag > SASASH_THEME > config.toml >
+// the pre-config state file (read only while config.toml does not
+// exist, SASASH.4.36) > default. A flag naming an unknown theme is fatal
+// (typos should fail loudly); a bad env, config or state value degrades
+// to the next source with a warning, so a stale file can never keep the
+// TUI from starting.
+func resolveTheme(flagVal, envVal string, uc config.Config, statePath string) (name, warn string, fatal bool) {
 	if flagVal != "" {
 		if _, ok := ui.ThemeIndex(flagVal); !ok {
 			return "", fmt.Sprintf("unknown theme %q (themes: %s)", flagVal, themeNames()), true
 		}
 		return flagVal, "", false
 	}
+	var warns []string
 	if envVal != "" {
 		if _, ok := ui.ThemeIndex(envVal); ok {
 			return envVal, "", false
 		}
-		warn = fmt.Sprintf("SASASH_THEME=%q is not a theme (themes: %s); using the default", envVal, themeNames())
+		warns = append(warns, fmt.Sprintf("SASASH_THEME=%q is not a theme (themes: %s)", envVal, themeNames()))
 	}
-	if v := readState(statePath); v != "" {
-		if _, ok := ui.ThemeIndex(v); ok {
-			return v, warn, false
+	if uc.Theme != "" {
+		if _, ok := ui.ThemeIndex(uc.Theme); ok {
+			return uc.Theme, strings.Join(warns, "; "), false
 		}
+		warns = append(warns, fmt.Sprintf("config.toml: theme %q is not a theme (themes: %s)", uc.Theme, themeNames()))
+	}
+	if !uc.Present {
+		if v := readState(statePath); v != "" {
+			if _, ok := ui.ThemeIndex(v); ok {
+				return v, strings.Join(warns, "; "), false
+			}
+		}
+	}
+	if len(warns) > 0 {
+		warn = strings.Join(warns, "; ") + "; using the default"
 	}
 	return "", warn, false
 }
 
+// configWarn is the startup notice for a config.toml problem: a file
+// the parser rejects (its line named, defaults in force) or the keys it
+// skipped. "" when there is nothing to say.
+func configWarn(err error, warns []string) string {
+	if err != nil {
+		return err.Error() + " — using defaults"
+	}
+	return strings.Join(warns, "; ")
+}
+
 // tuiConfig wires the model's hooks to the user's home: every path and
 // every `e` setting is decided here, in one testable place. sasash.conf
-// is the ONE file sasash writes (SPEC §2) — never ~/.ssh/config.
-func tuiConfig(home, statePath, theme, editorEnv string) ui.Config {
+// is the ONE ssh config file sasash writes (SPEC §2) — never
+// ~/.ssh/config; its own settings go to config.toml at cfgPath, one
+// line at a time (SASASH.4.36).
+func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string) ui.Config {
 	root := sshConfigPath(home)
 	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
 	// One state dir for the engine, the stats store and the popup that
 	// names a cache file in it: they must never drift apart.
 	sd := stateDir(home)
 	store := stats.Store{Dir: sd}
-	editor, editorHint := resolveEditor(editorEnv)
+	editor, editorHint := resolveEditor(uc.Editor, editorEnv)
+	env := setup.Env{Home: home, Config: cfgPath, Theme: legacyTheme(home)}
 	// An edit ssh cannot see (the Include is not in ~/.ssh/config) must
 	// come back with an explanation, not a silently unchanged list. A
 	// missing sasash.conf alone is fine: ssh ignores an Include of a
 	// missing file, and the editor creates it.
 	editorWarn := ""
-	if st, err := setup.Check(home); err == nil && !st.IncludePresent {
+	if st, err := setup.Check(env); err == nil && !st.IncludePresent {
 		editorWarn = "sasash.conf is not wired into ssh yet — o → create config file, or `sasash setup`"
 	}
 	cfg := ui.Config{
-		Theme:      theme,
-		SaveTheme:  saveThemeTo(statePath),
-		SaveHost:   saveHostTo(confPath),
-		Editor:     editor,
-		EditorHint: editorHint,
-		EditorWarn: editorWarn,
-		ConfPath:   confPath,
+		Theme:          theme,
+		SaveTheme:      func(name string) error { return config.Set(cfgPath, "theme", name) },
+		ShowHidden:     uc.ShowHidden,
+		SaveShowHidden: func(v bool) error { return config.Set(cfgPath, "show_hidden", v) },
+		Setup:          env,
+		SaveHost:       saveHostTo(confPath),
+		Editor:         editor,
+		EditorHint:     editorHint,
+		EditorWarn:     editorWarn,
+		ConfPath:       confPath,
 		LoadHosts: func() ([]hostmodel.Host, []error, error) {
 			return hostmodel.Load(root, home)
 		},
@@ -198,14 +234,16 @@ func loadActionNames(home string) (names []string, warn string) {
 	return names, ""
 }
 
-// resolveEditor turns $EDITOR into the argv prefix `e` launches.
-// Fields-splitting keeps EDITOR="code -w" working; unset falls back to vi
-// with a hint the TUI shows once the editor returns.
-func resolveEditor(env string) (argv []string, hint string) {
-	if fields := strings.Fields(env); len(fields) > 0 {
-		return fields, ""
+// resolveEditor turns config.toml's editor, then $EDITOR, into the argv
+// prefix `e` launches. Fields-splitting keeps "code -w" working; neither
+// set falls back to vi with a hint the TUI shows once the editor returns.
+func resolveEditor(cfgEditor, env string) (argv []string, hint string) {
+	for _, v := range []string{cfgEditor, env} {
+		if fields := strings.Fields(v); len(fields) > 0 {
+			return fields, ""
+		}
 	}
-	return []string{"vi"}, "opened with vi — set $EDITOR to change"
+	return []string{"vi"}, "opened with vi — set editor in config.toml or $EDITOR to change"
 }
 
 // saveHostTo persists an ad-hoc connection as a Host block appended to
@@ -418,8 +456,9 @@ func spawnWindowPath(home string, getenv func(string) string) string {
 	return filepath.Join(home, ".config", "sasash", "spawn-window")
 }
 
-// themeStatePath is where the `t` key persists the choice — state, not
-// config (SPEC §4 puts sasash's cache-tier files under ~/.local/state).
+// themeStatePath is where the `t` key persisted the choice before
+// config.toml (SASASH.4.36): read only while config.toml does not exist,
+// and carried into it by setup. The spawn target still lives beside it.
 func themeStatePath(home string) string {
 	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
 		return filepath.Join(x, "sasash", "theme")
@@ -443,9 +482,6 @@ func readStateFound(path string) (string, bool) {
 	}
 	return strings.TrimSpace(string(b)), true
 }
-
-// saveThemeTo gives the model its write-through persistence hook.
-func saveThemeTo(path string) func(string) error { return saveStateTo(path) }
 
 // saveStateTo writes one line to a state file, creating its directory.
 func saveStateTo(path string) func(string) error {

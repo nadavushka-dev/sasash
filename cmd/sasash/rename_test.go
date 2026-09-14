@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"github.com/nadavushka-dev/sasash/internal/config"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -159,7 +160,7 @@ func TestRenameHost_UnreadableConf(t *testing.T) {
 func TestTuiConfig_RenameHostWired(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
-	if cfg := tuiConfig(home, filepath.Join(home, "theme"), "", ""); cfg.RenameHost == nil {
+	if cfg := tuiConfig(home, filepath.Join(home, "config.toml"), "", config.Config{}, ""); cfg.RenameHost == nil {
 		t.Error("tuiConfig().RenameHost = nil, want renameHost wired")
 	}
 }
