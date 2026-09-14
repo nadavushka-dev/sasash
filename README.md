@@ -26,9 +26,15 @@ is all. See [`SPEC.md`](SPEC.md) for the design of record.
 - **Port-forwards that persist** — declare a forward set once; `space` brings a forward up or
   down (one detached `ssh -N -L` process per port), `s` toggles the whole set. State is read
   from reality — a live process plus a local port dial — never a cache.
-- **File transfer** — `C` copies files or directories between your machine and a host with
-  `scp`, browsing **both ends** (a local file picker and a remote `ssh … ls` browser), reusing
-  the host's active path and open ControlMaster so there's no re-auth.
+- **File transfer** — `C` copies files and directories between your machine and a host with
+  `scp`, browsing **both ends** in the same browser (local over the filesystem, remote over
+  `ssh … ls`). `space` marks several — the marks survive moving between directories — and one
+  `scp` carries them all, reusing the host's active path and open ControlMaster so there's no
+  re-auth.
+- **Your settings, one file** — theme, editor, dotfiles in the browser, where `enter` spawns:
+  `~/.config/sasash/config.toml`, created by `setup` with every option commented out, written
+  back one line at a time by the keys that offer a choice. See
+  [docs/configuration.md](docs/configuration.md).
 - **Address as data** — `y` yanks the bare address to the clipboard (via the terminal's own
   OSC 52 escape, with `pbcopy`/`wl-copy`/`xclip`/`clip.exe` behind it); `c` yanks the exact
   command it would run.
@@ -51,8 +57,8 @@ The installer picks the asset for your OS and architecture, verifies its sha256 
 release's `checksums.txt`, installs to `~/.local/bin` (falling back to `/usr/local/bin` with
 sudo), prints a PATH hint if that directory is not on your PATH, and offers to run
 `sasash setup` — the one-time bootstrap that adds a single confirmed `Include` line to
-`~/.ssh/config`. `SASASH_VERSION=v0.2.0` pins a release; `sh install.sh --help` lists the
-other knobs.
+`~/.ssh/config` and creates `config.toml`. `SASASH_VERSION=v0.3.0` pins a release;
+`sh install.sh --help` lists the other knobs.
 
 From source instead (Go 1.26.4+):
 `go install github.com/nadavushka-dev/sasash/cmd/sasash@latest`.
@@ -67,9 +73,11 @@ one connections file — `~/.ssh/config.d/sasash.conf`, an `ssh_config` fragment
 line to `~/.ssh/config`. sasash edits only that one file, atomically, and re-reads before
 every write, so your hand-edits always win.
 
-Its own settings — theme, editor, whether the file picker lists dotfiles — live in
-`~/.config/sasash/config.toml`, which `setup` also creates with every option commented out.
-See [docs/configuration.md](docs/configuration.md).
+Its own settings — `theme`, `editor`, `show_hidden` (dotfiles in the copy browser),
+`spawn_target` and `spawn_window` — live in `~/.config/sasash/config.toml`, which `setup`
+also creates with every option commented out. Upgrading from a release before 0.3.0? `setup`
+moves the older theme, spawn-target and spawn-window files into it. Every key is documented
+in [docs/configuration.md](docs/configuration.md).
 
 ### Keys
 
@@ -78,6 +86,7 @@ See [docs/configuration.md](docs/configuration.md).
 | **Navigate** | `j`/`k` move · `g`/`G` first/last · `ctrl+d`/`ctrl+u` half-page · `/` filter · `l`/`h` switch panes |
 | **On a host** | `enter` ssh · `S` ssh here (handoff) · `H` herdr session beside · `p` pick path · `C` copy files (scp; `space` marks several) · `y` yank address · `c` yank command · `a` ad-hoc ssh · `R` rename · `e` edit connections |
 | **Tunnels** (`l`) | `space` toggle a forward · `s` toggle the set · `+` add a forward · `n` declare a new set · `E` edit · `x` stop one · `X` delete the set · `r` restart master |
+| **Copying** (`C`) | `u`/`d` direction · `space` mark · `enter` pick the row, or copy the marks · `.` this directory · `l`/`h` into / out of a directory · `H` dotfiles (local) · `esc` back a step |
 | **Elsewhere** | `.` show other `ssh_config` entries · `$` show the command line · `t` theme · `o` settings · `?` keys · `q` quit |
 
 The `?` panel lists the actions; vim motion is left implicit. Dark themes only — gruvbox by
@@ -104,7 +113,8 @@ ignores `ssh_config`, `ssh-agent`, `ProxyJump`, and `ControlMaster`, i.e. everyt
 design rides on. It constructs argv and execs. There is **no background daemon**, no
 auto-reconnect (a dead tunnel goes red; you press `r`), no `ProxyCommand` dialer, and **no
 secret storage** — auth is `ssh-agent`'s job. sasash writes exactly one connections file plus the
-one-time `Include` insertion, both atomically.
+one-time `Include` insertion, and its own `config.toml` one line at a time — all atomically,
+re-read before every write.
 
 Runs natively on macOS and Linux; on Windows, use it inside WSL — the Windows OpenSSH port
 has no ControlMaster multiplexing, which is the engine everything here rides on. The `y` yank
