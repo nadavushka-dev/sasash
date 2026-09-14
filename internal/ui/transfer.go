@@ -7,74 +7,109 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nadavushka-dev/sasash/internal/transfer"
 )
 
-// Copy files with scp (SASASH.4.33): C on the selected host opens a
-// three-step flow — the direction (upload local→host, download
+// Copy files with scp (SASASH.4.33, marks 4.37): C on the selected host
+// opens a three-step flow — the direction (upload local→host, download
 // host→local), then the SOURCE picked in one browser, then the DEST
-// directory picked in the other. Both ends are browsed: the local end is
-// the bubbles filepicker (a file or a directory is selectable), the
-// remote end a browser over `ssh <alias> ls -1Ap -- <path>` run through
-// the run seam — the trailing slash is the one fact it reads, never
-// `ls -l`. A directory source makes the copy -r. The scp itself runs in
-// the FOREGROUND exactly like the S handoff: the argv is shown whole in
-// a confirm popup, enter hands the terminal to scp (native progress,
-// any passphrase or host-key prompt), and the outcome is a notice on
-// return — a non-zero exit is data, shown with scp's stderr, never a
-// crash. scp and the listing name the alias only, so they ride the
-// block's active HostName, its ProxyJump, and a live ControlMaster
+// directory picked in the other. Both ends are browsed by the same
+// browser: rows with ../ on top, directories first with their trailing
+// slash, a mark column. The local end lists through os.ReadDir (hidden
+// entries follow config.toml's show_hidden, H flips it); the remote end
+// lists through `ssh <alias> ls -1Ap -- <path>` run through the run
+// seam — the trailing slash is the one fact it reads, never `ls -l`.
+// In the source browser space marks a row and the marks are a basket
+// that survives directory moves; enter with marks proceeds with them,
+// enter without picks the highlighted row. One scp carries every
+// source; -r is added when any source is a directory. The scp itself
+// runs in the FOREGROUND exactly like the S handoff: the argv is shown
+// whole in a confirm popup, enter hands the terminal to scp (native
+// progress, any passphrase or host-key prompt), and the outcome is a
+// notice on return — a non-zero exit is data, shown with scp's stderr,
+// never a crash. scp and the listing name the alias only, so they ride
+// the block's active HostName, its ProxyJump, and a live ControlMaster
 // (SPEC §2, §4): nothing is resolved twice.
 
 // xferStep is where the flow stands. The picker steps double as the
-// role: the source is picked first, so srcPicked says whether the
-// picker on screen chooses the source or the dest directory.
+// end: the source is picked first, so srcPicked says whether the
+// browser on screen chooses the source or the dest directory.
 type xferStep int
 
 const (
 	xferOff       xferStep = iota
 	xferDirection          // choose upload / download
-	xferLocal              // the filepicker holds the keys
+	xferLocal              // the local browser holds the keys
 	xferRemote             // the remote browser holds the keys
 )
 
-// xferState is the flow's state: the alias, the direction, the source
-// once picked, and the two browsers.
+// mark is one picked source: its full path at its end, and whether it
+// is a directory (then the copy is -r).
+type mark struct {
+	path  string
+	isDir bool
+}
+
+// xferState is the flow's state: the alias, the direction, the marks
+// while the source is being picked, the sources once picked, and the
+// browser on screen.
 type xferState struct {
 	step   xferStep
 	alias  string
 	dir    transfer.Direction
 	dirIdx int // the highlighted direction row while choosing
 
-	src       string
-	srcDir    bool
+	marks     []mark // the basket while picking the source, in mark order
+	srcs      []mark // the picked sources
 	srcPicked bool
 
-	local  filepicker.Model
-	remote remoteBrowser
+	br browser
 }
 
 func (x xferState) active() bool { return x.step != xferOff }
 
-// remoteBrowser is the host-side picker: the listing of one directory,
-// with a synthesized ../ row on top so the parent is always reachable.
-type remoteBrowser struct {
+// sourceStep reports whether the browser on screen picks the source.
+func (x xferState) sourceStep() bool { return !x.srcPicked && x.step >= xferLocal }
+
+// marked reports whether path is in the basket.
+func (x xferState) marked(path string) bool {
+	for _, mk := range x.marks {
+		if mk.path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// browser is one end's picker: the listing of one directory, with a
+// synthesized ../ row on top so the parent is always reachable.
+// loading is the remote path being listed, "" when idle (a local
+// listing is immediate).
+type browser struct {
 	path    string
 	entries []transfer.Entry
 	idx     int
-	loading string // the path being listed, "" when idle
+	loading string
 }
 
 // rows are the browser's lines: ../ first, then the listing.
-func (b remoteBrowser) rows() []transfer.Entry {
+func (b browser) rows() []transfer.Entry {
 	return append([]transfer.Entry{{Name: "..", IsDir: true}}, b.entries...)
+}
+
+// highlighted is the row under the cursor.
+func (b browser) highlighted() transfer.Entry {
+	rows := b.rows()
+	if b.idx < 0 || b.idx >= len(rows) {
+		return rows[0]
+	}
+	return rows[b.idx]
 }
 
 // remoteListMsg is one listing landing.
@@ -92,6 +127,9 @@ type scpExitMsg struct {
 	err    error
 	stderr string
 }
+
+// showHiddenSavedMsg reports the outcome of persisting the H toggle.
+type showHiddenSavedMsg struct{ err error }
 
 // scpExec is the ONE place the scp process is built, so a test can pin
 // the args that reach the *exec.Cmd. Stdout stays on the terminal
@@ -117,8 +155,7 @@ func (m Model) openTransfer() (Model, tea.Cmd) {
 // transferKey routes a key while the flow holds the keyboard.
 func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	x := &m.xfer
-	switch x.step {
-	case xferDirection:
+	if x.step == xferDirection {
 		switch {
 		case key.Matches(msg, m.keys.ClearFilter):
 			m.xfer = xferState{}
@@ -137,81 +174,114 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		x.dir = transfer.Direction(x.dirIdx)
 		return m.transferPickSource()
+	}
 
-	case xferLocal:
-		switch {
-		case key.Matches(msg, m.keys.ClearFilter):
-			return m.transferBack()
-		case msg.String() == ".":
-			return m.transferChose(x.local.CurrentDirectory, true)
-		case msg.String() == "H":
-			return m.transferToggleHidden()
+	b := &x.br
+	rows := b.rows()
+	switch {
+	case key.Matches(msg, m.keys.ClearFilter):
+		return m.transferBack()
+	case msg.String() == ".":
+		if x.sourceStep() && len(x.marks) > 0 {
+			m.notice = fmt.Sprintf("%d marked — enter copies them; space unmarks", len(x.marks))
+			return m, nil
 		}
-		var cmd tea.Cmd
-		x.local, cmd = x.local.Update(msg)
-		if ok, path := x.local.DidSelectFile(msg); ok {
-			info, err := os.Stat(path)
-			if err != nil {
-				m.notice = "cannot read " + path + ": " + cleanLine(err.Error())
-				return m, cmd
-			}
-			// enter on a directory selects AND descends in bubbles' picker:
-			// its directory read rides along, so a declined confirm shows
-			// the directory the path line names, not the parent's rows.
-			next, pick := m.transferChose(path, info.IsDir())
-			return next, tea.Batch(cmd, pick)
+		return m.transferChose([]mark{{path: b.path, isDir: true}})
+	case msg.String() == " ":
+		return m.transferToggleMark()
+	case msg.String() == "H" && x.step == xferLocal:
+		return m.transferToggleHidden()
+	case key.Matches(msg, m.keys.Down) || msg.String() == "tab":
+		b.idx = min(b.idx+1, len(rows)-1)
+	case key.Matches(msg, m.keys.Up) || msg.String() == "shift+tab":
+		b.idx = max(b.idx-1, 0)
+	case key.Matches(msg, m.keys.HalfDown):
+		b.idx = min(b.idx+m.transferRoom()/2, len(rows)-1)
+	case key.Matches(msg, m.keys.HalfUp):
+		b.idx = max(b.idx-m.transferRoom()/2, 0)
+	case key.Matches(msg, m.keys.Top):
+		b.idx = 0
+	case key.Matches(msg, m.keys.Bottom):
+		b.idx = len(rows) - 1
+	case key.Matches(msg, m.keys.FocusRight) || msg.String() == "right":
+		// l opens a directory, nothing on a file.
+		if row := b.highlighted(); row.IsDir {
+			return m.transferOpen(row.Name)
 		}
-		return m, cmd
-
-	case xferRemote:
-		b := &x.remote
-		rows := b.rows()
-		switch {
-		case key.Matches(msg, m.keys.ClearFilter):
-			return m.transferBack()
-		case msg.String() == ".":
-			return m.transferChose(b.path, true)
-		case key.Matches(msg, m.keys.Down) || msg.String() == "tab":
-			b.idx = min(b.idx+1, len(rows)-1)
-		case key.Matches(msg, m.keys.Up) || msg.String() == "shift+tab":
-			b.idx = max(b.idx-1, 0)
-		case key.Matches(msg, m.keys.HalfDown):
-			b.idx = min(b.idx+m.transferRoom()/2, len(rows)-1)
-		case key.Matches(msg, m.keys.HalfUp):
-			b.idx = max(b.idx-m.transferRoom()/2, 0)
-		case key.Matches(msg, m.keys.Top):
-			b.idx = 0
-		case key.Matches(msg, m.keys.Bottom):
-			b.idx = len(rows) - 1
-		case key.Matches(msg, m.keys.FocusLeft) || msg.Type == tea.KeyBackspace:
-			return m.transferList(transfer.Parent(b.path))
-		case key.Matches(msg, m.keys.FocusRight) && msg.String() != "tab":
-			if row := rows[b.idx]; row.IsDir {
-				return m.transferList(transfer.Descend(b.path, row.Name))
-			}
-		case msg.Type == tea.KeyEnter:
-			row := rows[b.idx]
-			if row.Name == ".." {
-				return m.transferList(transfer.Parent(b.path))
-			}
-			return m.transferChose(transfer.Descend(b.path, row.Name), row.IsDir)
+	case key.Matches(msg, m.keys.FocusLeft) || msg.String() == "backspace" || msg.String() == "left":
+		return m.transferOpen("..")
+	case msg.Type == tea.KeyEnter:
+		if x.sourceStep() && len(x.marks) > 0 {
+			return m.transferChose(x.marks)
 		}
-		return m, nil
+		row := b.highlighted()
+		if row.Name == ".." {
+			return m.transferOpen("..")
+		}
+		return m.transferChose([]mark{{path: m.transferChild(row.Name), isDir: row.IsDir}})
 	}
 	return m, nil
 }
 
-// transferPickSource opens the source picker for the chosen direction.
+// transferToggleMark is space in the source browser: the highlighted
+// row joins the basket or leaves it (../ is no source). In the dest
+// browser it is a notice: the dest is one directory.
+func (m Model) transferToggleMark() (Model, tea.Cmd) {
+	x := &m.xfer
+	if !x.sourceStep() {
+		m.notice = "the destination is one directory — enter on it, or . for this one"
+		return m, nil
+	}
+	row := x.br.highlighted()
+	if row.Name == ".." {
+		return m, nil
+	}
+	path := m.transferChild(row.Name)
+	for i, mk := range x.marks {
+		if mk.path == path {
+			x.marks = append(x.marks[:i:i], x.marks[i+1:]...)
+			return m, nil
+		}
+	}
+	x.marks = append(x.marks, mark{path: path, isDir: row.IsDir})
+	return m, nil
+}
+
+// transferChild is the full path of a row of the browser on screen, at
+// its end: joined and cleaned the local way, or the way the host's
+// shell reads it.
+func (m Model) transferChild(name string) string {
+	if m.xfer.step == xferRemote {
+		return transfer.Descend(m.xfer.br.path, name)
+	}
+	return filepath.Join(m.xfer.br.path, name)
+}
+
+// transferOpen moves the browser into name ("..": the parent): the local
+// browser lists at once, the remote one asks the host.
+func (m Model) transferOpen(name string) (Model, tea.Cmd) {
+	if m.xfer.step == xferRemote {
+		next := transfer.Descend(m.xfer.br.path, name)
+		if name == ".." {
+			next = transfer.Parent(m.xfer.br.path)
+		}
+		return m.transferList(next)
+	}
+	return m.transferListLocal(m.transferChild(name)), nil
+}
+
+// transferPickSource opens the source browser for the chosen direction.
 func (m Model) transferPickSource() (Model, tea.Cmd) {
-	m.xfer.srcPicked = false
+	m.xfer.srcPicked, m.xfer.srcs = false, nil
 	if m.xfer.dir == transfer.Download {
 		return m.transferEnterRemote()
 	}
-	return m.transferEnterLocal()
+	return m.transferEnterLocal(), nil
 }
 
-// transferBack is esc: one step back — the dest picker returns to the
-// source picker, the source picker to the direction, and that closes.
+// transferBack is esc: one step back — the dest browser returns to the
+// source browser (the marks kept, the pick undone), the source browser
+// to the direction (the basket dropped), and that closes.
 func (m Model) transferBack() (Model, tea.Cmd) {
 	if m.xfer.srcPicked {
 		return m.transferPickSource()
@@ -220,67 +290,77 @@ func (m Model) transferBack() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// showHiddenSavedMsg reports the outcome of persisting the H toggle.
-type showHiddenSavedMsg struct{ err error }
-
-// transferEnterLocal opens the filepicker in the user's home.
-func (m Model) transferEnterLocal() (Model, tea.Cmd) {
-	x := &m.xfer
-	x.step = xferLocal
+// transferEnterLocal opens the local browser in the user's home.
+func (m Model) transferEnterLocal() Model {
+	m.xfer.step = xferLocal
 	dir := m.home
 	if dir == "" {
 		dir = "."
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
 	}
-	x.local = m.newLocalPicker(dir)
-	return m, x.local.Init()
+	m.xfer.br = browser{path: dir}
+	return m.transferListLocal(dir)
 }
 
-// transferToggleHidden is H in the local picker: dotfiles on or off for
-// the session, written back to config.toml's show_hidden (SASASH.4.36)
-// the way t writes the theme. The picker is rebuilt on its directory —
-// bubbles' picker has no re-read of its own, and a fresh one ignores
-// the old one's in-flight listing.
+// transferListLocal reads dir into the browser; a directory that cannot
+// be read is a notice and the browser stays where it was.
+func (m Model) transferListLocal(dir string) Model {
+	entries, err := readLocal(dir, m.showHidden)
+	if err != nil {
+		m.notice = "cannot list " + dir + ": " + cleanLine(err.Error())
+		return m
+	}
+	m.xfer.br = browser{path: dir, entries: entries}
+	return m
+}
+
+// readLocal lists dir the way the remote listing reads: directories
+// first, each group in name order, dotfiles only when hidden is on. A
+// symlink counts as what it is, a link — scp follows it.
+func readLocal(dir string, hidden bool) ([]transfer.Entry, error) {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var dirs, files []transfer.Entry
+	for _, d := range des {
+		name := d.Name()
+		if !hidden && strings.HasPrefix(name, ".") {
+			continue
+		}
+		if d.IsDir() {
+			dirs = append(dirs, transfer.Entry{Name: name, IsDir: true})
+		} else {
+			files = append(files, transfer.Entry{Name: name})
+		}
+	}
+	return append(dirs, files...), nil
+}
+
+// transferToggleHidden is H in the local browser: dotfiles on or off
+// for the session, the directory re-read (the marks stay), and the
+// choice written back to config.toml's show_hidden (SASASH.4.36) the
+// way t writes the theme.
 func (m Model) transferToggleHidden() (Model, tea.Cmd) {
-	x := &m.xfer
 	m.showHidden = !m.showHidden
-	x.local = m.newLocalPicker(x.local.CurrentDirectory)
+	m = m.transferListLocal(m.xfer.br.path)
 	m.notice = "hidden files: off"
 	if m.showHidden {
 		m.notice = "hidden files: on"
 	}
-	cmds := []tea.Cmd{x.local.Init()}
-	if m.saveShowHidden != nil {
-		save, v := m.saveShowHidden, m.showHidden
-		cmds = append(cmds, func() tea.Msg { return showHiddenSavedMsg{err: save(v)} })
+	if m.saveShowHidden == nil {
+		return m, nil
 	}
-	return m, tea.Batch(cmds...)
-}
-
-// newLocalPicker builds the local browser on dir with the flow's keys
-// and the palette's styles; hidden entries follow show_hidden.
-func (m Model) newLocalPicker(dir string) filepicker.Model {
-	fp := filepicker.New()
-	fp.CurrentDirectory = dir
-	fp.DirAllowed, fp.FileAllowed = true, true
-	fp.ShowPermissions, fp.ShowSize, fp.ShowHidden = true, true, m.showHidden
-	fp.AutoHeight = false
-	fp.Cursor = "›"
-	fp.Styles = m.pickerStyles()
-	// esc leaves the picker's keymap: it is the flow's way back, not a
-	// directory up (h/backspace/left do that); ctrl+d/u page like the
-	// list's.
-	fp.KeyMap.Back = key.NewBinding(key.WithKeys("h", "backspace", "left"), key.WithHelp("h", "up"))
-	fp.KeyMap.Open = key.NewBinding(key.WithKeys("l", "right", "enter"), key.WithHelp("l", "open"))
-	fp.KeyMap.PageDown = key.NewBinding(key.WithKeys("J", "pgdown", "ctrl+d"), key.WithHelp("ctrl+d", "½ page down"))
-	fp.KeyMap.PageUp = key.NewBinding(key.WithKeys("K", "pgup", "ctrl+u"), key.WithHelp("ctrl+u", "½ page up"))
-	fp.SetHeight(m.transferRoom())
-	return fp
+	save, v := m.saveShowHidden, m.showHidden
+	return m, func() tea.Msg { return showHiddenSavedMsg{err: save(v)} }
 }
 
 // transferEnterRemote opens the remote browser at the login home.
 func (m Model) transferEnterRemote() (Model, tea.Cmd) {
 	m.xfer.step = xferRemote
-	m.xfer.remote = remoteBrowser{path: transfer.Home}
+	m.xfer.br = browser{path: transfer.Home}
 	return m.transferList(transfer.Home)
 }
 
@@ -291,7 +371,7 @@ const listTimeout = tunnelStatusTimeout
 // transferList runs one listing through the run seam; the browser keeps
 // showing where it is until the result lands.
 func (m Model) transferList(path string) (Model, tea.Cmd) {
-	m.xfer.remote.loading = path
+	m.xfer.br.loading = path
 	alias, runner := m.xfer.alias, m.runner
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), listTimeout)
@@ -304,7 +384,7 @@ func (m Model) transferList(path string) (Model, tea.Cmd) {
 // remoteListed is a listing landing: the browser moves there, or stays
 // and the line carries the host's refusal.
 func (m Model) remoteListed(msg remoteListMsg) (Model, tea.Cmd) {
-	b := &m.xfer.remote
+	b := &m.xfer.br
 	if m.xfer.step != xferRemote || msg.alias != m.xfer.alias || b.loading != msg.path {
 		return m, nil // a listing for a browser no longer open
 	}
@@ -331,26 +411,30 @@ func (m Model) remoteListed(msg remoteListMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// transferChose is a pick landing: the source first, then the dest
+// transferChose is a pick landing: the sources first, then the dest
 // directory — which opens the confirm with the exact scp line.
-func (m Model) transferChose(path string, isDir bool) (Model, tea.Cmd) {
+func (m Model) transferChose(picked []mark) (Model, tea.Cmd) {
 	x := &m.xfer
 	if !x.srcPicked {
-		x.src, x.srcDir, x.srcPicked = path, isDir, true
+		x.srcs, x.srcPicked = append([]mark(nil), picked...), true
 		if x.dir == transfer.Download {
-			return m.transferEnterLocal()
+			return m.transferEnterLocal(), nil
 		}
 		return m.transferEnterRemote()
 	}
-	if !isDir {
+	dest := picked[0]
+	if !dest.isDir {
 		m.notice = "the destination is a directory — enter on one, or . for this one"
 		return m, nil
 	}
-	spec := m.transferSpec(path)
+	spec := m.transferSpec(dest.path)
 	argv := strings.Join(transfer.CopyArgv(spec), " ")
 	lines := []string{argv, ""}
+	if len(spec.Sources) > 1 {
+		lines = append(lines, fmt.Sprintf("%d sources, one scp run — it keeps going past one it cannot copy", len(spec.Sources)))
+	}
 	if spec.Recursive {
-		lines = append(lines, "-r: the source is a directory, copied whole")
+		lines = append(lines, "-r: a source is a directory, copied whole")
 	}
 	lines = append(lines,
 		"runs in this terminal like S: scp's own progress and prompts,",
@@ -369,14 +453,14 @@ func (m Model) transferChose(path string, isDir bool) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// transferSpec is the copy with dest as the picked directory.
+// transferSpec is the copy with dest as the picked directory: the
+// sources in mark order, -r when any is a directory.
 func (m Model) transferSpec(dest string) transfer.Spec {
 	x := m.xfer
-	spec := transfer.Spec{Alias: x.alias, Direction: x.dir, Recursive: x.srcDir}
-	if x.dir == transfer.Download {
-		spec.Remote, spec.Local = x.src, dest
-	} else {
-		spec.Local, spec.Remote = x.src, dest
+	spec := transfer.Spec{Alias: x.alias, Direction: x.dir, Dest: dest}
+	for _, mk := range x.srcs {
+		spec.Sources = append(spec.Sources, mk.path)
+		spec.Recursive = spec.Recursive || mk.isDir
 	}
 	return spec
 }
@@ -388,7 +472,11 @@ func (m Model) scpReturned(msg scpExitMsg) (Model, tea.Cmd) {
 	var exitErr *exec.ExitError
 	switch {
 	case msg.err == nil:
-		m.notice = "copied " + msg.spec.Source() + " → " + msg.spec.Dest()
+		what := strings.Join(msg.spec.SourceOperands(), " ")
+		if n := len(msg.spec.Sources); n > 1 {
+			what = fmt.Sprintf("%d items", n)
+		}
+		m.notice = "copied " + what + " → " + msg.spec.DestOperand()
 	case errors.As(msg.err, &exitErr):
 		reason := ""
 		lines := strings.Split(strings.TrimSpace(msg.stderr), "\n")
@@ -408,45 +496,50 @@ func (m Model) scpReturned(msg scpExitMsg) (Model, tea.Cmd) {
 	return m, probeCmd(m.prober, m.hosts)
 }
 
-// transferRoom is the rows the picker has under the panel's three lines.
+// transferRoom is the rows the browser has under the panel's three lines.
 func (m Model) transferRoom() int { return max(m.contentHeight()-3, 1) }
 
-// transferResize follows the terminal.
-func (m Model) transferResize() Model {
-	if m.xfer.step == xferLocal {
-		m.xfer.local.SetHeight(m.transferRoom())
-	}
-	return m
-}
-
 // transferPreview is the bottom line's argv while the flow is open: the
-// scp exactly as it will run, the end not yet picked as a placeholder —
-// the honesty surface, never a runnable-looking guess.
+// scp exactly as it will run — the marks so far, or the end not yet
+// picked as a placeholder — the honesty surface, never a
+// runnable-looking guess.
 func (m Model) transferPreview() []string {
 	x := m.xfer
 	if x.step == xferDirection {
 		return nil
 	}
-	spec := transfer.Spec{Alias: x.alias, Direction: x.dir, Local: "<local>", Remote: "<remote>"}
-	if x.srcPicked {
-		spec.Recursive = x.srcDir
+	spec := transfer.Spec{Alias: x.alias, Direction: x.dir}
+	srcs := x.srcs
+	if !x.srcPicked {
+		srcs = x.marks
+	}
+	for _, mk := range srcs {
+		spec.Sources = append(spec.Sources, mk.path)
+		spec.Recursive = spec.Recursive || mk.isDir
+	}
+	if len(spec.Sources) == 0 {
+		spec.Sources = []string{"<local>"}
 		if x.dir == transfer.Download {
-			spec.Remote, spec.Local = x.src, "<local dir>"
-		} else {
-			spec.Local, spec.Remote = x.src, "<remote dir>"
+			spec.Sources = []string{"<remote>"}
 		}
+	}
+	spec.Dest = "<remote dir>"
+	if x.dir == transfer.Download {
+		spec.Dest = "<local dir>"
+	}
+	if !x.srcPicked {
+		spec.Dest = strings.TrimSuffix(spec.Dest, " dir>") + ">"
 	}
 	return transfer.CopyArgv(spec)
 }
 
 // transferView renders the flow in the body: a title line, the role
-// line, the current directory, then the picker.
+// line, the current directory, then the browser.
 func (m Model) transferView() string {
 	x := m.xfer
 	s := m.styles
 	title := " " + s.SectionLabel.Render("copy files (scp) · ") + s.PathName.Render(x.alias)
-	switch x.step {
-	case xferDirection:
+	if x.step == xferDirection {
 		rows := []string{
 			"upload    local → " + x.alias,
 			"download  " + x.alias + " → local",
@@ -460,40 +553,47 @@ func (m Model) transferView() string {
 				b.WriteString("   " + s.Item.Render(r) + "\n")
 			}
 		}
-		return b.String()
-	case xferLocal:
-		role := m.transferRole("local")
-		return title + "\n " + role + "\n " + s.PathAddr.Render(x.local.CurrentDirectory) + "\n" + x.local.View()
-	case xferRemote:
-		role := m.transferRole(x.alias)
-		where := x.alias + ":" + x.remote.path
-		if x.remote.loading != "" {
-			where += "  " + s.StatusWait.Render("◌") + " " + s.PathExtra.Render("listing "+x.alias+":"+x.remote.loading+" …")
-		}
-		return title + "\n " + role + "\n " + s.PathAddr.Render(where) + "\n" + m.remoteView()
+		return strings.TrimRight(b.String(), "\n")
 	}
-	return ""
+	where := x.br.path
+	if x.step == xferRemote {
+		where = x.alias + ":" + x.br.path
+		if x.br.loading != "" {
+			where = x.alias + ":" + x.br.loading + "  listing …"
+		}
+	}
+	return title + "\n" + m.transferRoleLine() + "\n " + s.PathAddr.Render(where) + "\n" + m.browserView()
 }
 
-// transferRole says what the picker on screen chooses.
-func (m Model) transferRole(side string) string {
+// transferRoleLine says what the browser on screen picks: the source
+// (and how many are marked), or the dest directory for the sources.
+func (m Model) transferRoleLine() string {
 	x := m.xfer
 	s := m.styles
+	side := "local"
+	if x.step == xferRemote {
+		side = x.alias
+	}
 	if !x.srcPicked {
-		return s.SectionLabel.Render(x.dir.String()+" · source: ") + s.PathExtra.Render("pick a file or directory on "+side)
+		how := "pick a file or directory on " + side + " (space marks several)"
+		if n := len(x.marks); n > 0 {
+			how = fmt.Sprintf("%d marked on %s — enter copies them, space unmarks", n, side)
+		}
+		return " " + s.SectionLabel.Render(x.dir.String()+" · source: ") + s.PathExtra.Render(how)
 	}
-	src := x.src
-	if x.srcDir {
-		src += "/"
+	src := x.srcs[0].path
+	if n := len(x.srcs); n > 1 {
+		src = fmt.Sprintf("%d items", n)
 	}
-	return s.SectionLabel.Render(x.dir.String()+" · source ") + s.PathName.Render(src) + s.SectionLabel.Render(" · dest: ") + s.PathExtra.Render("pick a directory on "+side+" (. for this one)")
+	return " " + s.SectionLabel.Render(x.dir.String()+" · source ") + s.PathName.Render(src) + s.SectionLabel.Render(" · dest: ") + s.PathExtra.Render("pick a directory on "+side+" (. for this one)")
 }
 
-// remoteView renders the browser's window of rows, the highlighted one
-// marked, directories with their trailing slash (the ls -p glyph, so
-// the kind survives NO_COLOR).
-func (m Model) remoteView() string {
-	b := m.xfer.remote
+// browserView renders the browser's window of rows: a mark column
+// (✓, so a mark survives NO_COLOR), the cursor, the name — directories
+// with their trailing slash, the ls -p glyph.
+func (m Model) browserView() string {
+	x := m.xfer
+	b := x.br
 	s := m.styles
 	rows := b.rows()
 	room := m.transferRoom()
@@ -507,43 +607,31 @@ func (m Model) remoteView() string {
 		if rows[i].IsDir {
 			name += "/"
 		}
+		mk := " "
+		if name != "../" && x.sourceStep() && x.marked(m.transferChild(rows[i].Name)) {
+			mk = s.StatusUp.Render("✓")
+		}
 		if i == b.idx {
-			out.WriteString(" " + s.RowMark.Render("›") + " " + s.ItemSelected.Render(name) + "\n")
+			out.WriteString(mk + " " + s.RowMark.Render("›") + " " + s.ItemSelected.Render(name) + "\n")
 			continue
 		}
 		style := s.PathName
 		if rows[i].IsDir {
 			style = s.ActiveMark
 		}
-		out.WriteString("   " + style.Render(name) + "\n")
+		out.WriteString(mk + "   " + style.Render(name) + "\n")
 	}
 	if len(b.entries) == 0 && b.loading == "" {
-		out.WriteString("   " + s.Empty.Render("empty directory") + "\n")
+		out.WriteString("    " + s.Empty.Render("empty directory") + "\n")
 	}
 	return strings.TrimRight(out.String(), "\n")
 }
 
-// pickerStyles derives the filepicker's styles from the palette (SPEC
-// §5 addendum: no color literal outside the palette layer).
-func (m Model) pickerStyles() filepicker.Styles {
-	s := m.styles
-	return filepicker.Styles{
-		DisabledCursor:   s.HelpDesc,
-		Cursor:           s.RowMark,
-		Symlink:          s.PathExtra,
-		Directory:        s.ActiveMark,
-		File:             s.PathName,
-		DisabledFile:     s.PathExtra,
-		Permission:       s.PathExtra,
-		Selected:         s.ItemSelected,
-		DisabledSelected: s.ItemSelectedDim,
-		FileSize:         s.PathExtra.Width(7).Align(lipgloss.Right),
-		EmptyDirectory:   s.Empty.PaddingLeft(3).SetString("empty directory"),
-	}
-}
-
 // transferKeys is the footer while the flow holds the keys.
-type transferKeys struct{ step xferStep }
+type transferKeys struct {
+	step   xferStep
+	source bool // the browser picks the source: space marks
+}
 
 func (t transferKeys) ShortHelp() []key.Binding {
 	if t.step == xferDirection {
@@ -559,12 +647,14 @@ func (t transferKeys) ShortHelp() []key.Binding {
 		moveKeys,
 		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "open")),
 		key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "up")),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 		key.NewBinding(key.WithKeys("."), key.WithHelp(".", "this dir")),
+	}
+	if t.source {
+		keys = append(keys, key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")))
 	}
 	if t.step == xferLocal {
 		// The remote listing (ls -A) always shows dotfiles; only the
-		// local picker has a switch.
+		// local browser has a switch.
 		keys = append(keys, key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "dotfiles")))
 	}
 	return keys
@@ -578,10 +668,10 @@ func (t transferKeys) FullHelp() [][]key.Binding { return [][]key.Binding{t.Shor
 // prompts group has it).
 func transferHelpKeys(k KeyMap) []key.Binding {
 	out := []key.Binding{k.Copy}
-	for _, t := range []transferKeys{{step: xferDirection}, {step: xferLocal}} {
+	for _, t := range []transferKeys{{step: xferDirection}, {step: xferLocal, source: true}} {
 		for _, b := range t.ShortHelp() {
 			switch b.Help().Key {
-			case "u/d", "l", "h", ".", "H":
+			case "u/d", "l", "h", ".", "space", "H":
 				out = append(out, b)
 			}
 		}

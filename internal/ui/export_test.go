@@ -80,7 +80,7 @@ func ContextKeymaps() []help.KeyMap {
 	// own footer.)
 	// (A question's footer names enter's deed per question — "run it",
 	// "write it" — and the panel carries one row for all of them.)
-	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}, transferKeys{step: xferDirection}, transferKeys{step: xferLocal}}
+	out := []help.KeyMap{pathsKeys{}, tunnelsKeys{k: DefaultKeyMap()}, settingsKeys{}, popupKeys{}, transferKeys{step: xferDirection}, transferKeys{step: xferLocal, source: true}}
 	for mode := promptConnect; mode < promptModeCount; mode++ {
 		out = append(out, promptKeys{mode: mode})
 	}
@@ -385,8 +385,8 @@ func WithShowHidden(m Model, on bool, save func(bool) error) Model {
 	return m
 }
 
-// LocalPickerShowsHidden reports whether C's local picker lists dotfiles.
-func LocalPickerShowsHidden(m Model) bool { return m.xfer.local.ShowHidden }
+// LocalPickerShowsHidden reports whether C's local browser lists dotfiles.
+func LocalPickerShowsHidden(m Model) bool { return m.showHidden }
 
 // Prompting and PromptingSave expose which prompt, if any, owns the keys.
 func Prompting(m Model) bool     { return m.mode != promptNone }
@@ -431,11 +431,32 @@ func TransferStep(m Model) string {
 	return [...]string{"off", "direction", "local", "remote"}[m.xfer.step]
 }
 func TransferSource(m Model) (path string, isDir, picked bool) {
-	return m.xfer.src, m.xfer.srcDir, m.xfer.srcPicked
+	if len(m.xfer.srcs) == 0 {
+		return "", false, m.xfer.srcPicked
+	}
+	return m.xfer.srcs[0].path, m.xfer.srcs[0].isDir, m.xfer.srcPicked
 }
-func TransferRemotePath(m Model) string { return m.xfer.remote.path }
-func TransferLocalDir(m Model) string   { return m.xfer.local.CurrentDirectory }
+func TransferRemotePath(m Model) string { return m.xfer.br.path }
+func TransferLocalDir(m Model) string   { return m.xfer.br.path }
 func TransferPreview(m Model) []string  { return m.transferPreview() }
+
+// TransferMarks lists the basket's paths in mark order (4.37).
+func TransferMarks(m Model) []string {
+	var out []string
+	for _, mk := range m.xfer.marks {
+		out = append(out, mk.path)
+	}
+	return out
+}
+
+// TransferSources lists the picked sources in order.
+func TransferSources(m Model) []string {
+	var out []string
+	for _, mk := range m.xfer.srcs {
+		out = append(out, mk.path)
+	}
+	return out
+}
 func ScpExec(spec transfer.Spec) *exec.Cmd {
 	cmd, _ := scpExec(spec)
 	return cmd

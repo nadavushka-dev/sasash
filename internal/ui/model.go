@@ -701,21 +701,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// filter clearing): the key path corrects itself before its
 	// selection tail, so this is a no-op there.
 	skipDivider(&n.list, before)
-	// The filepicker reads directories through its own messages: every
-	// non-key message reaches it while it is on screen (keys go through
-	// transferKey, which is the one place a pick is judged).
-	// A resize stays out: transferResize already sized the picker, and
-	// bubbles' filepicker answers a WindowSizeMsg by resetting its window
-	// end below a scrolled start, which blanks every row.
-	switch msg.(type) {
-	case tea.KeyMsg, tea.WindowSizeMsg:
-	default:
-		if n.xfer.step == xferLocal {
-			var fcmd tea.Cmd
-			n.xfer.local, fcmd = n.xfer.local.Update(msg)
-			cmd = tea.Batch(cmd, fcmd)
-		}
-	}
 	return n.settleFocus(), cmd
 }
 
@@ -737,7 +722,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// cursor past the terminal edge.
 		m.prompt.Width = max(10, m.width-14)
 		m.list.SetSize(m.listWidth(), m.contentHeight())
-		return m.transferResize(), nil
+		return m, nil
 
 	case probeDoneMsg:
 		m.statuses = msg.statuses
@@ -1596,7 +1581,7 @@ func (m Model) helpView() string {
 	case m.popup.open():
 		k = popupKeys{confirm: m.popup.confirm != nil, verb: m.popup.verb}
 	case m.xfer.active():
-		k = transferKeys{step: m.xfer.step}
+		k = transferKeys{step: m.xfer.step, source: m.xfer.sourceStep()}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:

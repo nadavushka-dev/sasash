@@ -1,6 +1,7 @@
 // Package transfer builds the scp and remote-ls invocations behind the
-// TUI's C key (SASASH.4.33): copying a file or directory between the local
-// machine and a configured host, both ends browsed before anything runs.
+// TUI's C key (SASASH.4.33): copying files and directories — one, or the
+// marks of one pick (4.37) — between the local machine and a configured
+// host, both ends browsed before anything runs.
 //
 // Everything here names the host by its ssh_config ALIAS and nothing
 // else: scp and ssh read the same config sasash displays — the active
@@ -41,49 +42,58 @@ func (d Direction) String() string {
 	return "upload"
 }
 
-// Spec is one copy: the alias, the direction, the path at each end, and
-// whether the source is a directory (then scp needs -r). Local is a local
-// filesystem path; Remote is the path as the host sees it — relative to
-// the login home unless absolute, exactly what scp is given.
+// Spec is one copy: the alias, the direction, the paths at the source
+// end (one or several — the marks of one pick, SASASH.4.37), the
+// directory at the other end, and whether any source is a directory
+// (then scp needs -r). For an Upload the sources are local paths and
+// Dest a remote directory; for a Download the sources are paths as the
+// host sees them — relative to the login home unless absolute, exactly
+// what scp is given — and Dest a local directory.
 type Spec struct {
 	Alias     string
 	Direction Direction
-	Local     string
-	Remote    string
+	Sources   []string
+	Dest      string
 	Recursive bool
 }
 
-// Source and Dest are the two scp operands in copy order, the remote one
-// as alias:path.
-func (s Spec) Source() string {
-	if s.Direction == Download {
-		return s.Alias + ":" + s.Remote
+// SourceOperands are the scp source operands in pick order, each remote
+// one as alias:path.
+func (s Spec) SourceOperands() []string {
+	out := make([]string, len(s.Sources))
+	for i, src := range s.Sources {
+		if s.Direction == Download {
+			src = s.Alias + ":" + src
+		}
+		out[i] = src
 	}
-	return s.Local
+	return out
 }
 
-// Dest is the second scp operand.
-func (s Spec) Dest() string {
+// DestOperand is the last scp operand.
+func (s Spec) DestOperand() string {
 	if s.Direction == Download {
-		return s.Local
+		return s.Dest
 	}
-	return s.Alias + ":" + s.Remote
+	return s.Alias + ":" + s.Dest
 }
 
 // CopyArgv is the exact scp invocation for one Spec (SPEC §4):
 //
-//	scp [-r] <source> <dest>
+//	scp [-r] <source>… <dest>
 //
-// -r is present exactly when the source is a directory. The remote
-// operand is alias:path with the path verbatim — scp hands it to the
-// host's sftp server (OpenSSH 9+) or shell as typed, so quoting here
-// would become part of the name.
+// -r is present exactly when a source is a directory. Several sources
+// go in one run, in pick order; scp copies each into the dest directory,
+// keeps going past one it cannot copy, and exits non-zero at the end.
+// The remote operands are alias:path with the path verbatim — scp hands
+// it to the host's sftp server (OpenSSH 9+) or shell as typed, so
+// quoting here would become part of the name.
 func CopyArgv(s Spec) []string {
 	argv := []string{"scp"}
 	if s.Recursive {
 		argv = append(argv, "-r")
 	}
-	return append(argv, s.Source(), s.Dest())
+	return append(append(argv, s.SourceOperands()...), s.DestOperand())
 }
 
 // ListArgv is the exact remote listing the browser runs (SPEC §4):

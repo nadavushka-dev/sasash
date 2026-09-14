@@ -22,34 +22,44 @@ func TestCopyArgv_Exact(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "upload a file into a remote dir",
-			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Local: "/home/u/notes.txt", Remote: "docs"},
+			name: "upload a file into a remote directory",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Sources: []string{"/home/u/notes.txt"}, Dest: "docs"},
 			want: []string{"scp", "/home/u/notes.txt", "api:docs"},
 		},
 		{
-			name: "upload a directory adds -r",
-			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Local: "/home/u/proj", Remote: ".", Recursive: true},
+			name: "upload a directory is -r",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Sources: []string{"/home/u/proj"}, Dest: ".", Recursive: true},
 			want: []string{"scp", "-r", "/home/u/proj", "api:."},
 		},
 		{
-			name: "download a file into a local dir",
-			spec: transfer.Spec{Alias: "api", Direction: transfer.Download, Local: "/home/u/Downloads", Remote: "/var/log/syslog"},
+			name: "download a file into a local directory",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Download, Sources: []string{"/var/log/syslog"}, Dest: "/home/u/Downloads"},
 			want: []string{"scp", "api:/var/log/syslog", "/home/u/Downloads"},
 		},
 		{
-			name: "download a directory adds -r",
-			spec: transfer.Spec{Alias: "api", Direction: transfer.Download, Local: "/home/u", Remote: "etc/nginx", Recursive: true},
+			name: "download a directory is -r",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Download, Sources: []string{"etc/nginx"}, Dest: "/home/u", Recursive: true},
 			want: []string{"scp", "-r", "api:etc/nginx", "/home/u"},
 		},
 		{
-			name: "remote path with a space is passed verbatim, never quoted",
-			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Local: "/home/u/a b", Remote: "my docs"},
+			name: "paths with spaces are single argv words, never quoted",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Sources: []string{"/home/u/a b"}, Dest: "my docs"},
 			want: []string{"scp", "/home/u/a b", "api:my docs"},
 		},
 		{
-			name: "a dotted alias is the alias, never a hostname",
-			spec: transfer.Spec{Alias: "web.lan", Direction: transfer.Download, Local: "/tmp", Remote: "x"},
+			name: "a dotted alias is used verbatim",
+			spec: transfer.Spec{Alias: "web.lan", Direction: transfer.Download, Sources: []string{"x"}, Dest: "/tmp"},
 			want: []string{"scp", "web.lan:x", "/tmp"},
+		},
+		{
+			name: "several sources go in one run, in order",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Upload, Sources: []string{"/home/u/b.txt", "/home/u/a.txt"}, Dest: "docs"},
+			want: []string{"scp", "/home/u/b.txt", "/home/u/a.txt", "api:docs"},
+		},
+		{
+			name: "several remote sources each carry the alias, -r when any is a directory",
+			spec: transfer.Spec{Alias: "api", Direction: transfer.Download, Sources: []string{"readme", "docs"}, Dest: "/home/u", Recursive: true},
+			want: []string{"scp", "-r", "api:readme", "api:docs", "/home/u"},
 		},
 	}
 	for _, tt := range tests {
@@ -62,21 +72,24 @@ func TestCopyArgv_Exact(t *testing.T) {
 	}
 }
 
-func TestSpec_SourceDest(t *testing.T) {
+func TestSpec_Operands(t *testing.T) {
 	t.Parallel()
-	up := transfer.Spec{Alias: "api", Direction: transfer.Upload, Local: "/l", Remote: "r"}
-	if got, want := up.Source(), "/l"; got != want {
-		t.Errorf("Source() = %q, want %q", got, want)
+	up := transfer.Spec{Alias: "api", Direction: transfer.Upload, Sources: []string{"/l", "/m"}, Dest: "r"}
+	if got, want := up.SourceOperands(), []string{"/l", "/m"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("upload SourceOperands() = %q, want %q", got, want)
 	}
-	if got, want := up.Dest(), "api:r"; got != want {
-		t.Errorf("Dest() = %q, want %q", got, want)
+	if got := up.DestOperand(); got != "api:r" {
+		t.Errorf("upload DestOperand() = %q, want api:r", got)
 	}
-	down := transfer.Spec{Alias: "api", Direction: transfer.Download, Local: "/l", Remote: "r"}
-	if got, want := down.Source(), "api:r"; got != want {
-		t.Errorf("Source() = %q, want %q", got, want)
+	down := transfer.Spec{Alias: "api", Direction: transfer.Download, Sources: []string{"r", "s"}, Dest: "/l"}
+	if got, want := down.SourceOperands(), []string{"api:r", "api:s"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("download SourceOperands() = %q, want %q", got, want)
 	}
-	if got, want := down.Dest(), "/l"; got != want {
-		t.Errorf("Dest() = %q, want %q", got, want)
+	if got := down.DestOperand(); got != "/l" {
+		t.Errorf("download DestOperand() = %q, want /l", got)
+	}
+	if got := (transfer.Spec{}).SourceOperands(); len(got) != 0 {
+		t.Errorf("empty SourceOperands() = %q, want none", got)
 	}
 }
 

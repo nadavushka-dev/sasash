@@ -76,7 +76,7 @@ See [docs/configuration.md](docs/configuration.md).
 | | |
 |---|---|
 | **Navigate** | `j`/`k` move · `g`/`G` first/last · `ctrl+d`/`ctrl+u` half-page · `/` filter · `l`/`h` switch panes |
-| **On a host** | `enter` ssh · `S` ssh here (handoff) · `H` herdr session beside · `p` pick path · `C` copy files (scp) · `y` yank address · `c` yank command · `a` ad-hoc ssh · `R` rename · `e` edit connections |
+| **On a host** | `enter` ssh · `S` ssh here (handoff) · `H` herdr session beside · `p` pick path · `C` copy files (scp; `space` marks several) · `y` yank address · `c` yank command · `a` ad-hoc ssh · `R` rename · `e` edit connections |
 | **Tunnels** (`l`) | `space` toggle a forward · `s` toggle the set · `+` add a forward · `n` declare a new set · `E` edit · `x` stop one · `X` delete the set · `r` restart master |
 | **Elsewhere** | `.` show other `ssh_config` entries · `$` show the command line · `t` theme · `o` settings · `?` keys · `q` quit |
 
