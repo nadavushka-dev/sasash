@@ -84,11 +84,14 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 }
 
 // resolveTheme picks the theme name: flag > SASASH_THEME > config.toml >
-// the pre-config state file (read only while config.toml does not
-// exist, SASASH.4.36) > default. A flag naming an unknown theme is fatal
-// (typos should fail loudly); a bad env, config or state value degrades
-// to the next source with a warning, so a stale file can never keep the
-// TUI from starting.
+// the pre-config state file > default. The state file is read whenever
+// nothing above it names a theme (SASASH.4.36): a config.toml that a
+// first H created has the theme still commented out, and the choice `t`
+// persisted before must survive that — setup and `t` write the theme
+// live, after which the state file is never consulted. A flag naming an
+// unknown theme is fatal (typos should fail loudly); a bad env, config
+// or state value degrades to the next source with a warning, so a stale
+// file can never keep the TUI from starting.
 func resolveTheme(flagVal, envVal string, uc config.Config, statePath string) (name, warn string, fatal bool) {
 	if flagVal != "" {
 		if _, ok := ui.ThemeIndex(flagVal); !ok {
@@ -109,11 +112,9 @@ func resolveTheme(flagVal, envVal string, uc config.Config, statePath string) (n
 		}
 		warns = append(warns, fmt.Sprintf("config.toml: theme %q is not a theme (themes: %s)", uc.Theme, themeNames()))
 	}
-	if !uc.Present {
-		if v := readState(statePath); v != "" {
-			if _, ok := ui.ThemeIndex(v); ok {
-				return v, strings.Join(warns, "; "), false
-			}
+	if v := readState(statePath); v != "" {
+		if _, ok := ui.ThemeIndex(v); ok {
+			return v, strings.Join(warns, "; "), false
 		}
 	}
 	if len(warns) > 0 {

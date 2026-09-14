@@ -417,7 +417,8 @@ The UI is dark-only. Every lipgloss style derives from a semantic palette struct
 hex literal outside the palette layer. Four shipped themes: gruvbox dark (default),
 catppuccin mocha, tokyo night, nord; theme selection (flag > `SASASH_THEME` > `config.toml`)
 persists — `t` and the `o` picker write `theme` into `config.toml` (SASASH.4.36; the older
-`~/.local/state/sasash/theme` is read only until the file exists) — and degrades cleanly to
+`~/.local/state/sasash/theme` is read only while nothing names a theme, and setup carries it
+over once) — and degrades cleanly to
 256-color and `NO_COLOR`. Custom user themes are deferred.
 
 ---

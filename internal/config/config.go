@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/nadavushka-dev/sasash/internal/toml"
 )
@@ -47,7 +48,7 @@ const Header = "# sasash configuration — see docs/configuration.md\n# Every op
 // Config is the loaded file. A missing file is the zero value; a zero
 // field means "not set" (the caller applies the default).
 type Config struct {
-	Present    bool // the file exists (a legacy state file is consulted only when it does not)
+	Present    bool // the file exists and was read
 	Theme      string
 	Editor     string
 	ShowHidden bool
@@ -127,12 +128,19 @@ func Template() string {
 	return b.String()
 }
 
+// setMu serializes Set: the TUI's write-backs run as bubbletea commands
+// on their own goroutines, and two read-modify-writes in flight at once
+// would let one key's value overwrite the other's.
+var setMu sync.Mutex
+
 // Set writes one key into the file at path: the file is re-read (a hand
 // edit since the last load wins), the key's line rewritten in place
 // (Apply), and the result written atomically. A missing file starts
 // from Template, so the first `t` on a fresh install yields the file
 // setup would have written plus the one live line.
 func Set(path, key string, value any) error {
+	setMu.Lock()
+	defer setMu.Unlock()
 	data, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -149,10 +157,13 @@ func Set(path, key string, value any) error {
 
 // Apply returns data with key set to value (a string or a bool): a live
 // `key = …` line is rewritten in place — its indent and any trailing
-// comment kept — else the template's commented `# key = …` line becomes
-// live where it stands, else the line is appended. Every other byte is
-// returned as it was. A file the parser rejects is left alone (the
-// error names the line): sasash never rewrites what it cannot read.
+// comment kept — else the template's commented `# key = <value>` line
+// (a comment that would parse as the key if uncommented; prose that
+// merely starts with the key's name is not one) becomes live where it
+// stands, indent kept, else the line is appended with the file's own
+// terminator. Every other byte is returned as it was. A file the parser
+// rejects is left alone (the error names the line): sasash never
+// rewrites what it cannot read.
 func Apply(data, key string, value any) (string, error) {
 	k, ok := lookup(key)
 	if !ok {
@@ -185,24 +196,36 @@ func Apply(data, key string, value any) (string, error) {
 	}
 	line := key + " = " + lit
 	if commented >= 0 {
-		_, term := splitTerm(raw[commented])
-		raw[commented] = line + term
+		body, term := splitTerm(raw[commented])
+		indent := body[:len(body)-len(strings.TrimLeft(body, " \t"))]
+		raw[commented] = indent + line + term
 		return strings.Join(raw, ""), nil
+	}
+	term := "\n"
+	if len(raw) > 0 {
+		if _, t := splitTerm(raw[0]); t != "" {
+			term = t // the file's own style, so a CRLF file stays CRLF
+		}
 	}
 	out := strings.Join(raw, "")
 	if out != "" && !strings.HasSuffix(out, "\n") {
-		out += "\n"
+		out += term
 	}
-	return out + line + "\n", nil
+	return out + line + term, nil
 }
 
 // WriteAtomic writes data to path through a temp file in the same
 // directory, fsynced and renamed into place (SPEC: never truncate a
 // file the user hand-edits). A symlinked path is written through, so a
-// dotfiles-managed link survives; the directory is created as needed.
+// dotfiles-managed link survives; an existing file keeps its mode; the
+// directory is created as needed.
 func WriteAtomic(path, data string) error {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved
+	}
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -225,7 +248,7 @@ func WriteAtomic(path, data string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
+	if err := os.Chmod(tmpName, perm); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)
@@ -286,19 +309,23 @@ func parse(data string) ([]line, error) {
 	return out, nil
 }
 
-// commentedKey reads the key of a `# key = value` line, "" for any
-// other comment — so only the template's own shape is revived in place.
+// commentedKey reads the key of a `# key = value` line — one that would
+// parse as that key, with a value of its kind, if uncommented — and ""
+// for any other comment, so only the template's own shape is revived
+// in place and a user's prose that starts with a key's name is kept.
 func commentedKey(s string) string {
 	body := strings.TrimSpace(strings.TrimLeft(s, "#"))
-	key, _, ok := strings.Cut(body, "=")
+	key, rest, ok := strings.Cut(body, "=")
 	if !ok {
 		return ""
 	}
 	key = strings.TrimSpace(key)
-	if !toml.BareKey(key) {
+	k, known := lookup(key)
+	if !known {
 		return ""
 	}
-	if _, known := lookup(key); !known {
+	val, rem, err := toml.ParseValue(strings.TrimSpace(rest))
+	if err != nil || val.Kind != k.Kind || !toml.TrailingOK(rem) {
 		return ""
 	}
 	return key

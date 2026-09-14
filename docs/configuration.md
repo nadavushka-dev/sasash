@@ -1,8 +1,7 @@
 # Configuring sasash
 
 sasash reads its own settings from `~/.config/sasash/config.toml`
-(`$XDG_CONFIG_HOME/sasash/config.toml` when that variable is set) — the same
-directory as `actions.toml`. `sasash setup` creates it with every option commented
+(`$XDG_CONFIG_HOME/sasash/config.toml` when that variable is set). `sasash setup` creates it with every option commented
 out beside its default; uncomment a line to set it. The file is yours: sasash
 re-reads it before every write and rewrites only the one line a key changes, so a
 hand edit is never lost.
@@ -30,6 +29,7 @@ environment or in the file falls through to the next source with a warning.
 ## Migration from the state file
 
 Before this file existed, `t` persisted the theme to `~/.local/state/sasash/theme`.
-`sasash setup` carries that choice into `config.toml` when it creates the file, and
-the TUI still reads the old file only while `config.toml` does not exist. Once the
-file is there, the state file is ignored and can be deleted.
+`sasash setup` carries that choice into `config.toml` when it creates the file. The TUI
+still reads the old file whenever nothing else names a theme — no flag, no
+`SASASH_THEME`, and no live `theme` line in `config.toml`. Once `config.toml` names a
+theme (setup, `t`, or a hand edit), the state file is never consulted and can be deleted.

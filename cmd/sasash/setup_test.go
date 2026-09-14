@@ -4,12 +4,13 @@ package main
 
 import (
 	"bytes"
-	"github.com/nadavushka-dev/sasash/internal/config"
-	"github.com/nadavushka-dev/sasash/internal/setup"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nadavushka-dev/sasash/internal/config"
+	"github.com/nadavushka-dev/sasash/internal/setup"
 )
 
 // testEnv is the Env the tests use: config.toml under home's .config,

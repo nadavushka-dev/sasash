@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nadavushka-dev/sasash/internal/config"
@@ -143,6 +144,18 @@ func TestApply(t *testing.T) {
 			want: "# hdr\n  theme = \"mocha\"   # mine\neditor = \"vim\"\n"},
 		{name: "crlf kept", data: "theme = \"nord\"\r\nshow_hidden = false\r\n", key: "show_hidden", value: true,
 			want: "theme = \"nord\"\r\nshow_hidden = true\r\n"},
+		{name: "crlf file appended in its own style", data: "editor = \"vim\"\r\n", key: "theme", value: "nord",
+			want: "editor = \"vim\"\r\ntheme = \"nord\"\r\n"},
+		{name: "crlf file without a final newline appended in its own style", data: "editor = \"vim\"\r\nshow_hidden = true", key: "theme", value: "nord",
+			want: "editor = \"vim\"\r\nshow_hidden = true\r\ntheme = \"nord\"\r\n"},
+		{name: "indented template line revived with its indent", data: "  # theme = \"gruvbox\"\n", key: "theme", value: "nord",
+			want: "  theme = \"nord\"\n"},
+		{name: "prose starting with the key is not revived", data: "# editor = whatever you like\n# doc\n# editor = \"\"\n", key: "editor", value: "code",
+			want: "# editor = whatever you like\n# doc\neditor = \"code\"\n"},
+		{name: "commented value of the wrong kind is not revived", data: "# show_hidden = \"yes\"\n", key: "show_hidden", value: true,
+			want: "# show_hidden = \"yes\"\nshow_hidden = true\n"},
+		{name: "commented line with a trailing comment is revived", data: "# theme = \"gruvbox\"  # default\n", key: "theme", value: "nord",
+			want: "theme = \"nord\"\n"},
 		{name: "template line revived in place",
 			data: "# doc\n# theme = \"gruvbox\"\n\n# doc2\n# show_hidden = false\n", key: "show_hidden", value: true,
 			want: "# doc\n# theme = \"gruvbox\"\n\n# doc2\nshow_hidden = true\n"},
@@ -259,6 +272,57 @@ func TestSet(t *testing.T) {
 	})
 }
 
+func TestWriteAtomic_KeepsMode(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root ignores file modes")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("theme = \"nord\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := config.Set(path, "theme", "mocha"); err != nil {
+		t.Fatalf("Set() err = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode after Set() = %o, want the file's own 0600", got)
+	}
+	fresh := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.WriteAtomic(fresh, "x"); err != nil {
+		t.Fatalf("WriteAtomic(fresh) err = %v", err)
+	}
+	if info, _ := os.Stat(fresh); info.Mode().Perm() != 0o644 {
+		t.Errorf("mode of a new file = %o, want 0644", info.Mode().Perm())
+	}
+}
+
+func TestSet_ConcurrentWritesKeepEveryKey(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	var wg sync.WaitGroup
+	errs := make(chan error, 40)
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); errs <- config.Set(path, "theme", "nord") }()
+		go func() { defer wg.Done(); errs <- config.Set(path, "show_hidden", true) }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Set() = %v", err)
+		}
+	}
+	got, warns, err := config.Load(path)
+	if err != nil || warns != nil || got.Theme != "nord" || !got.ShowHidden {
+		t.Errorf("Load() after concurrent Sets = %+v, %v, %v; want both keys live", got, warns, err)
+	}
+}
+
 func TestWriteAtomic_Errors(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -330,7 +394,7 @@ func TestKeys_Documented(t *testing.T) {
 		if !strings.HasPrefix(l, "| `") {
 			continue
 		}
-		name := strings.TrimPrefix(strings.SplitN(l, "`", 3)[1], "")
+		name := strings.SplitN(l, "`", 3)[1]
 		found := false
 		for _, k := range config.Keys {
 			found = found || k.Name == name

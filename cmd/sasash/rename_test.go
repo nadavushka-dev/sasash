@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"github.com/nadavushka-dev/sasash/internal/config"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/pathswitch"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
