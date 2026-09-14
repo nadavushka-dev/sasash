@@ -318,7 +318,9 @@ func (m Model) transferListLocal(dir string) Model {
 
 // readLocal lists dir the way the remote listing reads: directories
 // first, each group in name order, dotfiles only when hidden is on. A
-// symlink counts as what it is, a link — scp follows it.
+// symlink counts as what it points at — a link to a directory is a
+// directory, enterable and copied -r, as scp follows it; a dangling
+// link is a file.
 func readLocal(dir string, hidden bool) ([]transfer.Entry, error) {
 	des, err := os.ReadDir(dir)
 	if err != nil {
@@ -330,7 +332,13 @@ func readLocal(dir string, hidden bool) ([]transfer.Entry, error) {
 		if !hidden && strings.HasPrefix(name, ".") {
 			continue
 		}
-		if d.IsDir() {
+		isDir := d.IsDir()
+		if d.Type()&os.ModeSymlink != 0 {
+			if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				isDir = info.IsDir()
+			}
+		}
+		if isDir {
 			dirs = append(dirs, transfer.Entry{Name: name, IsDir: true})
 		} else {
 			files = append(files, transfer.Entry{Name: name})
@@ -340,12 +348,27 @@ func readLocal(dir string, hidden bool) ([]transfer.Entry, error) {
 }
 
 // transferToggleHidden is H in the local browser: dotfiles on or off
-// for the session, the directory re-read (the marks stay), and the
-// choice written back to config.toml's show_hidden (SASASH.4.36) the
-// way t writes the theme.
+// for the session, the directory re-read in place (the marks and the
+// cursor stay), and the choice written back to config.toml's
+// show_hidden (SASASH.4.36) the way t writes the theme. A directory
+// that cannot be re-read flips nothing: the failure is the notice.
 func (m Model) transferToggleHidden() (Model, tea.Cmd) {
+	b := &m.xfer.br
+	entries, err := readLocal(b.path, !m.showHidden)
+	if err != nil {
+		m.notice = "cannot list " + b.path + ": " + cleanLine(err.Error())
+		return m, nil
+	}
 	m.showHidden = !m.showHidden
-	m = m.transferListLocal(m.xfer.br.path)
+	name := b.highlighted().Name
+	b.entries = entries
+	b.idx = min(b.idx, len(b.rows())-1)
+	for i, row := range b.rows() {
+		if row.Name == name {
+			b.idx = i // the cursor follows its row, wherever the dotfiles push it
+			break
+		}
+	}
 	m.notice = "hidden files: off"
 	if m.showHidden {
 		m.notice = "hidden files: on"
@@ -642,11 +665,14 @@ func (t transferKeys) ShortHelp() []key.Binding {
 			key.NewBinding(key.WithKeys("u", "d"), key.WithHelp("u/d", "upload / download")),
 		}
 	}
+	// No motion row here: the browser is visibly a list, the ? panel
+	// treats j/k as self-evident, and with it the source browser's row
+	// would outgrow 80 columns — where bubbles' help cuts the tail
+	// mid-word rather than with its ellipsis. Every row that fits is a
+	// key that does something only here.
 	keys := []key.Binding{
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		moveKeys,
-		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "open")),
-		key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "up")),
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "pick")),
 		key.NewBinding(key.WithKeys("."), key.WithHelp(".", "this dir")),
 	}
 	if t.source {
@@ -657,7 +683,10 @@ func (t transferKeys) ShortHelp() []key.Binding {
 		// local browser has a switch.
 		keys = append(keys, key.NewBinding(key.WithKeys("H"), key.WithHelp("H", "dotfiles")))
 	}
-	return keys
+	return append(keys,
+		key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "open")),
+		key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "up")),
+	)
 }
 
 func (t transferKeys) FullHelp() [][]key.Binding { return [][]key.Binding{t.ShortHelp()} }

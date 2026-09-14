@@ -1667,8 +1667,11 @@ func (m Model) View() string {
 		// prompt's expansion is. Under the confirm the popup names the
 		// real dest, so the placeholder line yields to it.
 		preview = ""
+		// Several marks make a long line: cut with a visible ellipsis
+		// rather than silently — the confirm popup wraps the whole argv.
 		if argv := m.transferPreview(); argv != nil && !m.popup.open() {
-			preview = " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(strings.Join(argv, " "))
+			line := clipAlias(strings.Join(argv, " "), max(m.termWidth-3, 1))
+			preview = " " + m.styles.CmdPrompt.Render("$") + " " + m.styles.CmdPreview.Render(line)
 		}
 	}
 	// Under the popup the bottom line is its one-line partner: every

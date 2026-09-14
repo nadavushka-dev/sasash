@@ -39,7 +39,7 @@ var Keys = []Key{
 	{Name: "editor", Kind: toml.String, Default: `""`,
 		Doc: `editor command for e, split on spaces (e.g. "code -w"); empty means $EDITOR, then vi`},
 	{Name: "show_hidden", Kind: toml.Bool, Default: `false`,
-		Doc: "list dotfiles in the local file picker of C (copy files); H there flips it and writes it back"},
+		Doc: "list dotfiles in the local file browser of C (copy files); H there flips it and writes it back"},
 	{Name: "spawn_target", Kind: toml.String, Default: `"tab"`,
 		Doc: "where enter opens the ssh session inside herdr or tmux: pane, tab or workspace (o → spawn target writes it here)"},
 	{Name: "spawn_window", Kind: toml.String, Default: `""`,

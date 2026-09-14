@@ -18,7 +18,7 @@ keeps the TUI from starting.
 |---|---|---|---|---|
 | `theme` | string | `"gruvbox"` | color theme: `gruvbox`, `mocha`, `tokyonight` or `nord` | `t` cycles and `o` → theme picks; both write the choice here. `--theme` and `SASASH_THEME` override for one run without writing |
 | `editor` | string | `""` | the editor `e` opens the connections file (`sasash.conf`) in, split on spaces (e.g. `"code -w"`) | empty means `$EDITOR`, then `vi` |
-| `show_hidden` | bool | `false` | list dotfiles in the local file picker of `C` (copy files); the remote listing always shows them | `H` inside the local picker flips it and writes it back |
+| `show_hidden` | bool | `false` | list dotfiles in the local file browser of `C` (copy files); the remote listing always shows them | `H` inside the local picker flips it and writes it back |
 | `spawn_target` | string | `"tab"` | where `enter` opens the ssh session inside herdr or tmux: `pane`, `tab` or `workspace` | `o` → spawn target writes the pick here |
 | `spawn_window` | string | `""` | the command that opens an OS window running ssh when no multiplexer is detected; `{host}` is the alias, `actions.toml` placeholders apply. Unset (commented out) means the platform default: Terminal on macOS, `x-terminal-emulator` or `gnome-terminal` on Linux, Windows Terminal under WSL. A live `""` turns that off, so `enter` hands off instead | — |
 

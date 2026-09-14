@@ -25,8 +25,8 @@ import (
 // The C key (SASASH.4.33): copy files with scp, both ends browsed. Smoke
 // tier: the flow's steps and the messages it sends, never full frames.
 
-// xferHome is a local tree the filepicker browses: a directory first
-// (the picker lists directories before files), then a file.
+// xferHome is a local tree the local browser lists: a directory first
+// (directories come before files), then a file.
 func xferHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -42,7 +42,7 @@ func xferHome(t *testing.T) string {
 }
 
 // xferModel is a sized model over host0 with the runner wired for the
-// remote listings and the filepicker rooted at home.
+// remote listings and the local browser rooted at home.
 func xferModel(t *testing.T, home string, f *fakerun.Fake) ui.Model {
 	t.Helper()
 	m := ui.New(testHosts(1), probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, f, ui.Config{Home: home})
@@ -773,5 +773,94 @@ func TestModel_Update_LocalListingRefusalIsANotice(t *testing.T) {
 	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "l")
 	if got := ui.TransferLocalDir(m); got != home || !strings.Contains(m.View(), "cannot list ") || !strings.Contains(m.View(), "locked/") {
 		t.Errorf("after l on an unreadable directory: dir = %q, view:\n%s", got, m.View())
+	}
+}
+
+// A symlink to a directory is a directory: listed among them, enterable,
+// and copied -r (scp follows the link). A dangling link is a file.
+func TestModel_Update_LocalSymlinkedDirectory(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	if err := os.Symlink(filepath.Join(home, "proj"), filepath.Join(home, "alink")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(home, "gone"), filepath.Join(home, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	// rows: ../ alink/ proj/ dangling notes.txt
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u")
+	if v := m.View(); !strings.Contains(v, "alink/") || strings.Contains(v, "dangling/") {
+		t.Fatalf("rows should list alink as a directory and dangling as a file:\n%s", v)
+	}
+	m = drive(t, m, "j", "l")
+	if got := ui.TransferLocalDir(m); got != filepath.Join(home, "alink") || !strings.Contains(m.View(), "a.txt") {
+		t.Errorf("l on the link: dir = %q, view:\n%s", got, m.View())
+	}
+	m = drive(t, m, "h", "j", "enter")
+	if want := []string{"scp", "-r", filepath.Join(home, "alink"), "host0:<remote dir>"}; !reflect.DeepEqual(ui.TransferPreview(m), want) {
+		t.Errorf("TransferPreview() = %q, want the link copied -r", ui.TransferPreview(m))
+	}
+}
+
+// H re-reads in place: the cursor and the marks stay; a directory that
+// cannot be re-read flips nothing and says so.
+func TestModel_Update_HiddenToggleKeepsPlaceAndReportsFailure(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", " ", "H")
+	if v := m.View(); !strings.Contains(v, "✓ › notes.txt") || !strings.Contains(v, ".secret") {
+		t.Errorf("after H the cursor and the mark should stay on notes.txt with the dotfile listed:\n%s", v)
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	if err := os.Chmod(home, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(home, 0o755) })
+	m = drive(t, m, "H")
+	if v := m.View(); !strings.Contains(v, "cannot list ") || strings.Contains(v, "hidden files: off") || !ui.LocalPickerShowsHidden(m) {
+		t.Errorf("H on an unreadable directory should report the failure and flip nothing:\n%s", v)
+	}
+}
+
+// The bottom line cuts a long preview with a visible ellipsis, and the
+// browser footer names enter, the mark and the dotfile switch ahead of
+// the directory hops at 80 columns.
+func TestModel_View_TransferPreviewEllipsisAndFooter(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", " ", "j", " ")
+	v := m.View()
+	for _, line := range strings.Split(v, "\n") {
+		if strings.Contains(line, "$ scp") && !strings.HasSuffix(strings.TrimRight(line, " "), "…") {
+			t.Errorf("a preview wider than the frame should end in an ellipsis: %q", line)
+		}
+	}
+	for _, want := range []string{"enter pick", "space mark", "H dotfiles"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("footer lacks %q:\n%s", want, v)
+		}
+	}
+	// The dest browser's footer has no mark row and fits whole.
+	m = drive(t, m, "enter")
+	if v := m.View(); strings.Contains(v, "space mark") || !strings.Contains(v, "enter pick") || !strings.Contains(v, "h up") {
+		t.Errorf("dest footer should carry enter and the hops, no mark:\n%s", v)
+	}
+}
+
+// A ../ row that resolves to a marked directory is not drawn as marked.
+func TestModel_View_ParentRowNeverMarked(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", " ", "l")
+	if v := m.View(); !strings.Contains(v, "  › ../") || strings.Contains(v, "✓ › ../") {
+		t.Errorf("../ inside a marked directory must not show the mark:\n%s", v)
+	}
+	if got := ui.TransferMarks(m); !reflect.DeepEqual(got, []string{filepath.Join(home, "proj")}) {
+		t.Errorf("TransferMarks() = %q, want proj kept", got)
 	}
 }
