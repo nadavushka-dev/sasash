@@ -22,14 +22,25 @@ import (
 )
 
 // Env names what setup inspects and writes. Config is config.toml's
-// path, resolved by the cmd layer ($XDG_CONFIG_HOME moves it). Theme
-// seeds a fresh config.toml with a live `theme = …` line — the choice
-// `t` persisted to the pre-config state file, carried over once; ""
-// leaves the template's commented default.
+// path, resolved by the cmd layer ($XDG_CONFIG_HOME moves it). Legacy
+// lists the settings files that predate config.toml (SASASH.4.36); the
+// cmd layer reads them, since it knows their formats.
 type Env struct {
 	Home   string
 	Config string
-	Theme  string
+	Legacy []Legacy
+}
+
+// Legacy is one pre-config settings file to move into config.toml:
+// while Path exists, Check lists it and Ensure writes Value as Key —
+// unless config.toml already has a live line for Key, which the user
+// chose and keeps — then removes the file. A nil Value (the file names
+// nothing sasash can keep, a stale theme say) is removed without a
+// write. config.toml is then the one place settings live.
+type Legacy struct {
+	Path  string
+	Key   string
+	Value any
 }
 
 // IncludeLine is what Ensure inserts at the top of ~/.ssh/config. ssh_config
@@ -51,11 +62,14 @@ type Status struct {
 	CMDirPresent bool
 	// ConfigPresent is true when config.toml exists.
 	ConfigPresent bool
+	// Legacy holds the paths of Env.Legacy files still present — each
+	// one a move Ensure has yet to make.
+	Legacy []string
 }
 
 // Done reports whether nothing is left for Ensure to do.
 func (s Status) Done() bool {
-	return s.IncludePresent && s.ConfPresent && s.CMDirPresent && s.ConfigPresent
+	return s.IncludePresent && s.ConfPresent && s.CMDirPresent && s.ConfigPresent && len(s.Legacy) == 0
 }
 
 // Check inspects env without changing anything.
@@ -89,6 +103,14 @@ func Check(env Env) (Status, error) {
 		return Status{}, err
 	}
 
+	for _, l := range env.Legacy {
+		if _, err := os.Lstat(l.Path); err == nil {
+			s.Legacy = append(s.Legacy, l.Path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return Status{}, err
+		}
+	}
+
 	return s, nil
 }
 
@@ -106,26 +128,51 @@ func Ensure(env Env) error {
 	if err := os.MkdirAll(cmDir(env.Home), 0o700); err != nil {
 		return err
 	}
-	return ensureConfig(env)
+	if err := ensureConfig(env.Config); err != nil {
+		return err
+	}
+	return moveLegacy(env)
 }
 
 // ensureConfig creates config.toml from the template — every option
-// commented out beside its default, the seeded theme live when there is
-// one. An existing file is never overwritten, whatever it contains.
-func ensureConfig(env Env) error {
-	if _, err := os.Lstat(env.Config); err == nil {
+// commented out beside its default. An existing file is never
+// overwritten, whatever it contains.
+func ensureConfig(path string) error {
+	if _, err := os.Lstat(path); err == nil {
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	data := config.Template()
-	if env.Theme != "" {
-		var err error
-		if data, err = config.Apply(data, "theme", env.Theme); err != nil {
+	return config.WriteAtomic(path, config.Template())
+}
+
+// moveLegacy carries each pre-config settings file that still exists
+// into config.toml and removes it (see Legacy). The write goes through
+// config.Set — the same lossless line rewrite the TUI uses — and the
+// file is removed only once the write is durable.
+func moveLegacy(env Env) error {
+	for _, l := range env.Legacy {
+		if _, err := os.Lstat(l.Path); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if l.Value != nil {
+			live, err := config.Live(env.Config)
+			if err != nil {
+				return err
+			}
+			if !live[l.Key] {
+				if err := config.Set(env.Config, l.Key, l.Value); err != nil {
+					return err
+				}
+			}
+		}
+		if err := os.Remove(l.Path); err != nil {
 			return err
 		}
 	}
-	return config.WriteAtomic(env.Config, data)
+	return nil
 }
 
 // ensureInclude puts IncludeLine at the top of ~/.ssh/config. The rewrite

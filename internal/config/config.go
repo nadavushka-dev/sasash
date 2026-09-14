@@ -40,6 +40,10 @@ var Keys = []Key{
 		Doc: `editor command for e, split on spaces (e.g. "code -w"); empty means $EDITOR, then vi`},
 	{Name: "show_hidden", Kind: toml.Bool, Default: `false`,
 		Doc: "list dotfiles in the local file picker of C (copy files); H there flips it and writes it back"},
+	{Name: "spawn_target", Kind: toml.String, Default: `"tab"`,
+		Doc: "where enter opens the ssh session inside herdr or tmux: pane, tab or workspace (o → spawn target writes it here)"},
+	{Name: "spawn_window", Kind: toml.String, Default: `""`,
+		Doc: "command that opens an OS window running ssh outside any multiplexer, {host} is the alias; unset means the platform default (Terminal on macOS, x-terminal-emulator or gnome-terminal on Linux, Windows Terminal under WSL), \"\" turns that off so enter hands off instead"},
 }
 
 // Header opens a freshly created config.toml.
@@ -52,6 +56,12 @@ type Config struct {
 	Theme      string
 	Editor     string
 	ShowHidden bool
+	// SpawnTarget is spawn_target; SpawnWindow is spawn_window, and
+	// SpawnWindowSet says whether the key is live — an empty live value
+	// means "no window command", unlike an absent key.
+	SpawnTarget    string
+	SpawnWindow    string
+	SpawnWindowSet bool
 }
 
 // Path is the file's location: $XDG_CONFIG_HOME/sasash/config.toml, or
@@ -111,9 +121,37 @@ func Load(path string) (Config, []string, error) {
 			cfg.Editor = l.val.Str
 		case "show_hidden":
 			cfg.ShowHidden = l.val.Bool
+		case "spawn_target":
+			cfg.SpawnTarget = l.val.Str
+		case "spawn_window":
+			cfg.SpawnWindow, cfg.SpawnWindowSet = l.val.Str, true
 		}
 	}
 	return cfg, warns, nil
+}
+
+// Live reports which keys the file at path sets with a live line — what
+// setup asks before moving an old settings file in, so a value the user
+// already wrote is never overwritten. A missing file sets nothing.
+func Live(path string) (map[string]bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	lines, err := parse(string(data))
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, l := range lines {
+		if l.key != "" {
+			live[l.key] = true
+		}
+	}
+	return live, nil
 }
 
 // Template is the file setup writes: the header, then each key's doc

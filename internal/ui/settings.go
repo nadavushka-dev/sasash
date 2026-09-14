@@ -19,7 +19,7 @@ type settingsPane int
 const (
 	settingsOff   settingsPane = iota
 	settingsMenu               // the entry list
-	settingsSetup              // create config file: what will be written
+	settingsSetup              // setup (create files): what will be written
 	settingsTheme              // the theme picker
 	settingsSpawn              // the spawn target picker
 )
@@ -36,8 +36,8 @@ const (
 )
 
 var entryLabels = [entryCount]string{
-	entryCreate:     "create config file",
-	entryEdit:       "edit config file",
+	entryCreate:     "setup (create files)",
+	entryEdit:       "edit connections file",
 	entryTheme:      "theme",
 	entrySpawn:      "spawn target",
 	entryConnection: "add new connection",
@@ -388,7 +388,7 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 			rows = append(rows, row)
 		}
 	case settingsSetup:
-		title = "create config file — sasash writes exactly:"
+		title = "setup — sasash writes exactly:"
 		cursor = s.cursor
 		type piece struct {
 			text    string
@@ -396,7 +396,7 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 		}
 		pieces := []piece{
 			{setup.IncludeLine + "  → top of " + m.tildePath("config"), func(st setup.Status) bool { return st.IncludePresent }},
-			{m.tildePath("config.d", "sasash.conf") + "  (one managed-header comment line)", func(st setup.Status) bool { return st.ConfPresent }},
+			{m.tildePath("config.d", "sasash.conf") + "  (connections file, one header line)", func(st setup.Status) bool { return st.ConfPresent }},
 			{m.tildePath("cm") + "/  (control sockets)", func(st setup.Status) bool { return st.CMDirPresent }},
 			{m.underHome(m.setupEnv.Config) + "  (every option commented out)", func(st setup.Status) bool { return st.ConfigPresent }},
 		}
@@ -411,6 +411,20 @@ func (m Model) settingsContent() (title string, rows []string, cursor int, foot 
 				}
 			}
 			rows = append(rows, glyph+" "+m.styles.PathAddr.Render(p.text)+" "+m.styles.PathExtra.Render(word))
+		}
+		// Old settings files still to move into config.toml (4.36): known
+		// only once the check lands, and gone once setup has run.
+		if s.status != nil && s.checkErr == nil {
+			for _, l := range m.setupEnv.Legacy {
+				if !slices.Contains(s.status.Legacy, l.Path) {
+					continue
+				}
+				verb := "move " + m.underHome(l.Path) + " → " + l.Key + " in config.toml"
+				if l.Value == nil {
+					verb = "remove " + m.underHome(l.Path) + "  (names nothing to keep)"
+				}
+				rows = append(rows, m.styles.StatusDown.Render("○")+" "+m.styles.PathAddr.Render(verb)+" "+m.styles.PathExtra.Render("pending"))
+			}
 		}
 		switch {
 		case s.checkErr != nil:

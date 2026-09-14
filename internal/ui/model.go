@@ -126,7 +126,7 @@ func (m Model) editorExec() *exec.Cmd {
 }
 
 // editorExecOn builds the same process on an explicit file (settings'
-// "edit config file" always means sasash.conf).
+// "edit connections file" always means sasash.conf).
 func editorExecOn(editor []string, path string) *exec.Cmd {
 	return execCommand(editorArgv(editor, path))
 }
@@ -363,10 +363,12 @@ type Config struct {
 	// Home is the user's home: where C's local picker opens and how
 	// paths under it are spelled.
 	Home string
-	// Setup is what the settings panel's "create config file" entry
+	// Setup is what the settings panel's "setup (create files)" entry
 	// inspects and writes (setup.Check/Ensure); a zero Home disables
-	// the entry.
-	Setup setup.Env
+	// the entry. SetupWarn is a startup notice about old settings files
+	// setup has yet to move (SASASH.4.36).
+	Setup     setup.Env
+	SetupWarn string
 	// ShowHidden is config.toml's show_hidden: whether C's local file
 	// picker lists dotfiles. SaveShowHidden persists the H toggle there
 	// (SASASH.4.36); nil leaves the toggle session-only.
@@ -543,7 +545,7 @@ func New(hosts []hostmodel.Host, prober probe.Prober, runner run.Runner, cfg Con
 			target:     cfg.Spawn.Target,
 			saveTarget: cfg.Spawn.SaveTarget,
 		},
-		notice: startupNotice(cfg.ConfigWarn, cfg.ActionsWarn),
+		notice: startupNotice(cfg.ConfigWarn, cfg.SetupWarn, cfg.ActionsWarn),
 		fwdIdx: -1,
 	}
 	idx, _ := ThemeIndex(cfg.Theme) // unknown or "" -> 0, the default
@@ -1080,7 +1082,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// read of ~/.ssh/config per save; an unreadable config is the
 			// setup pane's story, so its error is not repeated here.
 			if st, err := setup.Check(m.setupEnv); err == nil && !st.CMDirPresent {
-				m.notice += " — ~/.ssh/cm is missing: o → create config file, or `sasash setup`"
+				m.notice += " — ~/.ssh/cm is missing: o → setup, or `sasash setup`"
 			}
 		}
 		var reload tea.Cmd
@@ -1118,7 +1120,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				for i, w := range msg.warnings {
 					lines[i] = cleanLine(w.Error())
 				}
-				m = m.show("config: "+fmt.Sprint(len(msg.warnings))+" warnings", lines...)
+				m = m.show("ssh config: "+fmt.Sprint(len(msg.warnings))+" warnings", lines...)
 			}
 		}
 		before := pathList(m.hosts)

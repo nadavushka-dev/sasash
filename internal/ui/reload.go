@@ -30,7 +30,7 @@ func (m Model) reloadCmd(edited bool) tea.Cmd {
 // warningNotice folds load warnings into the one notice line: the first
 // verbatim, the rest as a count.
 func warningNotice(warnings []error) string {
-	s := "config: " + cleanLine(warnings[0].Error())
+	s := "ssh config: " + cleanLine(warnings[0].Error())
 	if n := len(warnings) - 1; n > 0 {
 		s += fmt.Sprintf(" (+%d more)", n)
 	}

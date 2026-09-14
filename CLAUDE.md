@@ -14,11 +14,12 @@ connection info lives.
 - Shell out to `/usr/bin/ssh`. **Never use `golang.org/x/crypto/ssh`** (it ignores
   ssh_config, ssh-agent, ProxyJump, ControlMaster — everything this design is built on).
 - No background daemon, no auto-reconnect, no ProxyCommand dialer, no secret storage.
-- sasash writes exactly one ssh config file (`~/.ssh/config.d/sasash.conf`) plus a single
+- sasash writes exactly one ssh config file — the **connections file**, `~/.ssh/config.d/sasash.conf` — plus a single
   one-time confirmed `Include` insertion into `~/.ssh/config`. Its own settings live in
   `~/.config/sasash/config.toml` (`internal/config`): TOML, every option registered in
   `config.Keys` and documented in `docs/configuration.md` (a test keeps them in step),
-  rewritten one line at a time, re-read first, atomically.
+  rewritten one line at a time, re-read first, atomically. Vocabulary: `sasash.conf` is the
+  *connections file* and `config.toml` the *config file* — in code comments, UI strings and docs alike.
 
 ## Stack and layout
 

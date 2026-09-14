@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
@@ -14,28 +15,31 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{"HERDR_ENV": "1", "HERDR_PANE_ID": "w24:p16"}
 	getenv := func(k string) string { return env[k] }
-	t.Run("detects, defaults, and persists beside the theme", func(t *testing.T) {
+	t.Run("detects, defaults, and persists the target in config.toml", func(t *testing.T) {
 		t.Parallel()
-		home := t.TempDir()
-		cfg := spawnConfig(home, getenv)
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		cfg := spawnConfig(cfgPath, config.Config{}, getenv)
 		if cfg.Mux != ui.MuxHerdr || cfg.HerdrPane != "w24:p16" || !cfg.HerdrEnv || cfg.Target != ui.DefaultSpawnTarget {
 			t.Errorf("spawnConfig() = mux %v, pane %q, herdrEnv %v, target %q", cfg.Mux, cfg.HerdrPane, cfg.HerdrEnv, cfg.Target)
 		}
 		// tmux started inside a herdr pane: tmux wins, the herdr signal stays.
 		both := func(k string) string { return map[string]string{"TMUX": "/tmp/tmux-501/x,1,0", "HERDR_ENV": "1"}[k] }
-		if c := spawnConfig(home, both); c.Mux != ui.MuxTmux || !c.HerdrEnv {
+		if c := spawnConfig(cfgPath, config.Config{}, both); c.Mux != ui.MuxTmux || !c.HerdrEnv {
 			t.Errorf("spawnConfig(tmux inside herdr) = mux %v, herdrEnv %v; want tmux, true", c.Mux, c.HerdrEnv)
 		}
-		if c := spawnConfig(home, func(string) string { return "" }); c.HerdrEnv || c.Emulator != ui.EmuNone {
+		if c := spawnConfig(cfgPath, config.Config{}, func(string) string { return "" }); c.HerdrEnv || c.Emulator != ui.EmuNone {
 			t.Errorf("spawnConfig(no env) = herdrEnv %v, emulator %v; want false, none", c.HerdrEnv, c.Emulator)
 		}
 		// The outer emulator rides along, for H's tab.
 		wez := func(k string) string { return map[string]string{"HERDR_ENV": "1", "WEZTERM_PANE": "3"}[k] }
-		if c := spawnConfig(home, wez); c.Emulator != ui.EmuWezTerm {
+		if c := spawnConfig(cfgPath, config.Config{}, wez); c.Emulator != ui.EmuWezTerm {
 			t.Errorf("spawnConfig(herdr in wezterm).Emulator = %v, want wezterm", c.Emulator)
 		}
 		if cfg.WindowTemplate != defaultWindowTemplate(runtime.GOOS, getenv) {
-			t.Errorf("WindowTemplate without a file = %q, want this OS's default", cfg.WindowTemplate)
+			t.Errorf("WindowTemplate without spawn_window = %q, want this OS's default", cfg.WindowTemplate)
+		}
+		if cfg.WindowPath != cfgPath {
+			t.Errorf("WindowPath = %q, want the config file %q", cfg.WindowPath, cfgPath)
 		}
 		if cfg.SaveTarget == nil {
 			t.Fatalf("SaveTarget = nil, want the persistence hook")
@@ -43,62 +47,47 @@ func TestSpawnConfig_Wiring(t *testing.T) {
 		if err := cfg.SaveTarget("workspace"); err != nil {
 			t.Fatalf("SaveTarget(workspace) = %v", err)
 		}
-		if got := spawnConfig(home, getenv).Target; got != "workspace" {
+		uc, warns, err := config.Load(cfgPath)
+		if err != nil || warns != nil {
+			t.Fatalf("Load() after SaveTarget = %+v, %v, %v", uc, warns, err)
+		}
+		if got := spawnConfig(cfgPath, uc, getenv).Target; got != "workspace" {
 			t.Errorf("Target after save = %q, want workspace", got)
 		}
-		if want := filepath.Join(home, ".local", "state", "sasash", "spawn-target"); spawnStatePath(home) != want {
-			t.Errorf("spawnStatePath() = %q, want %q", spawnStatePath(home), want)
-		}
 	})
-	t.Run("a stale target file falls back to the default", func(t *testing.T) {
+	t.Run("a stale target value falls back to the default", func(t *testing.T) {
 		t.Parallel()
-		home := t.TempDir()
-		if err := saveStateTo(spawnStatePath(home))("floating"); err != nil {
-			t.Fatal(err)
-		}
-		if got := spawnConfig(home, getenv).Target; got != ui.DefaultSpawnTarget {
+		if got := spawnConfig("/nonexistent/config.toml", config.Config{Present: true, SpawnTarget: "floating"}, getenv).Target; got != ui.DefaultSpawnTarget {
 			t.Errorf("Target = %q, want %q", got, ui.DefaultSpawnTarget)
 		}
 	})
-	t.Run("the window template file overrides the default", func(t *testing.T) {
+	t.Run("spawn_window overrides the default, and an empty one turns it off", func(t *testing.T) {
 		t.Parallel()
-		home := t.TempDir()
-		path := filepath.Join(home, ".config", "sasash", "spawn-window")
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
+		set := config.Config{Present: true, SpawnWindow: "kitty ssh {host}", SpawnWindowSet: true}
+		if got := spawnConfig("/nonexistent/config.toml", set, getenv).WindowTemplate; got != "kitty ssh {host}" {
+			t.Errorf("WindowTemplate = %q, want the config's line", got)
 		}
-		if err := os.WriteFile(path, []byte("kitty ssh {host}\n"), 0o644); err != nil {
-			t.Fatal(err)
+		off := config.Config{Present: true, SpawnWindowSet: true}
+		if got := spawnConfig("/nonexistent/config.toml", off, getenv).WindowTemplate; got != "" {
+			t.Errorf("WindowTemplate with a live empty spawn_window = %q, want none", got)
 		}
-		if got := spawnConfig(home, getenv).WindowTemplate; got != "kitty ssh {host}" {
-			t.Errorf("WindowTemplate = %q, want the file's line", got)
-		}
-		// Present but empty means no template: the handoff, not the default.
-		if err := os.WriteFile(path, []byte("\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if got := spawnConfig(home, getenv).WindowTemplate; got != "" {
-			t.Errorf("WindowTemplate with an empty file = %q, want none", got)
+		unset := config.Config{Present: true}
+		if got := spawnConfig("/nonexistent/config.toml", unset, getenv).WindowTemplate; got != defaultWindowTemplate(runtime.GOOS, getenv) {
+			t.Errorf("WindowTemplate with spawn_window unset = %q, want the platform default", got)
 		}
 	})
-	t.Run("XDG_CONFIG_HOME relocates the template", func(t *testing.T) {
+	t.Run("the legacy paths setup moves", func(t *testing.T) {
 		t.Parallel()
-		home, xdg := t.TempDir(), t.TempDir()
-		env := map[string]string{"XDG_CONFIG_HOME": xdg}
-		path := filepath.Join(xdg, "sasash", "spawn-window")
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
+		home := t.TempDir()
+		if got, want := spawnStatePath(home), filepath.Join(home, ".local", "state", "sasash", "spawn-target"); got != want {
+			t.Errorf("spawnStatePath() = %q, want %q", got, want)
 		}
-		if err := os.WriteFile(path, []byte("wezterm start -- ssh {host}"), 0o644); err != nil {
-			t.Fatal(err)
+		xdg := func(k string) string { return map[string]string{"XDG_CONFIG_HOME": "/x"}[k] }
+		if got, want := spawnWindowPath(home, xdg), filepath.Join("/x", "sasash", "spawn-window"); got != want {
+			t.Errorf("spawnWindowPath(xdg) = %q, want %q", got, want)
 		}
-		cfg := spawnConfig(home, func(k string) string { return env[k] })
-		if cfg.WindowTemplate != "wezterm start -- ssh {host}" {
-			t.Errorf("WindowTemplate = %q, want the XDG file's line", cfg.WindowTemplate)
-		}
-		// The failure hint names this file, not the default location.
-		if cfg.WindowPath != path {
-			t.Errorf("WindowPath = %q, want %q", cfg.WindowPath, path)
+		if got, want := spawnWindowPath(home, func(string) string { return "" }), filepath.Join(home, ".config", "sasash", "spawn-window"); got != want {
+			t.Errorf("spawnWindowPath() = %q, want %q", got, want)
 		}
 	})
 }

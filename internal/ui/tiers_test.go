@@ -218,7 +218,7 @@ func TestModel_Update_EditOpensTheDeclaringFile(t *testing.T) {
 			}
 		})
 	}
-	// Settings' "edit config file" means sasash.conf whatever is selected.
+	// Settings' "edit connections file" means sasash.conf whatever is selected.
 	m := warned(t)
 	s := press(t, m, "G", "o", "j")
 	next, cmd := s.Update(keyMsg("enter"))

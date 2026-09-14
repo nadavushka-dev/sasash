@@ -13,54 +13,38 @@ import (
 	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
-	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/tunnel"
 	"github.com/nadavushka-dev/sasash/internal/ui"
 )
 
 func TestResolveTheme(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	persisted := filepath.Join(dir, "theme")
-	if err := os.WriteFile(persisted, []byte("nord\n"), 0o644); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-	stale := filepath.Join(dir, "stale")
-	if err := os.WriteFile(stale, []byte("solarized\n"), 0o644); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-	missing := filepath.Join(dir, "none")
 	inFile := config.Config{Present: true, Theme: "mocha"}
 	badFile := config.Config{Present: true, Theme: "solarized"}
-	emptyFile := config.Config{Present: true}
 
 	tests := []struct {
 		name      string
 		flagVal   string
 		envVal    string
 		uc        config.Config
-		statePath string
 		want      string
 		wantWarn  string // substring; "" for no warning
 		wantFatal bool
 	}{
-		{name: "flag wins over everything", flagVal: "tokyonight", envVal: "nord", uc: inFile, statePath: persisted, want: "tokyonight"},
-		{name: "unknown flag is fatal", flagVal: "solarized", statePath: missing, wantWarn: "unknown theme", wantFatal: true},
-		{name: "env wins over config", envVal: "tokyonight", uc: inFile, statePath: persisted, want: "tokyonight"},
-		{name: "config wins over state", uc: inFile, statePath: persisted, want: "mocha"},
+		{name: "flag wins over everything", flagVal: "tokyonight", envVal: "nord", uc: inFile, want: "tokyonight"},
+		{name: "unknown flag is fatal", flagVal: "solarized", wantWarn: "unknown theme", wantFatal: true},
+		{name: "env wins over config", envVal: "tokyonight", uc: inFile, want: "tokyonight"},
+		{name: "config alone", uc: inFile, want: "mocha"},
 		{name: "bad env warns and falls back to config", envVal: "solarized", uc: inFile, want: "mocha", wantWarn: "SASASH_THEME"},
-		{name: "bad config warns and falls back to default", uc: badFile, statePath: missing, want: "", wantWarn: "config.toml: theme"},
+		{name: "bad config warns and falls back to default", uc: badFile, want: "", wantWarn: "config.toml: theme"},
 		{name: "bad env and bad config both named", envVal: "x", uc: badFile, want: "", wantWarn: "SASASH_THEME=\"x\" is not a theme (themes: gruvbox, mocha, tokyonight, nord); config.toml: theme \"solarized\""},
-		{name: "legacy state when config.toml is missing", uc: config.Config{}, statePath: persisted, want: "nord"},
-		{name: "legacy state when config.toml names no theme (a file H created)", uc: emptyFile, statePath: persisted, want: "nord"},
-		{name: "legacy state after a bad config theme", uc: badFile, statePath: persisted, want: "nord", wantWarn: "config.toml: theme"},
-		{name: "stale state degrades to default", statePath: stale, want: ""},
-		{name: "nothing set", statePath: missing, want: ""},
+		{name: "a present file with no theme is the default", uc: config.Config{Present: true}, want: ""},
+		{name: "nothing set", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, warn, fatal := resolveTheme(tt.flagVal, tt.envVal, tt.uc, tt.statePath)
+			got, warn, fatal := resolveTheme(tt.flagVal, tt.envVal, tt.uc)
 			if got != tt.want {
 				t.Errorf("resolveTheme() name = %q, want %q", got, tt.want)
 			}
@@ -103,7 +87,7 @@ func TestTuiConfig_SaveHooksWriteConfig(t *testing.T) {
 	t.Parallel()
 	home := wiredHome(t, "")
 	cfgPath := filepath.Join(home, ".config", "sasash", "config.toml")
-	cfg := tuiConfig(home, cfgPath, "", config.Config{}, "")
+	cfg := tuiConfig(home, cfgPath, "", config.Config{}, "", func(string) string { return "" })
 	if err := cfg.SaveTheme("nord"); err != nil {
 		t.Fatalf("SaveTheme() = %v", err)
 	}
@@ -121,8 +105,37 @@ func TestTuiConfig_SaveHooksWriteConfig(t *testing.T) {
 	if !strings.Contains(string(data), "# editor = \"\"\n") {
 		t.Errorf("config.toml lost the template's other lines:\n%s", data)
 	}
-	if cfg.Setup != (setup.Env{Home: home, Config: cfgPath}) {
-		t.Errorf("tuiConfig().Setup = %+v, want the home and config path with no seed", cfg.Setup)
+	if cfg.Setup.Home != home || cfg.Setup.Config != cfgPath || len(cfg.Setup.Legacy) != 3 {
+		t.Errorf("tuiConfig().Setup = %+v, want the home, the config path and the three legacy files", cfg.Setup)
+	}
+	if cfg.SetupWarn != "" {
+		t.Errorf("tuiConfig().SetupWarn = %q, want none without old files", cfg.SetupWarn)
+	}
+}
+
+func TestTuiConfig_SetupWarnNamesOldFiles(t *testing.T) {
+	t.Parallel()
+	home := wiredHome(t, "")
+	getenv := func(k string) string {
+		if k == "XDG_CONFIG_HOME" {
+			return filepath.Join(home, "xdg")
+		}
+		return ""
+	}
+	old := filepath.Join(home, "xdg", "sasash", "spawn-window")
+	if err := os.MkdirAll(filepath.Dir(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(old, []byte("kitty ssh {host}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := tuiConfig(home, filepath.Join(home, "xdg", "sasash", "config.toml"), "", config.Config{}, "", getenv)
+	if !strings.Contains(cfg.SetupWarn, "old settings files: ~/xdg/sasash/spawn-window") || !strings.Contains(cfg.SetupWarn, "o → setup") {
+		t.Errorf("tuiConfig().SetupWarn = %q, want the old file named and the way to move it", cfg.SetupWarn)
+	}
+	// Named, never read: the TUI's window template is still the platform default.
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("tuiConfig() touched the old file: %v", err)
 	}
 }
 
@@ -212,7 +225,7 @@ func TestTuiConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cfg := tuiConfig(tt.home, filepath.Join(tt.home, "config.toml"), "nord", config.Config{}, tt.editorEnv)
+			cfg := tuiConfig(tt.home, filepath.Join(tt.home, "config.toml"), "nord", config.Config{}, tt.editorEnv, func(string) string { return "" })
 			// SPEC §2: `e` edits sasash.conf, the one file sasash writes —
 			// never ~/.ssh/config.
 			if want := filepath.Join(tt.home, ".ssh", "config.d", "sasash.conf"); cfg.ConfPath != want {
@@ -263,7 +276,7 @@ func TestTuiConfig_LoadHostsReportsWarnings(t *testing.T) {
 	// A malformed hand-edit must come back as a warning, not vanish: under
 	// the alt screen the TUI notice is the only place it can surface.
 	home := wiredHome(t, "# @sasash path lan\nHost edge\n  HostName 192.0.2.9\n")
-	hosts, warnings, err := tuiConfig(home, filepath.Join(home, "config.toml"), "", config.Config{}, "vi").LoadHosts()
+	hosts, warnings, err := tuiConfig(home, filepath.Join(home, "config.toml"), "", config.Config{}, "vi", func(string) string { return "" }).LoadHosts()
 	if err != nil {
 		t.Fatalf("LoadHosts() = %v", err)
 	}
@@ -327,7 +340,7 @@ func TestTuiConfig_PathCycleHooks(t *testing.T) {
 	if err := os.WriteFile(root, []byte("# @sasash path office 203.0.113.9\nHost web\n  HostName 203.0.113.9\nInclude ~/.ssh/config.d/sasash.conf\n"), 0o600); err != nil {
 		t.Fatalf("write root: %v", err)
 	}
-	cfg := tuiConfig(home, filepath.Join(home, "config.toml"), "", config.Config{}, "vi")
+	cfg := tuiConfig(home, filepath.Join(home, "config.toml"), "", config.Config{}, "vi", func(string) string { return "" })
 	paths, hostName, ok := cfg.PathBlock("web")
 	if !ok || hostName != "192.0.2.10" {
 		t.Errorf("PathBlock(web) = %v, %q, %v; want the sasash.conf block", paths, hostName, ok)

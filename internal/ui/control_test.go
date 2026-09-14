@@ -253,7 +253,7 @@ func TestModel_Update_SaveSaysWhenTheControlDirIsMissing(t *testing.T) {
 		t.Parallel()
 		home := homeWith(t, true, true, false)
 		m := saveAs(t, ui.WithHome(ui.WithSaveHost(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 120, Height: 24}), save), home))
-		if view := m.View(); !strings.Contains(view, "saved edge — ~/.ssh/cm is missing: o → create config file") {
+		if view := m.View(); !strings.Contains(view, "saved edge — ~/.ssh/cm is missing: o → setup") {
 			t.Errorf("View() should say the control directory is missing:\n%s", view)
 		}
 	})

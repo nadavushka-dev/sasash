@@ -49,7 +49,7 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	uc, cfgWarns, cfgErr := config.Load(cfgPath)
 	// Flag validation precedes the terminal guard: a typoed -theme should
 	// report usage whether or not stdout is a tty.
-	theme, warn, fatal := resolveTheme(*themeFlag, os.Getenv("SASASH_THEME"), uc, themeStatePath(home))
+	theme, warn, fatal := resolveTheme(*themeFlag, os.Getenv("SASASH_THEME"), uc)
 	if warn != "" {
 		fmt.Fprintln(stderr, "sasash:", warn)
 	}
@@ -71,9 +71,9 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "sasash:", w)
 	}
-	cfg := tuiConfig(home, cfgPath, theme, uc, os.Getenv("EDITOR"))
+	cfg := tuiConfig(home, cfgPath, theme, uc, os.Getenv("EDITOR"), os.Getenv)
 	cfg.ConfigWarn = configWarn(cfgErr, cfgWarns)
-	cfg.Spawn = spawnConfig(home, os.Getenv)
+	cfg.Spawn = spawnConfig(cfgPath, uc, os.Getenv)
 	m := ui.New(hosts, probe.Prober{}, run.OS{}, cfg)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithOutput(out))
 	if _, err := p.Run(); err != nil {
@@ -84,15 +84,12 @@ func cmdTUI(args []string, stdout, stderr io.Writer) int {
 }
 
 // resolveTheme picks the theme name: flag > SASASH_THEME > config.toml >
-// the pre-config state file > default. The state file is read whenever
-// nothing above it names a theme (SASASH.4.36): a config.toml that a
-// first H created has the theme still commented out, and the choice `t`
-// persisted before must survive that — setup and `t` write the theme
-// live, after which the state file is never consulted. A flag naming an
-// unknown theme is fatal (typos should fail loudly); a bad env, config
-// or state value degrades to the next source with a warning, so a stale
+// default — config.toml is the one persisted source (SASASH.4.36; the
+// pre-config state file is setup's to move, never read here). A flag
+// naming an unknown theme is fatal (typos should fail loudly); a bad env
+// or config value degrades to the next source with a warning, so a bad
 // file can never keep the TUI from starting.
-func resolveTheme(flagVal, envVal string, uc config.Config, statePath string) (name, warn string, fatal bool) {
+func resolveTheme(flagVal, envVal string, uc config.Config) (name, warn string, fatal bool) {
 	if flagVal != "" {
 		if _, ok := ui.ThemeIndex(flagVal); !ok {
 			return "", fmt.Sprintf("unknown theme %q (themes: %s)", flagVal, themeNames()), true
@@ -111,11 +108,6 @@ func resolveTheme(flagVal, envVal string, uc config.Config, statePath string) (n
 			return uc.Theme, strings.Join(warns, "; "), false
 		}
 		warns = append(warns, fmt.Sprintf("config.toml: theme %q is not a theme (themes: %s)", uc.Theme, themeNames()))
-	}
-	if v := readState(statePath); v != "" {
-		if _, ok := ui.ThemeIndex(v); ok {
-			return v, strings.Join(warns, "; "), false
-		}
 	}
 	if len(warns) > 0 {
 		warn = strings.Join(warns, "; ") + "; using the default"
@@ -138,7 +130,7 @@ func configWarn(err error, warns []string) string {
 // is the ONE ssh config file sasash writes (SPEC §2) — never
 // ~/.ssh/config; its own settings go to config.toml at cfgPath, one
 // line at a time (SASASH.4.36).
-func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string) ui.Config {
+func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string, getenv func(string) string) ui.Config {
 	root := sshConfigPath(home)
 	confPath := filepath.Join(home, ".ssh", "config.d", "sasash.conf")
 	// One state dir for the engine, the stats store and the popup that
@@ -146,14 +138,24 @@ func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string) 
 	sd := stateDir(home)
 	store := stats.Store{Dir: sd}
 	editor, editorHint := resolveEditor(uc.Editor, editorEnv)
-	env := setup.Env{Home: home, Config: cfgPath, Theme: legacyTheme(home)}
+	env := setup.Env{Home: home, Config: cfgPath, Legacy: legacyFiles(home, getenv)}
 	// An edit ssh cannot see (the Include is not in ~/.ssh/config) must
 	// come back with an explanation, not a silently unchanged list. A
 	// missing sasash.conf alone is fine: ssh ignores an Include of a
-	// missing file, and the editor creates it.
-	editorWarn := ""
-	if st, err := setup.Check(env); err == nil && !st.IncludePresent {
-		editorWarn = "sasash.conf is not wired into ssh yet — o → create config file, or `sasash setup`"
+	// missing file, and the editor creates it. Old settings files are
+	// setup's to move: they are named here, never read (SASASH.4.36).
+	editorWarn, setupWarn := "", ""
+	if st, err := setup.Check(env); err == nil {
+		if !st.IncludePresent {
+			editorWarn = "sasash.conf is not wired into ssh yet — o → setup, or `sasash setup`"
+		}
+		if len(st.Legacy) > 0 {
+			names := make([]string, len(st.Legacy))
+			for i, p := range st.Legacy {
+				names[i] = tilde(home, p)
+			}
+			setupWarn = "old settings files: " + strings.Join(names, ", ") + " — o → setup moves them into config.toml"
+		}
 	}
 	cfg := ui.Config{
 		Theme:          theme,
@@ -161,6 +163,7 @@ func tuiConfig(home, cfgPath, theme string, uc config.Config, editorEnv string) 
 		ShowHidden:     uc.ShowHidden,
 		SaveShowHidden: func(v bool) error { return config.Set(cfgPath, "show_hidden", v) },
 		Setup:          env,
+		SetupWarn:      setupWarn,
 		SaveHost:       saveHostTo(confPath),
 		Editor:         editor,
 		EditorHint:     editorHint,
@@ -363,22 +366,20 @@ func enableControl(confPath string) func(alias string) ([]string, error) {
 }
 
 // spawnConfig wires enter's spawn (SASASH.4.10): the multiplexer from
-// the environment, the OS-window template from ~/.config/sasash/
-// spawn-window (one line, actions.toml placeholders; the macOS default
-// opens Terminal), and the persisted target beside the theme state.
-func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
+// the environment, the OS-window template and the target from
+// config.toml (SASASH.4.36: spawn_window, one line with actions.toml
+// placeholders; spawn_target, written back by the settings picker).
+func spawnConfig(cfgPath string, uc config.Config, getenv func(string) string) ui.SpawnConfig {
 	mux, pane := ui.DetectMux(getenv)
-	statePath := spawnStatePath(home)
-	target := readState(statePath)
+	target := uc.SpawnTarget
 	if _, ok := ui.SpawnTargetIndex(target); !ok {
-		target = ui.DefaultSpawnTarget // a stale file never keeps enter from working
+		target = ui.DefaultSpawnTarget // a stale value never keeps enter from working
 	}
-	// No file: this OS's default. A file, even empty: exactly what it
-	// says — an empty one is how a macOS user turns the Terminal default
-	// off and gets the handoff instead.
-	windowPath := spawnWindowPath(home, getenv)
-	tmpl, present := readStateFound(windowPath)
-	if !present {
+	// No spawn_window line: this OS's default. A live line, even empty:
+	// exactly what it says — "" is how a macOS user turns the Terminal
+	// default off and gets the handoff instead.
+	tmpl := uc.SpawnWindow
+	if !uc.SpawnWindowSet {
 		tmpl = defaultWindowTemplate(runtime.GOOS, getenv)
 	}
 	return ui.SpawnConfig{
@@ -387,9 +388,9 @@ func spawnConfig(home string, getenv func(string) string) ui.SpawnConfig {
 		HerdrEnv:       getenv("HERDR_ENV") != "",
 		Emulator:       ui.DetectEmulator(getenv),
 		WindowTemplate: tmpl,
-		WindowPath:     windowPath,
+		WindowPath:     cfgPath,
 		Target:         target,
-		SaveTarget:     saveStateTo(statePath),
+		SaveTarget:     func(v string) error { return config.Set(cfgPath, "spawn_target", v) },
 	}
 }
 
@@ -444,12 +445,14 @@ func onPath(path, name string) bool {
 	return false
 }
 
-// spawnStatePath persists the spawn target beside the theme.
+// spawnStatePath is where the settings picker persisted the spawn
+// target before config.toml (SASASH.4.36): setup moves it.
 func spawnStatePath(home string) string {
 	return filepath.Join(filepath.Dir(themeStatePath(home)), "spawn-target")
 }
 
-// spawnWindowPath is the user's OS-window template (config, not state).
+// spawnWindowPath is where the OS-window template lived before
+// config.toml's spawn_window (SASASH.4.36): setup moves it.
 func spawnWindowPath(home string, getenv func(string) string) string {
 	if x := getenv("XDG_CONFIG_HOME"); x != "" {
 		return filepath.Join(x, "sasash", "spawn-window")
@@ -458,8 +461,7 @@ func spawnWindowPath(home string, getenv func(string) string) string {
 }
 
 // themeStatePath is where the `t` key persisted the choice before
-// config.toml (SASASH.4.36): read only while config.toml does not exist,
-// and carried into it by setup. The spawn target still lives beside it.
+// config.toml (SASASH.4.36): setup moves it, the TUI never reads it.
 func themeStatePath(home string) string {
 	if x := os.Getenv("XDG_STATE_HOME"); x != "" {
 		return filepath.Join(x, "sasash", "theme")
@@ -467,8 +469,8 @@ func themeStatePath(home string) string {
 	return filepath.Join(home, ".local", "state", "sasash", "theme")
 }
 
-// readState returns a one-line state file's content, or "" when there is
-// none (the theme name, the spawn target, the window template).
+// readState returns a one-line legacy settings file's content, or ""
+// when there is none (the theme name, the spawn target).
 func readState(path string) string {
 	v, _ := readStateFound(path)
 	return v
@@ -482,16 +484,6 @@ func readStateFound(path string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(string(b)), true
-}
-
-// saveStateTo writes one line to a state file, creating its directory.
-func saveStateTo(path string) func(string) error {
-	return func(name string) error {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(path, []byte(name+"\n"), 0o644)
-	}
 }
 
 func themeNames() string {

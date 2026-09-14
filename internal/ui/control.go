@@ -97,7 +97,7 @@ func (m Model) offerControl(alias, label string, reason []string) Model {
 		return say("", "the block "+what+", which keeps a master from being reached — sasash never overrides a hand-written value: change it by hand (e)")
 	}
 	if len(c.Missing) == 0 {
-		return say("", "the block already carries the ControlMaster trio — check ~/.ssh/cm exists (o → create config file)")
+		return say("", "the block already carries the ControlMaster trio — check ~/.ssh/cm exists (o → setup)")
 	}
 	lines = append(lines, "", "enable master reuse for "+alias+": sasash writes under its Host line in ~/.ssh/config.d/sasash.conf")
 	for _, l := range c.Missing {

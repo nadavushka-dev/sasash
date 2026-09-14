@@ -92,7 +92,7 @@ func TunnelStatus(host string, st tunnel.HostStatus, err error) tea.Msg {
 }
 
 // Editing reports the file the running editor handoff was opened on;
-// SettingsEditExec is the process settings' "edit config file" builds;
+// SettingsEditExec is the process settings' "edit connections file" builds;
 // AmbientRows lists the rows the list currently holds below the tier
 // line (styled dim), in order.
 func Editing(m Model) string             { return m.editing }
@@ -369,6 +369,12 @@ func WithSaveForwardSet(m Model, f func(alias, name string, specs []string) erro
 func WithHome(m Model, home string) Model {
 	m.home = home
 	m.setupEnv = setup.Env{Home: home, Config: filepath.Join(home, ".config", "sasash", "config.toml")}
+	return m
+}
+
+// WithSetupEnv gives the settings panel's setup entry its environment.
+func WithSetupEnv(m Model, env setup.Env) Model {
+	m.setupEnv = env
 	return m
 }
 

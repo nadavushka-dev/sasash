@@ -3,6 +3,7 @@ package setup_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -473,10 +474,10 @@ func TestCheck_States(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Check(%q) failed: %v", home, err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Check() = %+v, want %+v", got, tt.want)
 			}
-			if gotDone, wantDone := got.Done(), tt.want == (setup.Status{IncludePresent: true, ConfPresent: true, CMDirPresent: true, ConfigPresent: true}); gotDone != wantDone {
+			if gotDone, wantDone := got.Done(), reflect.DeepEqual(tt.want, setup.Status{IncludePresent: true, ConfPresent: true, CMDirPresent: true, ConfigPresent: true}); gotDone != wantDone {
 				t.Errorf("Done() = %v, want %v", gotDone, wantDone)
 			}
 		})
@@ -487,28 +488,19 @@ func TestEnsure_ConfigToml(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		theme    string
 		existing string // pre-existing config.toml content, "" for none
 		want     string
 	}{
 		{name: "fresh file is the commented template", want: config.Template()},
-		{name: "seeded theme is the one live line", theme: "nord",
-			want: strings.Replace(config.Template(), "# theme = \"gruvbox\"\n", "theme = \"nord\"\n", 1)},
-		{name: "existing file untouched even with a seed", theme: "nord", existing: "# mine\n", want: "# mine\n"},
+		{name: "existing file untouched", existing: "# mine\n", want: "# mine\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			home := t.TempDir()
 			e := env(home)
-			e.Theme = tt.theme
 			if tt.existing != "" {
-				if err := os.MkdirAll(filepath.Dir(e.Config), 0o755); err != nil {
-					t.Fatalf("MkdirAll: %v", err)
-				}
-				if err := os.WriteFile(e.Config, []byte(tt.existing), 0o644); err != nil {
-					t.Fatalf("WriteFile: %v", err)
-				}
+				writeFile(t, e.Config, tt.existing)
 			}
 			before, err := setup.Check(e)
 			if err != nil {
@@ -535,27 +527,118 @@ func TestEnsure_ConfigToml(t *testing.T) {
 	}
 }
 
-func TestEnsure_ConfigTomlErrors(t *testing.T) {
-	t.Parallel()
-	home := t.TempDir()
-	e := env(home)
-	// A file where the config directory should be blocks the write.
-	if err := os.MkdirAll(filepath.Dir(filepath.Dir(e.Config)), 0o755); err != nil {
+// writeFile creates path with content, directories included.
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Dir(e.Config), []byte("x"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
 	}
-	if err := setup.Ensure(e); err == nil {
-		t.Errorf("Ensure() with a file at the config dir = nil, want an error")
+}
+
+func TestEnsure_MovesLegacy(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		value    any    // the Legacy entry's Value; nil means nothing to keep
+		existing string // config.toml before, "" for none
+		wantLine string // a line config.toml must hold afterwards
+		notLine  string // a line it must not hold
+	}{
+		{name: "a theme is written live", value: "nord", wantLine: "theme = \"nord\"\n", notLine: "# theme ="},
+		{name: "nothing to keep is removed without a write", value: nil, wantLine: "# theme = \"gruvbox\"\n", notLine: "\ntheme ="},
+		{name: "a live line the user set wins", value: "nord", existing: "theme = \"mocha\"\n", wantLine: "theme = \"mocha\"\n", notLine: "nord"},
+		{name: "a commented line is revived", value: "nord", existing: config.Template(), wantLine: "theme = \"nord\"\n", notLine: "# theme ="},
 	}
-	if _, err := setup.Check(e); err == nil {
-		t.Errorf("Check() with a file at the config dir = nil, want an error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			home := t.TempDir()
+			e := env(home)
+			old := filepath.Join(home, "state", "theme")
+			writeFile(t, old, "whatever\n")
+			e.Legacy = []setup.Legacy{{Path: old, Key: "theme", Value: tt.value}, {Path: filepath.Join(home, "state", "absent"), Key: "editor", Value: "vi"}}
+			if tt.existing != "" {
+				writeFile(t, e.Config, tt.existing)
+			}
+			before, err := setup.Check(e)
+			if err != nil {
+				t.Fatalf("Check() before: %v", err)
+			}
+			if !reflect.DeepEqual(before.Legacy, []string{old}) || before.Done() {
+				t.Errorf("Check() before = %+v; want the one present legacy file listed and not Done", before)
+			}
+			if err := setup.Ensure(e); err != nil {
+				t.Fatalf("Ensure() = %v", err)
+			}
+			data, err := os.ReadFile(e.Config)
+			if err != nil {
+				t.Fatalf("ReadFile(config.toml): %v", err)
+			}
+			if !strings.Contains(string(data), tt.wantLine) || strings.Contains(string(data), tt.notLine) {
+				t.Errorf("config.toml =\n%s\nwant %q and not %q", data, tt.wantLine, tt.notLine)
+			}
+			if _, err := os.Lstat(old); !os.IsNotExist(err) {
+				t.Errorf("legacy file still exists after Ensure (err %v)", err)
+			}
+			after, err := setup.Check(e)
+			if err != nil || len(after.Legacy) != 0 || !after.Done() {
+				t.Errorf("Check() after = %+v, %v; want no legacy and Done", after, err)
+			}
+			// A second run has nothing to move and changes nothing.
+			if err := setup.Ensure(e); err != nil {
+				t.Fatalf("second Ensure() = %v", err)
+			}
+			if again, _ := os.ReadFile(e.Config); string(again) != string(data) {
+				t.Errorf("second Ensure() changed config.toml:\n%s", again)
+			}
+		})
 	}
-	e.Theme = "nord"
-	e.Config = filepath.Join(home, "ok", "config.toml")
-	// The seed goes through config.Apply: a value it refuses is an error, not a bad file.
-	if err := setup.Ensure(setup.Env{Home: home, Config: e.Config, Theme: "nord"}); err != nil {
-		t.Errorf("Ensure() seeded = %v, want nil", err)
-	}
+}
+
+func TestEnsure_ConfigTomlErrors(t *testing.T) {
+	t.Parallel()
+	t.Run("a file at the config dir blocks the write", func(t *testing.T) {
+		t.Parallel()
+		home := t.TempDir()
+		e := env(home)
+		writeFile(t, filepath.Dir(e.Config), "x")
+		if err := setup.Ensure(e); err == nil {
+			t.Errorf("Ensure() = nil, want an error")
+		}
+		if _, err := setup.Check(e); err == nil {
+			t.Errorf("Check() = nil, want an error")
+		}
+	})
+	t.Run("a legacy path under a file is a check error", func(t *testing.T) {
+		t.Parallel()
+		home := t.TempDir()
+		e := env(home)
+		blocker := filepath.Join(home, "blocker")
+		writeFile(t, blocker, "x")
+		e.Legacy = []setup.Legacy{{Path: filepath.Join(blocker, "theme"), Key: "theme", Value: "nord"}}
+		if _, err := setup.Check(e); err == nil {
+			t.Errorf("Check() = nil, want the lstat error")
+		}
+		if err := setup.Ensure(e); err == nil {
+			t.Errorf("Ensure() = nil, want the lstat error")
+		}
+	})
+	t.Run("a config.toml the parser rejects keeps the legacy file", func(t *testing.T) {
+		t.Parallel()
+		home := t.TempDir()
+		e := env(home)
+		writeFile(t, e.Config, "[ui]\n")
+		old := filepath.Join(home, "state", "theme")
+		writeFile(t, old, "nord\n")
+		e.Legacy = []setup.Legacy{{Path: old, Key: "theme", Value: "nord"}}
+		if err := setup.Ensure(e); err == nil {
+			t.Fatalf("Ensure() = nil, want the parse error")
+		}
+		if _, err := os.Lstat(old); err != nil {
+			t.Errorf("legacy file removed although its value was not written: %v", err)
+		}
+	})
 }

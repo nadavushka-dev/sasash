@@ -21,7 +21,7 @@ is all. See [`SPEC.md`](SPEC.md) for the design of record.
   SSH session (it reads your `ssh_config`, `ssh-agent`, `ProxyJump`, and `ControlMaster`,
   because it *is* `/usr/bin/ssh`).
 - **Path switching** — when a host has several addresses (LAN / VPN / tailscale…), `p` picks
-  which one is active; sasash rewrites a single managed config file so every downstream tool
+  which one is active; sasash rewrites a single managed connections file so every downstream tool
   (`ssh`, `scp`, `git`, VS Code Remote…) follows.
 - **Port-forwards that persist** — declare a forward set once; `space` brings a forward up or
   down (one detached `ssh -N -L` process per port), `s` toggles the whole set. State is read
@@ -63,7 +63,7 @@ notarized yet; a curl|sh download never carries the macOS quarantine bit.
 ## Usage
 
 Run `sasash` (or `sasash tui`) to open the browser. First run, `sasash setup` writes exactly
-one ssh config file — `~/.ssh/config.d/sasash.conf` — and adds a single confirmed `Include`
+one connections file — `~/.ssh/config.d/sasash.conf`, an `ssh_config` fragment — and adds a single confirmed `Include`
 line to `~/.ssh/config`. sasash edits only that one file, atomically, and re-reads before
 every write, so your hand-edits always win.
 
@@ -76,7 +76,7 @@ See [docs/configuration.md](docs/configuration.md).
 | | |
 |---|---|
 | **Navigate** | `j`/`k` move · `g`/`G` first/last · `ctrl+d`/`ctrl+u` half-page · `/` filter · `l`/`h` switch panes |
-| **On a host** | `enter` ssh · `S` ssh here (handoff) · `H` herdr session beside · `p` pick path · `C` copy files (scp) · `y` yank address · `c` yank command · `a` ad-hoc ssh · `R` rename · `e` edit config |
+| **On a host** | `enter` ssh · `S` ssh here (handoff) · `H` herdr session beside · `p` pick path · `C` copy files (scp) · `y` yank address · `c` yank command · `a` ad-hoc ssh · `R` rename · `e` edit connections |
 | **Tunnels** (`l`) | `space` toggle a forward · `s` toggle the set · `+` add a forward · `n` declare a new set · `E` edit · `x` stop one · `X` delete the set · `r` restart master |
 | **Elsewhere** | `.` show other `ssh_config` entries · `$` show the command line · `t` theme · `o` settings · `?` keys · `q` quit |
 
@@ -103,7 +103,7 @@ sasash **shells out to `/usr/bin/ssh`** — it never uses `golang.org/x/crypto/s
 ignores `ssh_config`, `ssh-agent`, `ProxyJump`, and `ControlMaster`, i.e. everything this
 design rides on. It constructs argv and execs. There is **no background daemon**, no
 auto-reconnect (a dead tunnel goes red; you press `r`), no `ProxyCommand` dialer, and **no
-secret storage** — auth is `ssh-agent`'s job. sasash writes exactly one config file plus the
+secret storage** — auth is `ssh-agent`'s job. sasash writes exactly one connections file plus the
 one-time `Include` insertion, both atomically.
 
 Runs natively on macOS and Linux; on Windows, use it inside WSL — the Windows OpenSSH port

@@ -299,7 +299,7 @@ func TestModel_Update_EditorReloadShowsWarnings(t *testing.T) {
 		want     string
 	}{
 		{name: "one warning verbatim", warnings: []error{errors.New(`host "web": @sasash path: missing addr (line 3)`)}, want: `config: host "web": @sasash path: missing addr (line 3)`},
-		{name: "more are counted", warnings: []error{errors.New("first"), errors.New("second"), errors.New("third")}, want: "config: first (+2 more)"},
+		{name: "more are counted", warnings: []error{errors.New("first"), errors.New("second"), errors.New("third")}, want: "ssh config: first (+2 more)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -324,10 +324,10 @@ func TestModel_View_HelpListsEditAndTheme(t *testing.T) {
 	// omission): e and t are listed there and nowhere on the whisper
 	// footer — and both keys still work.
 	m := update(t, sized(t, testHosts(2)), tea.WindowSizeMsg{Width: 120, Height: 60})
-	if view := m.View(); strings.Contains(view, "edit config") || strings.Contains(view, "theme") {
+	if view := m.View(); strings.Contains(view, "edit connections") || strings.Contains(view, "theme") {
 		t.Errorf("View() whisper footer should name no action key:\n%s", view)
 	}
-	if view := press(t, m, "?").View(); !strings.Contains(view, "edit config") || !strings.Contains(view, "theme") {
+	if view := press(t, m, "?").View(); !strings.Contains(view, "edit connections") || !strings.Contains(view, "theme") {
 		t.Errorf("View() keys panel should list e and t:\n%s", view)
 	}
 	if _, cmd := ui.WithEditor(m, []string{"vi"}, "", "/tmp/x/sasash.conf").Update(keyMsg("e")); cmd == nil {

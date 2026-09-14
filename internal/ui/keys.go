@@ -65,7 +65,7 @@ func DefaultKeyMap() KeyMap {
 		CopyCmd:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "yank command")),
 		Adhoc:       key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "ad-hoc ssh")),
 		Copy:        key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "copy files (scp)")),
-		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
+		Edit:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit connections")),
 		FocusRight:  key.NewBinding(key.WithKeys("l", "tab"), key.WithHelp("l/tab", "paths / tunnels pane")),
 		FocusLeft:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "host list")),
 		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle forward")),

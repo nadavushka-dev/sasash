@@ -60,7 +60,7 @@ func TestModel_View_SettingsIsACenteredBox(t *testing.T) {
 		t.Errorf("box not centered vertically: %d above, %d below:\n%s", above, below, view)
 	}
 	inner := strings.Join(boxLines(view), "\n")
-	for _, want := range []string{" settings", "› create config file", "add new tunnel"} {
+	for _, want := range []string{" settings", "› setup (create files)", "add new tunnel"} {
 		if !strings.Contains(inner, want) {
 			t.Errorf("box rows missing %q:\n%s", want, view)
 		}
@@ -81,16 +81,16 @@ func TestModel_View_SettingsSpellsTheConfigUnderHome(t *testing.T) {
 	// The edit row's path is shown under ~ when it is under home, so the
 	// box stays as wide as its words; another path is shown whole.
 	m := ui.WithHome(ui.WithEditor(wide(t), []string{"vi"}, "", "/home/u/.ssh/config.d/sasash.conf"), "/home/u")
-	if view := press(t, m, "o").View(); !strings.Contains(view, "edit config file  ~/.ssh/config.d/sasash.conf") || strings.Contains(view, "/home/u/") {
+	if view := press(t, m, "o").View(); !strings.Contains(view, "edit connections file  ~/.ssh/config.d/sasash.conf") || strings.Contains(view, "/home/u/") {
 		t.Errorf("View() should spell the config path under ~:\n%s", view)
 	}
 	other := ui.WithHome(ui.WithEditor(wide(t), []string{"vi"}, "", "/etc/ssh/sasash.conf"), "/home/u")
-	if view := press(t, other, "o").View(); !strings.Contains(view, "edit config file  /etc/ssh/sasash.conf") {
+	if view := press(t, other, "o").View(); !strings.Contains(view, "edit connections file  /etc/ssh/sasash.conf") {
 		t.Errorf("View() should show a path outside home whole:\n%s", view)
 	}
 	// No home known: nothing is under it.
 	none := ui.WithHome(ui.WithEditor(wide(t), []string{"vi"}, "", "/srv/sasash.conf"), "")
-	if view := press(t, none, "o").View(); !strings.Contains(view, "edit config file  /srv/sasash.conf") {
+	if view := press(t, none, "o").View(); !strings.Contains(view, "edit connections file  /srv/sasash.conf") {
 		t.Errorf("View() without a home should show the path whole:\n%s", view)
 	}
 }
@@ -128,7 +128,7 @@ func TestModel_View_SettingsBoxFitsATinyFrame(t *testing.T) {
 			if got := strings.Contains(view, "╭"); got != tt.border || (tt.border && !strings.Contains(view, "╰")) {
 				t.Errorf("View() bordered = %v, want %v (bottom kept %v):\n%s", got, tt.border, strings.Contains(view, "╰"), view)
 			}
-			if !strings.Contains(view, "settings") || !strings.Contains(view, "› create config file") || !strings.Contains(view, "of 6 · j/k scroll") {
+			if !strings.Contains(view, "settings") || !strings.Contains(view, "› setup (create files)") || !strings.Contains(view, "of 6 · j/k scroll") {
 				t.Errorf("View() should show the title, the first row and the scroll hint:\n%s", view)
 			}
 			// Every entry is reachable.
@@ -161,7 +161,7 @@ func TestModel_View_SettingsSetupRowsReachableOnAShortFrame(t *testing.T) {
 	short := ui.WithHome(update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 10}), homeWith(t, false, false, false))
 	next, check := press(t, short, "o").Update(keyMsg("enter"))
 	short = update(t, next.(ui.Model), check())
-	pieces := []string{"Include ~/.ssh/config.d/sasash.conf", "~/.ssh/config.d/sasash.conf  (one", "~/.ssh/cm/", "config.toml"}
+	pieces := []string{"Include ~/.ssh/config.d/sasash.conf", "~/.ssh/config.d/sasash.conf  (connections", "~/.ssh/cm/", "config.toml"}
 	for i, want := range pieces {
 		view := short.View()
 		if !strings.Contains(view, want) || !strings.Contains(view, "enter writes") || !strings.Contains(view, "of 4 · j/k scroll") {
@@ -192,20 +192,20 @@ func TestModel_View_SettingsSetupRowsReachableOnAShortFrame(t *testing.T) {
 
 func TestModel_Update_SettingsSearch(t *testing.T) {
 	t.Parallel()
-	all := []string{"create config file", "edit config file", "theme", "spawn target", "add new connection", "add new tunnel"}
+	all := []string{"setup (create files)", "edit connections file", "theme", "spawn target", "add new connection", "add new tunnel"}
 	t.Run("typing narrows and highlights the first match", func(t *testing.T) {
 		t.Parallel()
 		m := press(t, wide(t), "o", "/", "t", "h")
 		view := m.View()
-		if !ui.SettingsOpen(m) || !strings.Contains(view, "› theme") || strings.Contains(view, "create config file") || !strings.Contains(view, "/th▏") {
+		if !ui.SettingsOpen(m) || !strings.Contains(view, "› theme") || strings.Contains(view, "setup (create files)") || !strings.Contains(view, "/th▏") {
 			t.Errorf("View() after /th should show only theme, highlighted, with the query:\n%s", view)
 		}
 	})
 	t.Run("the scroll hint names the arrows while typing", func(t *testing.T) {
 		t.Parallel()
-		// A two-row box with five matches: j/k are text, the arrows move.
+		// A two-row box with four matches: j/k are text, the arrows move.
 		m := press(t, update(t, probedModel(t, fakerun.New()), tea.WindowSizeMsg{Width: 80, Height: 11}), "o", "/", "n")
-		if view := m.View(); !strings.Contains(view, "of 5 · ↑/↓ scroll") || strings.Contains(view, "j/k scroll") {
+		if view := m.View(); !strings.Contains(view, "of 4 · ↑/↓ scroll") || strings.Contains(view, "j/k scroll") {
 			t.Errorf("View() while typing should name the arrows in the hint:\n%s", view)
 		}
 	})
@@ -293,7 +293,7 @@ func TestModel_Update_SettingsSearch(t *testing.T) {
 	t.Run("no match: enter is inert, esc recovers", func(t *testing.T) {
 		t.Parallel()
 		m := press(t, wide(t), "o", "/", "z", "z")
-		if view := m.View(); !strings.Contains(view, "no match for /zz — esc clears") || strings.Contains(view, "create config file") {
+		if view := m.View(); !strings.Contains(view, "no match for /zz — esc clears") || strings.Contains(view, "setup (create files)") {
 			t.Fatalf("View() after /zz should say no match:\n%s", view)
 		}
 		next, cmd := m.Update(keyMsg("enter"))
@@ -301,7 +301,7 @@ func TestModel_Update_SettingsSearch(t *testing.T) {
 		if cmd != nil || !ui.SettingsOpen(m) || !strings.Contains(m.View(), "no match for /zz") {
 			t.Errorf("enter with no match should do nothing: cmd %v, open %v:\n%s", cmd != nil, ui.SettingsOpen(m), m.View())
 		}
-		if view := press(t, m, "esc").View(); !strings.Contains(view, "› create config file") || !strings.Contains(view, "add new tunnel") {
+		if view := press(t, m, "esc").View(); !strings.Contains(view, "› setup (create files)") || !strings.Contains(view, "add new tunnel") {
 			t.Errorf("View() after esc should show the full menu:\n%s", view)
 		}
 	})

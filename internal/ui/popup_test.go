@@ -127,7 +127,7 @@ func TestModel_View_PopupScrolls(t *testing.T) {
 	next, reload := m.Update(ui.EditorExit(nil))
 	next, _ = next.(ui.Model).Update(reload())
 	m = next.(ui.Model)
-	if !ui.PopupOpen(m) || ui.PopupTitle(m) != "config: 40 warnings" {
+	if !ui.PopupOpen(m) || ui.PopupTitle(m) != "ssh config: 40 warnings" {
 		t.Fatalf("40 warnings should open the popup: open %v, title %q", ui.PopupOpen(m), ui.PopupTitle(m))
 	}
 	view := m.View()
@@ -201,7 +201,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		next, reload := m.Update(ui.EditorExit(nil))
 		next, _ = next.(ui.Model).Update(reload())
 		m = next.(ui.Model)
-		if ui.PopupOpen(m) || !strings.Contains(m.View(), "config: host \"x\": bad meta") {
+		if ui.PopupOpen(m) || !strings.Contains(m.View(), "ssh config: host \"x\": bad meta") {
 			t.Errorf("one warning: popup %v:\n%s", ui.PopupOpen(m), m.View())
 		}
 	})
@@ -215,7 +215,7 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		next, _ = next.(ui.Model).Update(reload())
 		m = next.(ui.Model)
 		view := m.View()
-		if !ui.PopupOpen(m) || !strings.Contains(view, "config: 2 warnings") || !strings.Contains(view, "bad meta") || !strings.Contains(view, "duplicate path") {
+		if !ui.PopupOpen(m) || !strings.Contains(view, "ssh config: 2 warnings") || !strings.Contains(view, "bad meta") || !strings.Contains(view, "duplicate path") {
 			t.Errorf("two warnings should list both in the popup:\n%s", view)
 		}
 	})
@@ -234,8 +234,8 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 			t.Errorf("the one-line outcome should remain after closing:\n%s", closed.View())
 		}
 		// A multiplexer step is not the window file's doing: no hint.
-		if strings.Contains(view, "spawn-window") {
-			t.Errorf("a herdr failure should not name the window file:\n%s", view)
+		if strings.Contains(view, "spawn_window") {
+			t.Errorf("a herdr failure should not name the window key:\n%s", view)
 		}
 	})
 	t.Run("window spawn failure names the file and is sanitized", func(t *testing.T) {
@@ -244,11 +244,11 @@ func TestModel_Update_PopupRouting(t *testing.T) {
 		// the popup says where the command comes from.
 		r := fakerun.New().StubExit(0, "ssh", "-O", "check", "web").StubExit(0, "ssh", "-O", "check", "db").
 			Stub(fakerun.Reply{Result: run.Result{Stderr: []byte("xterm: no display\n"), Code: 1}}, "xterm\x1b[2J", "-e", "ssh", "web")
-		m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "xterm\x1b[2J -e ssh {host}", WindowPath: "/home/u/.dotfiles/sasash/spawn-window"}, nil)
+		m := spawnModel(t, r, ui.SpawnConfig{Mux: ui.MuxNone, WindowTemplate: "xterm\x1b[2J -e ssh {host}", WindowPath: "/home/u/.dotfiles/sasash/config.toml"}, nil)
 		next, cmd := m.Update(keyMsg("enter"))
 		m = update(t, next.(ui.Model), cmd())
 		view := m.View()
-		if !ui.PopupOpen(m) || !strings.Contains(view, "spawn failed for web") || !strings.Contains(view, "ran: xterm[2J -e ssh web") || !strings.Contains(view, "no display") || !strings.Contains(view, "comes from /home/u/.dotfiles/sasash/spawn-window") {
+		if !ui.PopupOpen(m) || !strings.Contains(view, "spawn failed for web") || !strings.Contains(view, "ran: xterm[2J -e ssh web") || !strings.Contains(view, "no display") || !strings.Contains(view, "spawn_window in /home/u/.dotfiles/sasash/config.toml") {
 			t.Errorf("a failed window spawn should show the cleaned argv, the reason and the file:\n%s", view)
 		}
 		if strings.Contains(view, "\x1b") {
@@ -497,7 +497,7 @@ func TestModel_View_PopupWrapsLongLines(t *testing.T) {
 			t.Errorf("View() line %d runes wide at 60 cols: %q", n, l)
 		}
 	}
-	if !reflect.DeepEqual([]string{"config: 2 warnings"}, []string{ui.PopupTitle(m)}) {
+	if !reflect.DeepEqual([]string{"ssh config: 2 warnings"}, []string{ui.PopupTitle(m)}) {
 		t.Errorf("title = %q", ui.PopupTitle(m))
 	}
 }

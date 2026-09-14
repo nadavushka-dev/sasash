@@ -54,7 +54,8 @@ type SpawnConfig struct {
 	// WindowTemplate is the OS-window command outside any multiplexer,
 	// with actions.toml placeholders ({host} is the alias); "" means
 	// nothing to spawn into, so enter hands off with a notice.
-	// WindowPath is the file it is read from, named when it fails.
+	// WindowPath is the config.toml it is read from (spawn_window),
+	// named when it fails.
 	WindowTemplate string
 	WindowPath     string
 	// Target is the persisted spawn target (one of SpawnTargets; unknown
@@ -201,10 +202,10 @@ func windowArgv(template, alias string) ([]string, error) {
 }
 
 // windowHint closes the OS-window failure popup: the command that failed
-// is the user's to change, and this is the file — the one the cmd layer
-// read (XDG_CONFIG_HOME moves it), named exactly.
+// is the user's to change, and this is the key and the file — the one
+// the cmd layer read (XDG_CONFIG_HOME moves it), named exactly.
 func (s spawnState) windowHint() []string {
-	return []string{"the window command comes from " + s.windowPath, "(one line, {host} is the alias; an empty file turns it off)"}
+	return []string{"the window command is spawn_window in " + s.windowPath, "({host} is the alias; \"\" turns it off, unset means the platform default)"}
 }
 
 // spawnPlanFor builds enter's plan for an alias, or nil when the fallback

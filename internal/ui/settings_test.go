@@ -7,11 +7,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nadavushka-dev/sasash/internal/config"
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
+	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/probe/fakedial"
 	"github.com/nadavushka-dev/sasash/internal/run/fakerun"
 	"github.com/nadavushka-dev/sasash/internal/setup"
 	"github.com/nadavushka-dev/sasash/internal/ui"
@@ -32,7 +35,7 @@ func TestModel_Update_SettingsOpensAndCloses(t *testing.T) {
 	r := fakerun.New()
 	m := settingsModel(t, r)
 	view := m.View()
-	for _, want := range []string{"settings", "› create config file", "edit config file", "theme", "add new connection", "esc"} {
+	for _, want := range []string{"settings", "› setup (create files)", "edit connections file", "theme", "add new connection", "esc"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("View() with settings open missing %q:\n%s", want, view)
 		}
@@ -77,7 +80,7 @@ func TestModel_Update_SettingsCursor(t *testing.T) {
 		t.Errorf("View() after G should highlight the last entry:\n%s", view)
 	}
 	m = press(t, m, "g", "k")
-	if view := m.View(); !strings.Contains(view, "› create config file") {
+	if view := m.View(); !strings.Contains(view, "› setup (create files)") {
 		t.Errorf("View() after g k should stay on the first entry:\n%s", view)
 	}
 }
@@ -159,7 +162,7 @@ func TestModel_Update_SettingsCreateConfig(t *testing.T) {
 				loaded = true
 				return nil, nil, nil
 			})
-			// enter on "create config file": the check runs in a cmd; the
+			// enter on "setup (create files)": the check runs in a cmd; the
 			// pieces are pending until it lands.
 			next, check := m.Update(keyMsg("enter"))
 			m = next.(ui.Model)
@@ -278,14 +281,14 @@ func TestModel_Update_SettingsEditConfig(t *testing.T) {
 	m := ui.WithEditor(settingsModel(t, fakerun.New()), []string{"vi"}, "", "/tmp/x/sasash.conf")
 	next, cmd := press(t, m, "j").Update(keyMsg("enter"))
 	if cmd == nil || ui.SettingsOpen(next.(ui.Model)) {
-		t.Errorf("enter on edit config: cmd %v, settings open %v; want the handoff and the panel closed", cmd != nil, ui.SettingsOpen(next.(ui.Model)))
+		t.Errorf("enter on edit connections: cmd %v, settings open %v; want the handoff and the panel closed", cmd != nil, ui.SettingsOpen(next.(ui.Model)))
 	}
 	// Without one: a notice, the panel stays.
 	plain := settingsModel(t, fakerun.New())
 	next, cmd = press(t, plain, "j").Update(keyMsg("enter"))
 	pm := next.(ui.Model)
 	if cmd != nil || !ui.SettingsOpen(pm) || !strings.Contains(pm.View(), "no editor") {
-		t.Errorf("enter on edit config without an editor: cmd %v, open %v, view:\n%s", cmd != nil, ui.SettingsOpen(pm), pm.View())
+		t.Errorf("enter on edit connections without an editor: cmd %v, open %v, view:\n%s", cmd != nil, ui.SettingsOpen(pm), pm.View())
 	}
 }
 
@@ -456,7 +459,7 @@ func TestModel_Update_SettingsCreateConfigCheckFails(t *testing.T) {
 	}
 	// esc from this pane lands back on its menu entry.
 	m = press(t, m, "esc")
-	if !ui.SettingsOpen(m) || !strings.Contains(m.View(), "› create config file") {
+	if !ui.SettingsOpen(m) || !strings.Contains(m.View(), "› setup (create files)") {
 		t.Errorf("View() after esc should be the menu on create config:\n%s", m.View())
 	}
 }
@@ -605,5 +608,50 @@ func TestModel_View_HelpListsSettings(t *testing.T) {
 	}
 	if view := press(t, m, "?").View(); !strings.Contains(view, "settings") || !strings.Contains(view, "keys — ? q esc closes") {
 		t.Errorf("View() keys panel missing the o entry:\n%s", view)
+	}
+}
+
+func TestModel_Update_SettingsSetupMovesOldFiles(t *testing.T) {
+	t.Parallel()
+	home := homeWith(t, true, true, true) // every piece present: only the old file is left to do
+	old := filepath.Join(home, ".local", "state", "sasash", "theme")
+	if err := os.MkdirAll(filepath.Dir(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(old, []byte("nord\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(home, ".config", "sasash", "config.toml")
+	env := setup.Env{Home: home, Config: cfg, Legacy: []setup.Legacy{{Path: old, Key: "theme", Value: "nord"}}}
+	m := ui.WithSetupEnv(ui.WithHome(settingsModel(t, fakerun.New()), home), env)
+	next, check := m.Update(keyMsg("enter"))
+	m = update(t, next.(ui.Model), check())
+	if view := m.View(); !strings.Contains(view, "move ~/.local/state/sasash/theme → theme in config.toml") || !strings.Contains(view, "pending") || strings.Contains(view, "already set up") {
+		t.Fatalf("View() should list the old file as a pending move:\n%s", view)
+	}
+	next, ensure := m.Update(keyMsg("enter"))
+	m = next.(ui.Model)
+	if ensure == nil {
+		t.Fatalf("enter with an old file pending: cmd = nil, want the setup write")
+	}
+	next, after := m.Update(ensure())
+	m = feed(t, next.(ui.Model), after)
+	if _, err := os.Lstat(old); !os.IsNotExist(err) {
+		t.Errorf("old file still exists after setup (err %v)", err)
+	}
+	if data, _ := os.ReadFile(cfg); !strings.Contains(string(data), "theme = \"nord\"\n") {
+		t.Errorf("config.toml lacks the moved theme:\n%s", data)
+	}
+	if view := m.View(); strings.Contains(view, "pending") || !strings.Contains(view, "set up") {
+		t.Errorf("View() after the move should show nothing pending and the notice:\n%s", view)
+	}
+}
+
+func TestModel_View_SetupWarnIsTheStartupNotice(t *testing.T) {
+	t.Parallel()
+	m := ui.New(testHosts(1), probe.Prober{Dialer: fakedial.New(), Timeout: 50 * time.Millisecond}, fakerun.New(), ui.Config{SetupWarn: "old settings files: ~/.local/state/sasash/theme — o → setup moves them into config.toml"})
+	m = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 24})
+	if view := m.View(); !strings.Contains(view, "old settings files") {
+		t.Errorf("View() at startup should carry the setup warning:\n%s", view)
 	}
 }
