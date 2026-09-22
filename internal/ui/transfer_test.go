@@ -120,7 +120,7 @@ func TestModel_Update_CopyEscBacksOutOneStep(t *testing.T) {
 		t.Errorf("esc from the source picker lost the highlighted direction:\n%s", m2.View())
 	}
 	// dest picker → esc returns to the source picker, the source forgotten.
-	m3 := drive(t, m, "C", "u", "j", "enter", "esc")
+	m3 := drive(t, m, "C", "u", "j", "j", "enter", "esc")
 	if _, _, picked := ui.TransferSource(m3); picked || ui.TransferStep(m3) != "local" {
 		t.Errorf("esc from the dest picker: picked = %v, step = %q, want the local source picker again", picked, ui.TransferStep(m3))
 	}
@@ -143,8 +143,8 @@ func TestModel_Update_UploadDirectoryFlow(t *testing.T) {
 	if view := m.View(); !strings.Contains(view, "proj") || !strings.Contains(view, "notes.txt") {
 		t.Fatalf("local picker did not list the home:\n%s", view)
 	}
-	// enter on the directory row (../ is first) picks it as the source.
-	m = drive(t, m, "j", "enter")
+	// enter on the directory row (./ and ../ come first) picks it as the source.
+	m = drive(t, m, "j", "j", "enter")
 	src, isDir, picked := ui.TransferSource(m)
 	if !picked || !isDir || src != filepath.Join(home, "proj") {
 		t.Fatalf("TransferSource() = %q, %v, %v; want proj as a directory", src, isDir, picked)
@@ -159,11 +159,11 @@ func TestModel_Update_UploadDirectoryFlow(t *testing.T) {
 	if want := []string{"scp", "-r", filepath.Join(home, "proj"), "host0:<remote dir>"}; !reflect.DeepEqual(ui.TransferPreview(m), want) {
 		t.Errorf("TransferPreview() = %q, want %q", ui.TransferPreview(m), want)
 	}
-	if view := m.View(); !strings.Contains(view, "docs/") || !strings.Contains(view, "readme") || !strings.Contains(view, "../") {
+	if view := m.View(); !strings.Contains(view, "docs/") || !strings.Contains(view, "readme") || !strings.Contains(view, "./") || !strings.Contains(view, "../") {
 		t.Fatalf("remote browser did not list the home:\n%s", view)
 	}
-	// j to docs/, enter picks it as the dest: the confirm names the scp.
-	m = drive(t, m, "j", "enter")
+	// j j to docs/, enter picks it as the dest: the confirm names the scp.
+	m = drive(t, m, "j", "j", "enter")
 	if !ui.PopupOpen(m) || ui.PopupTitle(m) != "copy files: upload to host0" {
 		t.Fatalf("no confirm popup: open = %v, title = %q", ui.PopupOpen(m), ui.PopupTitle(m))
 	}
@@ -188,8 +188,8 @@ func TestModel_Update_DownloadFileFlow(t *testing.T) {
 	if got := ui.TransferStep(m); got != "remote" {
 		t.Fatalf("after d: step = %q, want remote", got)
 	}
-	// rows: ../, docs/, readme — two down is the file.
-	m = drive(t, m, "j", "j", "enter")
+	// rows: ./, ../, docs/, readme — three down is the file.
+	m = drive(t, m, "j", "j", "j", "enter")
 	src, isDir, picked := ui.TransferSource(m)
 	if !picked || isDir || src != "readme" {
 		t.Fatalf("TransferSource() = %q, %v, %v; want readme as a file", src, isDir, picked)
@@ -218,7 +218,7 @@ func TestModel_Update_DownloadFileFlow(t *testing.T) {
 	}
 	// enter on a directory row picks it as the dest; a declined confirm
 	// keeps the browser where it was, rows and all.
-	m = drive(t, m, "j", "enter")
+	m = drive(t, m, "j", "j", "enter")
 	if want := "scp host0:readme " + filepath.Join(home, "proj"); !boxSays(m.View(), want) {
 		t.Errorf("confirm popup does not show %q:\n%s", want, m.View())
 	}
@@ -236,12 +236,56 @@ func TestModel_Update_DownloadFileFlow(t *testing.T) {
 	}
 }
 
+// The ./ row on top is where the cursor starts: enter on it picks the
+// directory the browser is in, at either end and in either role, the
+// way the . key does; space and l on it do nothing (SASASH.4.39).
+func TestModel_Update_DotRowPicksThisDirectory(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	f := homeListing()
+	m := drive(t, xferModel(t, home, f), "C", "d")
+	if v := m.View(); !strings.Contains(v, "› ./") || !strings.Contains(v, "    ../") {
+		t.Fatalf("the browser should open with ./ highlighted above ../:\n%s", v)
+	}
+	// space and l on ./ are nothing: no mark, no listing.
+	m = drive(t, m, " ", "l")
+	if got := ui.TransferMarks(m); len(got) != 0 || strings.Contains(m.View(), "✓") {
+		t.Errorf("space on ./: marks = %q, want none", got)
+	}
+	if got := f.CallKeys(); !reflect.DeepEqual(got, []string{"ssh -o BatchMode=yes host0 ls -1Ap -- ."}) {
+		t.Errorf("l on ./ ran a listing: CallKeys() = %q", got)
+	}
+	// enter on ./ picks the remote home as the source, a directory.
+	m = drive(t, m, "enter")
+	if src, isDir, picked := ui.TransferSource(m); !picked || !isDir || src != "." {
+		t.Fatalf("TransferSource() = %q, %v, %v; want . as a directory", src, isDir, picked)
+	}
+	if want := []string{"scp", "-r", "host0:.", "<local dir>"}; !reflect.DeepEqual(ui.TransferPreview(m), want) {
+		t.Errorf("TransferPreview() = %q, want %q", ui.TransferPreview(m), want)
+	}
+	// enter on ./ again picks the local home as the dest: the confirm names it.
+	m = drive(t, m, "enter")
+	if want := "scp -r host0:. " + home; !ui.PopupOpen(m) || !boxSays(m.View(), want) {
+		t.Errorf("confirm popup does not show %q:\n%s", want, m.View())
+	}
+	// Upload, ./ inside a subdirectory: the picked path is that directory.
+	m = drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", "l", "enter")
+	if src, isDir, picked := ui.TransferSource(m); !picked || !isDir || src != filepath.Join(home, "proj") {
+		t.Errorf("TransferSource() = %q, %v, %v; want proj as a directory", src, isDir, picked)
+	}
+	// With marks, enter on ./ proceeds with the marks, as anywhere.
+	m = drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", "j", " ", "g", "enter")
+	if got := ui.TransferSources(m); !reflect.DeepEqual(got, []string{filepath.Join(home, "notes.txt")}) {
+		t.Errorf("TransferSources() = %q, want the mark alone", got)
+	}
+}
+
 // The remote browser descends with l and climbs with h, each a listing
 // through the run seam with the exact argv.
 func TestModel_Update_RemoteBrowserDescendsAndClimbs(t *testing.T) {
 	t.Parallel()
 	f := homeListing().StubOut("guide.md\n", "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", "docs")
-	m := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "l")
+	m := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "j", "l")
 	if got := ui.TransferRemotePath(m); got != "docs" {
 		t.Fatalf("after l on docs/: path = %q, want docs", got)
 	}
@@ -249,7 +293,7 @@ func TestModel_Update_RemoteBrowserDescendsAndClimbs(t *testing.T) {
 		t.Errorf("browser did not show docs:\n%s", m.View())
 	}
 	// l on a file is nothing; enter on ../ climbs, as h does.
-	m = drive(t, m, "j", "l")
+	m = drive(t, m, "j", "j", "l")
 	if got := ui.TransferRemotePath(m); got != "docs" {
 		t.Errorf("l on a file moved to %q", got)
 	}
@@ -257,7 +301,7 @@ func TestModel_Update_RemoteBrowserDescendsAndClimbs(t *testing.T) {
 	if got := ui.TransferRemotePath(m); got != "." {
 		t.Errorf("after h: path = %q, want .", got)
 	}
-	m = drive(t, m, "j", "l", "g", "enter")
+	m = drive(t, m, "j", "j", "l", "g", "j", "enter")
 	if got := ui.TransferRemotePath(m); got != "." {
 		t.Errorf("after enter on ../: path = %q, want .", got)
 	}
@@ -271,7 +315,7 @@ func TestModel_Update_RemoteBrowserDescendsAndClimbs(t *testing.T) {
 		t.Errorf("G did not reach the last row:\n%s", m.View())
 	}
 	m = drive(t, m, "ctrl+u")
-	if !strings.Contains(m.View(), "› ../") {
+	if !strings.Contains(m.View(), "› ./") {
 		t.Errorf("ctrl+u did not reach the first row:\n%s", m.View())
 	}
 }
@@ -292,7 +336,7 @@ func TestModel_Update_RemoteRefusalIsANotice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			f := homeListing().Stub(tt.reply, "ssh", "-o", "BatchMode=yes", "host0", "ls", "-1Ap", "--", "docs")
-			m := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "l")
+			m := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "j", "l")
 			if !ui.TransferActive(m) || ui.TransferRemotePath(m) != "." {
 				t.Errorf("after the refusal: active = %v, path = %q; want the browser still at .", ui.TransferActive(m), ui.TransferRemotePath(m))
 			}
@@ -307,8 +351,8 @@ func TestModel_Update_RemoteRefusalIsANotice(t *testing.T) {
 // to pick one.
 func TestModel_Update_DestMustBeADirectory(t *testing.T) {
 	t.Parallel()
-	// Download: readme picked, then enter on notes.txt (the second local row).
-	m := drive(t, xferModel(t, xferHome(t), homeListing()), "C", "d", "j", "j", "enter", "j", "j", "enter")
+	// Download: readme picked, then enter on notes.txt (the last local row).
+	m := drive(t, xferModel(t, xferHome(t), homeListing()), "C", "d", "j", "j", "j", "enter", "j", "j", "j", "enter")
 	if ui.PopupOpen(m) || !ui.TransferActive(m) {
 		t.Errorf("a file as dest: popup = %v, active = %v; want refused, flow open", ui.PopupOpen(m), ui.TransferActive(m))
 	}
@@ -316,7 +360,7 @@ func TestModel_Update_DestMustBeADirectory(t *testing.T) {
 		t.Errorf("no refusal notice:\n%s", m.View())
 	}
 	// Upload: proj picked, then enter on readme in the remote browser.
-	m = drive(t, xferModel(t, xferHome(t), homeListing()), "C", "u", "j", "enter", "j", "j", "enter")
+	m = drive(t, xferModel(t, xferHome(t), homeListing()), "C", "u", "j", "j", "enter", "j", "j", "j", "enter")
 	if ui.PopupOpen(m) || !strings.Contains(m.View(), "the destination is a directory") {
 		t.Errorf("a remote file as dest was not refused:\n%s", m.View())
 	}
@@ -392,7 +436,7 @@ func TestModel_View_TransferSmoke(t *testing.T) {
 		{name: "direction", keys: []string{"C"}, hint: "upload / download"},
 		{name: "local picker", keys: []string{"C", "u"}, hint: "this dir"},
 		{name: "remote browser", keys: []string{"C", "d"}, hint: "this dir"},
-		{name: "confirm", keys: []string{"C", "u", "j", "enter", "."}, hint: "copy"},
+		{name: "confirm", keys: []string{"C", "u", "j", "j", "enter", "."}, hint: "copy"},
 	}
 	for _, st := range steps {
 		t.Run(st.name, func(t *testing.T) {
@@ -504,7 +548,7 @@ func TestModel_Update_StaleListingIsDropped(t *testing.T) {
 		t.Errorf("host0's listing landed in host1's browser while its own was in flight:\n%s", v)
 	}
 	// Two moves in a row: the first's listing lands after the second was asked for.
-	m2 := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j")
+	m2 := drive(t, xferModel(t, xferHome(t), f), "C", "d", "j", "j")
 	next, pending = m2.Update(keyMsg("l")) // docs, in flight
 	late := drain(pending)
 	m2 = drive(t, next.(ui.Model), "h") // back to ., asked for after
@@ -576,7 +620,7 @@ func TestModel_Update_ActionKeysInertInsideFlow(t *testing.T) {
 // convention); tab never opens a directory.
 func TestModel_Update_RemoteBrowserTabMoves(t *testing.T) {
 	t.Parallel()
-	m := drive(t, xferModel(t, xferHome(t), homeListing()), "C", "d", "tab")
+	m := drive(t, xferModel(t, xferHome(t), homeListing()), "C", "d", "tab", "tab")
 	if !strings.Contains(m.View(), "› docs/") || ui.TransferRemotePath(m) != "." {
 		t.Errorf("tab: want the highlight on docs/ at .:\n%s", m.View())
 	}
@@ -661,8 +705,8 @@ func TestModel_Update_UploadMarksFlow(t *testing.T) {
 	t.Parallel()
 	home := xferHome(t)
 	m := drive(t, xferModel(t, home, homeListing()), "C", "u")
-	// rows: ../ proj/ notes.txt — mark notes.txt, descend into proj, mark a.txt.
-	m = drive(t, m, "j", "j", " ")
+	// rows: ./ ../ proj/ notes.txt — mark notes.txt, descend into proj, mark a.txt.
+	m = drive(t, m, "j", "j", "j", " ")
 	if want := []string{filepath.Join(home, "notes.txt")}; !reflect.DeepEqual(ui.TransferMarks(m), want) {
 		t.Fatalf("TransferMarks() = %q, want %q", ui.TransferMarks(m), want)
 	}
@@ -672,8 +716,8 @@ func TestModel_Update_UploadMarksFlow(t *testing.T) {
 	if want := []string{"scp", filepath.Join(home, "notes.txt"), "host0:<remote>"}; !reflect.DeepEqual(ui.TransferPreview(m), want) {
 		t.Errorf("TransferPreview() = %q, want the mark as the source", ui.TransferPreview(m))
 	}
-	// space on ../ is nothing; the basket survives l and h.
-	m = drive(t, m, "g", " ", "j", "l", "j", " ")
+	// space on ./ and ../ is nothing; the basket survives l and h.
+	m = drive(t, m, "g", " ", "j", " ", "j", "l", "j", "j", " ")
 	if want := []string{filepath.Join(home, "notes.txt"), filepath.Join(home, "proj", "a.txt")}; !reflect.DeepEqual(ui.TransferMarks(m), want) {
 		t.Fatalf("TransferMarks() after descending = %q, want %q", ui.TransferMarks(m), want)
 	}
@@ -682,7 +726,7 @@ func TestModel_Update_UploadMarksFlow(t *testing.T) {
 		t.Fatalf("after h: dir = %q, marks = %q; want the home with both marks", got, ui.TransferMarks(m))
 	}
 	// space again unmarks; . is refused while marks exist.
-	m = drive(t, m, "j", "j", " ")
+	m = drive(t, m, "j", "j", "j", " ")
 	if want := []string{filepath.Join(home, "proj", "a.txt")}; !reflect.DeepEqual(ui.TransferMarks(m), want) {
 		t.Fatalf("TransferMarks() after unmarking = %q, want %q", ui.TransferMarks(m), want)
 	}
@@ -707,7 +751,7 @@ func TestModel_Update_UploadMarksFlow(t *testing.T) {
 	if got := ui.TransferMarks(m); len(got) != 2 || ui.TransferStep(m) != "local" {
 		t.Fatalf("esc from the dest: marks = %q, step = %q; want both marks in the local browser", got, ui.TransferStep(m))
 	}
-	m = drive(t, m, "j", " ", "enter", "j", "enter")
+	m = drive(t, m, "j", "j", " ", "enter", "j", "j", "enter")
 	if !ui.PopupOpen(m) {
 		t.Fatalf("no confirm popup after the dest pick")
 	}
@@ -720,7 +764,7 @@ func TestModel_Update_UploadMarksFlow(t *testing.T) {
 		t.Errorf("confirm returned no cmd or left the flow open")
 	}
 	// esc from the source browser drops the basket.
-	m2 := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", " ", "esc", "enter")
+	m2 := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", " ", "esc", "enter")
 	if got := ui.TransferMarks(m2); len(got) != 0 {
 		t.Errorf("marks after esc to the direction and back = %q, want none", got)
 	}
@@ -729,8 +773,8 @@ func TestModel_Update_UploadMarksFlow(t *testing.T) {
 func TestModel_Update_DownloadMarksAndDestIsOneDirectory(t *testing.T) {
 	t.Parallel()
 	home := xferHome(t)
-	// rows: ../ docs/ readme — mark both, enter: two remote sources, -r.
-	m := drive(t, xferModel(t, home, homeListing()), "C", "d", "j", " ", "j", " ", "enter")
+	// rows: ./ ../ docs/ readme — mark both, enter: two remote sources, -r.
+	m := drive(t, xferModel(t, home, homeListing()), "C", "d", "j", "j", " ", "j", " ", "enter")
 	if got := ui.TransferSources(m); !reflect.DeepEqual(got, []string{"docs", "readme"}) {
 		t.Fatalf("TransferSources() = %q, want docs, readme", got)
 	}
@@ -769,8 +813,8 @@ func TestModel_Update_LocalListingRefusalIsANotice(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(locked, 0o755) })
-	// rows: ../ locked/ proj/ notes.txt
-	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "l")
+	// rows: ./ ../ locked/ proj/ notes.txt
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", "l")
 	if got := ui.TransferLocalDir(m); got != home || !strings.Contains(m.View(), "cannot list ") || !strings.Contains(m.View(), "locked/") {
 		t.Errorf("after l on an unreadable directory: dir = %q, view:\n%s", got, m.View())
 	}
@@ -787,16 +831,16 @@ func TestModel_Update_LocalSymlinkedDirectory(t *testing.T) {
 	if err := os.Symlink(filepath.Join(home, "gone"), filepath.Join(home, "dangling")); err != nil {
 		t.Fatal(err)
 	}
-	// rows: ../ alink/ proj/ dangling notes.txt
+	// rows: ./ ../ alink/ proj/ dangling notes.txt
 	m := drive(t, xferModel(t, home, homeListing()), "C", "u")
 	if v := m.View(); !strings.Contains(v, "alink/") || strings.Contains(v, "dangling/") {
 		t.Fatalf("rows should list alink as a directory and dangling as a file:\n%s", v)
 	}
-	m = drive(t, m, "j", "l")
+	m = drive(t, m, "j", "j", "l")
 	if got := ui.TransferLocalDir(m); got != filepath.Join(home, "alink") || !strings.Contains(m.View(), "a.txt") {
 		t.Errorf("l on the link: dir = %q, view:\n%s", got, m.View())
 	}
-	m = drive(t, m, "h", "j", "enter")
+	m = drive(t, m, "h", "j", "j", "enter")
 	if want := []string{"scp", "-r", filepath.Join(home, "alink"), "host0:<remote dir>"}; !reflect.DeepEqual(ui.TransferPreview(m), want) {
 		t.Errorf("TransferPreview() = %q, want the link copied -r", ui.TransferPreview(m))
 	}
@@ -810,7 +854,7 @@ func TestModel_Update_HiddenToggleKeepsPlaceAndReportsFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".secret"), []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", " ", "H")
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", "j", " ", "H")
 	if v := m.View(); !strings.Contains(v, "✓ › notes.txt") || !strings.Contains(v, ".secret") {
 		t.Errorf("after H the cursor and the mark should stay on notes.txt with the dotfile listed:\n%s", v)
 	}
@@ -833,7 +877,7 @@ func TestModel_Update_HiddenToggleKeepsPlaceAndReportsFailure(t *testing.T) {
 func TestModel_View_TransferPreviewEllipsisAndFooter(t *testing.T) {
 	t.Parallel()
 	home := xferHome(t)
-	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", " ", "j", " ")
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", " ", "j", " ")
 	v := m.View()
 	for _, line := range strings.Split(v, "\n") {
 		if strings.Contains(line, "$ scp") && !strings.HasSuffix(strings.TrimRight(line, " "), "…") {
@@ -852,13 +896,14 @@ func TestModel_View_TransferPreviewEllipsisAndFooter(t *testing.T) {
 	}
 }
 
-// A ../ row that resolves to a marked directory is not drawn as marked.
-func TestModel_View_ParentRowNeverMarked(t *testing.T) {
+// The ./ and ../ rows inside a marked directory resolve to marked paths
+// and are still never drawn as marked.
+func TestModel_View_SyntheticRowsNeverMarked(t *testing.T) {
 	t.Parallel()
 	home := xferHome(t)
-	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", " ", "l")
-	if v := m.View(); !strings.Contains(v, "  › ../") || strings.Contains(v, "✓ › ../") {
-		t.Errorf("../ inside a marked directory must not show the mark:\n%s", v)
+	m := drive(t, xferModel(t, home, homeListing()), "C", "u", "j", "j", " ", "l")
+	if v := m.View(); !strings.Contains(v, "  › ./") || !strings.Contains(v, "    ../") || strings.Contains(v, "✓") {
+		t.Errorf("./ and ../ inside a marked directory must not show the mark:\n%s", v)
 	}
 	if got := ui.TransferMarks(m); !reflect.DeepEqual(got, []string{filepath.Join(home, "proj")}) {
 		t.Errorf("TransferMarks() = %q, want proj kept", got)

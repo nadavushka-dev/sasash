@@ -92,7 +92,7 @@ in [docs/configuration.md](docs/configuration.md).
 | **Navigate** | `j`/`k` move · `g`/`G` first/last · `ctrl+d`/`ctrl+u` half-page · `/` filter · `l`/`h` switch panes |
 | **On a host** | `enter` ssh · `S` ssh here (handoff) · `H` herdr session beside · `p` pick path · `C` copy files (scp; `space` marks several) · `y` yank address · `c` yank command · `a` ad-hoc ssh · `R` rename · `e` edit connections |
 | **Tunnels** (`l`) | `space` toggle a forward · `s` toggle the set · `+` add a forward · `n` declare a new set · `E` edit · `x` stop one · `X` delete the set · `r` restart master |
-| **Copying** (`C`) | `u`/`d` direction · `space` mark · `enter` pick the row, or copy the marks · `.` this directory · `l`/`h` into / out of a directory · `H` dotfiles (local) · `esc` back a step |
+| **Copying** (`C`) | `u`/`d` direction · `space` mark · `enter` pick the row, or copy the marks · `.` (or `enter` on the `./` row) this directory · `l`/`h` into / out of a directory · `H` dotfiles (local) · `esc` back a step |
 | **Elsewhere** | `.` show other `ssh_config` entries · `$` show the command line · `t` theme · `o` settings · `?` keys · `q` quit |
 
 The `?` panel lists the actions; vim motion is left implicit. Dark themes only — gruvbox by

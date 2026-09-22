@@ -20,8 +20,8 @@ import (
 // opens a three-step flow — the direction (upload local→host, download
 // host→local), then the SOURCE picked in one browser, then the DEST
 // directory picked in the other. Both ends are browsed by the same
-// browser: rows with ../ on top, directories first with their trailing
-// slash, a mark column. The local end lists through os.ReadDir (hidden
+// browser: rows with ./ and ../ on top, directories first with their
+// trailing slash, a mark column. The local end lists through os.ReadDir (hidden
 // entries follow config.toml's show_hidden, H flips it); the remote end
 // lists through `ssh <alias> ls -1Ap -- <path>` run through the run
 // seam — the trailing slash is the one fact it reads, never `ls -l`.
@@ -87,8 +87,10 @@ func (x xferState) marked(path string) bool {
 	return false
 }
 
-// browser is one end's picker: the listing of one directory, with a
-// synthesized ../ row on top so the parent is always reachable.
+// browser is one end's picker: the listing of one directory, with two
+// synthesized rows on top — ./ so the directory itself is pickable
+// where the cursor starts (SASASH.4.39), ../ so the parent is always
+// reachable.
 // loading is the remote path being listed, "" when idle (a local
 // listing is immediate).
 type browser struct {
@@ -98,10 +100,14 @@ type browser struct {
 	loading string
 }
 
-// rows are the browser's lines: ../ first, then the listing.
+// rows are the browser's lines: ./ and ../ first, then the listing.
 func (b browser) rows() []transfer.Entry {
-	return append([]transfer.Entry{{Name: "..", IsDir: true}}, b.entries...)
+	return append([]transfer.Entry{{Name: ".", IsDir: true}, {Name: "..", IsDir: true}}, b.entries...)
 }
+
+// synthetic reports whether name is one of the two rows on top — no
+// source to mark, nothing to open.
+func synthetic(name string) bool { return name == "." || name == ".." }
 
 // highlighted is the row under the cursor.
 func (b browser) highlighted() transfer.Entry {
@@ -204,8 +210,8 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Bottom):
 		b.idx = len(rows) - 1
 	case key.Matches(msg, m.keys.FocusRight) || msg.String() == "right":
-		// l opens a directory, nothing on a file.
-		if row := b.highlighted(); row.IsDir {
+		// l opens a directory, nothing on a file; ./ is where we are.
+		if row := b.highlighted(); row.IsDir && row.Name != "." {
 			return m.transferOpen(row.Name)
 		}
 	case key.Matches(msg, m.keys.FocusLeft) || msg.String() == "backspace" || msg.String() == "left":
@@ -215,7 +221,10 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m.transferChose(x.marks)
 		}
 		row := b.highlighted()
-		if row.Name == ".." {
+		switch row.Name {
+		case ".":
+			return m.transferChose([]mark{{path: b.path, isDir: true}})
+		case "..":
 			return m.transferOpen("..")
 		}
 		return m.transferChose([]mark{{path: m.transferChild(row.Name), isDir: row.IsDir}})
@@ -224,7 +233,7 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 // transferToggleMark is space in the source browser: the highlighted
-// row joins the basket or leaves it (../ is no source). In the dest
+// row joins the basket or leaves it (./ and ../ are no source). In the dest
 // browser it is a notice: the dest is one directory.
 func (m Model) transferToggleMark() (Model, tea.Cmd) {
 	x := &m.xfer
@@ -233,7 +242,7 @@ func (m Model) transferToggleMark() (Model, tea.Cmd) {
 		return m, nil
 	}
 	row := x.br.highlighted()
-	if row.Name == ".." {
+	if synthetic(row.Name) {
 		return m, nil
 	}
 	path := m.transferChild(row.Name)
@@ -631,7 +640,7 @@ func (m Model) browserView() string {
 			name += "/"
 		}
 		mk := " "
-		if name != "../" && x.sourceStep() && x.marked(m.transferChild(rows[i].Name)) {
+		if !synthetic(rows[i].Name) && x.sourceStep() && x.marked(m.transferChild(rows[i].Name)) {
 			mk = s.StatusUp.Render("✓")
 		}
 		if i == b.idx {
