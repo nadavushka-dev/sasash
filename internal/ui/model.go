@@ -1581,7 +1581,7 @@ func (m Model) helpView() string {
 	case m.popup.open():
 		k = popupKeys{confirm: m.popup.confirm != nil, verb: m.popup.verb}
 	case m.xfer.active():
-		k = transferKeys{step: m.xfer.step, source: m.xfer.sourceStep()}
+		k = transferKeys{step: m.xfer.step, source: m.xfer.sourceStep(), typing: m.xfer.br.find.typing, query: m.xfer.br.find.query != ""}
 	case m.settings.pane != settingsOff:
 		k = settingsKeys{}
 	case m.mode != promptNone:

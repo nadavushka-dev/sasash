@@ -440,6 +440,9 @@ func TransferRemotePath(m Model) string { return m.xfer.br.path }
 func TransferLocalDir(m Model) string   { return m.xfer.br.path }
 func TransferPreview(m Model) []string  { return m.transferPreview() }
 
+// TransferHighlighted is the browser row under the cursor (4.40).
+func TransferHighlighted(m Model) string { return m.xfer.br.highlighted().Name }
+
 // TransferMarks lists the basket's paths in mark order (4.37).
 func TransferMarks(m Model) []string {
 	var out []string

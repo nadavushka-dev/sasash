@@ -25,6 +25,8 @@ import (
 // entries follow config.toml's show_hidden, H flips it); the remote end
 // lists through `ssh <alias> ls -1Ap -- <path>` run through the run
 // seam — the trailing slash is the one fact it reads, never `ls -l`.
+// / searches the listing the vim way (SASASH.4.40): the rows narrow as
+// the query is typed, enter keeps them, esc clears.
 // In the source browser space marks a row and the marks are a basket
 // that survives directory moves; enter with marks proceeds with them,
 // enter without picks the highlighted row. One scp carries every
@@ -92,17 +94,44 @@ func (x xferState) marked(path string) bool {
 // where the cursor starts (SASASH.4.39), ../ so the parent is always
 // reachable.
 // loading is the remote path being listed, "" when idle (a local
-// listing is immediate).
+// listing is immediate). find is the / search over the listing
+// (SASASH.4.40); a move to another directory drops it.
 type browser struct {
 	path    string
 	entries []transfer.Entry
 	idx     int
 	loading string
+	find    finder
 }
 
-// rows are the browser's lines: ./ and ../ first, then the listing.
+// rows are the browser's lines: ./ and ../ first — kept under a search,
+// so the ways up and the pick of this directory never vanish — then the
+// listing, narrowed to the names holding the query.
 func (b browser) rows() []transfer.Entry {
-	return append([]transfer.Entry{{Name: ".", IsDir: true}, {Name: "..", IsDir: true}}, b.entries...)
+	rows := []transfer.Entry{{Name: ".", IsDir: true}, {Name: "..", IsDir: true}}
+	for _, e := range b.entries {
+		if b.find.matches(e.Name) {
+			rows = append(rows, e)
+		}
+	}
+	return rows
+}
+
+// refound places the cursor after the query changed the rows: on the
+// first match while a query stands, else back on the row named name
+// (./ when it is gone).
+func (b *browser) refound(name string) {
+	rows := b.rows()
+	if b.find.query != "" && len(rows) > 2 {
+		b.idx = 2
+		return
+	}
+	b.idx = 0
+	for i, row := range rows {
+		if row.Name == name {
+			b.idx = i
+		}
+	}
 }
 
 // synthetic reports whether name is one of the two rows on top — no
@@ -183,6 +212,28 @@ func (m Model) transferKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	}
 
 	b := &x.br
+	// The / search (SASASH.4.40), the settings menu's finder: while it is
+	// typed every rune is text (j/k, space, H, . included), and what it
+	// leaves — the arrows, the half pages, left/right — moves as below.
+	switch {
+	case b.find.typing:
+		name, query := b.highlighted().Name, b.find.query
+		if b.find.key(msg) {
+			if b.find.query != query {
+				b.refound(name)
+			}
+			return m, nil
+		}
+	case key.Matches(msg, m.keys.Filter):
+		b.find = finder{typing: true}
+		return m, nil
+	case key.Matches(msg, m.keys.ClearFilter) && b.find.query != "":
+		// esc clears a kept search before it backs out of anything.
+		name := b.highlighted().Name
+		b.find = finder{}
+		b.refound(name)
+		return m, nil
+	}
 	rows := b.rows()
 	switch {
 	case key.Matches(msg, m.keys.ClearFilter):
@@ -439,7 +490,7 @@ func (m Model) remoteListed(msg remoteListMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	b.path, b.entries, b.idx = msg.path, msg.entries, 0
+	b.path, b.entries, b.idx, b.find = msg.path, msg.entries, 0, finder{}
 	return m, nil
 }
 
@@ -622,13 +673,19 @@ func (m Model) transferRoleLine() string {
 
 // browserView renders the browser's window of rows: a mark column
 // (✓, so a mark survives NO_COLOR), the cursor, the name — directories
-// with their trailing slash, the ls -p glyph.
+// with their trailing slash, the ls -p glyph. A search takes the
+// window's last row for its query, vim's spot, where no long path can
+// push it off the frame.
 func (m Model) browserView() string {
 	x := m.xfer
 	b := x.br
 	s := m.styles
 	rows := b.rows()
 	room := m.transferRoom()
+	hint := b.find.hint()
+	if hint != "" {
+		room = max(room-1, 1)
+	}
 	start := 0
 	if b.idx >= room {
 		start = b.idx - room + 1
@@ -653,8 +710,17 @@ func (m Model) browserView() string {
 		}
 		out.WriteString(mk + "   " + style.Render(name) + "\n")
 	}
-	if len(b.entries) == 0 && b.loading == "" {
+	switch {
+	case len(b.entries) == 0 && b.loading == "":
 		out.WriteString("    " + s.Empty.Render("empty directory") + "\n")
+	case len(rows) == 2 && b.find.query != "":
+		out.WriteString("    " + s.Empty.Render(noMatch(b.find.query)) + "\n")
+	}
+	if hint != "" {
+		for n := strings.Count(out.String(), "\n"); n < room; n++ {
+			out.WriteString("\n")
+		}
+		out.WriteString(" " + s.BoxQuery.Render(hint))
 	}
 	return strings.TrimRight(out.String(), "\n")
 }
@@ -663,6 +729,8 @@ func (m Model) browserView() string {
 type transferKeys struct {
 	step   xferStep
 	source bool // the browser picks the source: space marks
+	typing bool // the / search is being typed: its own three keys
+	query  bool // a search is kept: esc clears it before backing out
 }
 
 func (t transferKeys) ShortHelp() []key.Binding {
@@ -674,15 +742,28 @@ func (t transferKeys) ShortHelp() []key.Binding {
 			key.NewBinding(key.WithKeys("u", "d"), key.WithHelp("u/d", "upload / download")),
 		}
 	}
+	if t.typing {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep")),
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
+			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑/↓", "move")),
+		}
+	}
 	// No motion row here: the browser is visibly a list, the ? panel
 	// treats j/k as self-evident, and with it the source browser's row
 	// would outgrow 80 columns — where bubbles' help cuts the tail
 	// mid-word rather than with its ellipsis. Every row that fits is a
-	// key that does something only here.
+	// key that does something only here; . gave its place to / (4.40)
+	// since the ./ row puts the same pick on screen, and the ? panel
+	// still lists it.
+	esc := "back"
+	if t.query {
+		esc = "clear"
+	}
 	keys := []key.Binding{
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", esc)),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "pick")),
-		key.NewBinding(key.WithKeys("."), key.WithHelp(".", "this dir")),
+		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 	}
 	if t.source {
 		keys = append(keys, key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")))
@@ -709,10 +790,13 @@ func transferHelpKeys(k KeyMap) []key.Binding {
 	for _, t := range []transferKeys{{step: xferDirection}, {step: xferLocal, source: true}} {
 		for _, b := range t.ShortHelp() {
 			switch b.Help().Key {
-			case "u/d", "l", "h", ".", "space", "H":
+			case "u/d", "l", "h", "space", "H":
 				out = append(out, b)
 			}
 		}
 	}
-	return append(out, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel / back — the footer says which")))
+	return append(out,
+		key.NewBinding(key.WithKeys("."), key.WithHelp(".", "this dir")),
+		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search this directory")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel / back — the footer says which")))
 }

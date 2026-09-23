@@ -67,6 +67,8 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case " ":
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
 	case "up":

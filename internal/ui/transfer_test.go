@@ -434,8 +434,8 @@ func TestModel_View_TransferSmoke(t *testing.T) {
 		hint string
 	}{
 		{name: "direction", keys: []string{"C"}, hint: "upload / download"},
-		{name: "local picker", keys: []string{"C", "u"}, hint: "this dir"},
-		{name: "remote browser", keys: []string{"C", "d"}, hint: "this dir"},
+		{name: "local picker", keys: []string{"C", "u"}, hint: "/ search"},
+		{name: "remote browser", keys: []string{"C", "d"}, hint: "/ search"},
 		{name: "confirm", keys: []string{"C", "u", "j", "j", "enter", "."}, hint: "copy"},
 	}
 	for _, st := range steps {
@@ -907,5 +907,92 @@ func TestModel_View_SyntheticRowsNeverMarked(t *testing.T) {
 	}
 	if got := ui.TransferMarks(m); !reflect.DeepEqual(got, []string{filepath.Join(home, "proj")}) {
 		t.Errorf("TransferMarks() = %q, want proj kept", got)
+	}
+}
+
+// / searches the browser the vim way (SASASH.4.40): the rows narrow as
+// the query is typed, the cursor lands on the first match, enter keeps
+// the narrowed rows and hands the keys back, esc clears.
+func TestModel_Update_CopySearch(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	for _, f := range []string{"notes.md", "zeta.txt"} {
+		if err := os.WriteFile(filepath.Join(home, f), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := xferModel(t, home, homeListing())
+	tests := []struct {
+		name      string
+		keys      []string
+		highlight string
+		shown     []string // in the view
+		hidden    []string // not in the view
+	}{
+		{name: "typing narrows to the first match", keys: []string{"C", "u", "/", "notes"}, highlight: "notes.md", shown: []string{"notes.md", "notes.txt", "/notes▏", "enter keep"}, hidden: []string{"zeta.txt", "proj/"}},
+		{name: "the ./ and ../ rows stay", keys: []string{"C", "u", "/", "zeta"}, highlight: "zeta.txt", shown: []string{"./", "../"}},
+		{name: "case-insensitive", keys: []string{"C", "u", "/", "ZETA"}, highlight: "zeta.txt"},
+		{name: "arrows move among matches", keys: []string{"C", "u", "/", "notes", "down"}, highlight: "notes.txt"},
+		{name: "enter keeps the rows without the cursor", keys: []string{"C", "u", "/", "notes", "enter"}, highlight: "notes.md", shown: []string{"/notes", "esc clear"}, hidden: []string{"zeta.txt", "▏"}},
+		{name: "j/k move once kept", keys: []string{"C", "u", "/", "notes", "enter", "j"}, highlight: "notes.txt"},
+		{name: "backspace widens", keys: []string{"C", "u", "/", "zx", "backspace"}, highlight: "zeta.txt", shown: []string{"/z▏"}},
+		{name: "no match says so and parks on ./", keys: []string{"C", "u", "/", "qqq"}, highlight: ".", shown: []string{"no match for /qqq"}},
+		{name: "esc while typing clears, the cursor stays", keys: []string{"C", "u", "/", "zeta", "esc"}, highlight: "zeta.txt", shown: []string{"proj/", "esc back"}, hidden: []string{"/zeta"}},
+		{name: "esc on a kept search clears it first", keys: []string{"C", "u", "/", "notes", "enter", "j", "esc"}, highlight: "notes.txt", shown: []string{"zeta.txt", "esc back"}},
+		{name: "opening a directory drops the search", keys: []string{"C", "u", "/", "pro", "enter", "l"}, highlight: ".", shown: []string{"a.txt"}, hidden: []string{"/pro"}},
+		{name: "the remote browser searches too", keys: []string{"C", "d", "/", "rea"}, highlight: "readme", hidden: []string{"docs/"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := drive(t, base, tt.keys...)
+			if got := ui.TransferHighlighted(m); got != tt.highlight {
+				t.Errorf("TransferHighlighted() = %q, want %q", got, tt.highlight)
+			}
+			v := m.View()
+			for _, want := range tt.shown {
+				if !strings.Contains(v, want) {
+					t.Errorf("View() lacks %q:\n%s", want, v)
+				}
+			}
+			for _, not := range tt.hidden {
+				if strings.Contains(v, not) {
+					t.Errorf("View() holds %q:\n%s", not, v)
+				}
+			}
+		})
+	}
+}
+
+// While the search is typed every rune is text: j, space, ., H and h
+// neither move, mark, pick, toggle nor go up.
+func TestModel_Update_CopySearchRunesAreText(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	m := drive(t, xferModel(t, home, fakerun.New()), "C", "u", "/", "j", " ", ".", "H", "h")
+	if ui.TransferStep(m) != "local" || ui.TransferLocalDir(m) != home {
+		t.Errorf("TransferStep() = %q in %q, want the local browser still in %q", ui.TransferStep(m), ui.TransferLocalDir(m), home)
+	}
+	if _, _, picked := ui.TransferSource(m); picked || len(ui.TransferMarks(m)) != 0 {
+		t.Errorf("TransferSource() picked = %v, marks %v, want nothing picked or marked", picked, ui.TransferMarks(m))
+	}
+	if v := m.View(); !strings.Contains(v, "/j .Hh▏") {
+		t.Errorf("View() lacks the typed query %q:\n%s", "/j .Hh▏", v)
+	}
+}
+
+// A kept search leaves the browser's keys whole: space marks a match,
+// the mark outlives the search, and enter on a match picks it.
+func TestModel_Update_CopySearchMarksAndPicks(t *testing.T) {
+	t.Parallel()
+	home := xferHome(t)
+	base := xferModel(t, home, homeListing())
+	m := drive(t, base, "C", "u", "/", "notes", "enter", " ", "esc")
+	if got, want := ui.TransferMarks(m), []string{filepath.Join(home, "notes.txt")}; !reflect.DeepEqual(got, want) {
+		t.Errorf("TransferMarks() = %v, want %v", got, want)
+	}
+	m = drive(t, base, "C", "u", "/", "notes", "enter", "enter")
+	if path, isDir, picked := ui.TransferSource(m); !picked || isDir || path != filepath.Join(home, "notes.txt") {
+		t.Errorf("TransferSource() = %q, %v, %v, want %q, false, true", path, isDir, picked, filepath.Join(home, "notes.txt"))
 	}
 }
