@@ -939,7 +939,7 @@ func TestModel_Update_CopySearch(t *testing.T) {
 		{name: "no match says so and parks on ./", keys: []string{"C", "u", "/", "qqq"}, highlight: ".", shown: []string{"no match for /qqq"}},
 		{name: "esc while typing clears, the cursor stays", keys: []string{"C", "u", "/", "zeta", "esc"}, highlight: "zeta.txt", shown: []string{"proj/", "esc back"}, hidden: []string{"/zeta"}},
 		{name: "esc on a kept search clears it first", keys: []string{"C", "u", "/", "notes", "enter", "j", "esc"}, highlight: "notes.txt", shown: []string{"zeta.txt", "esc back"}},
-		{name: "opening a directory drops the search", keys: []string{"C", "u", "/", "pro", "enter", "l"}, highlight: ".", shown: []string{"a.txt"}, hidden: []string{"/pro"}},
+		{name: "opening a directory drops the search", keys: []string{"C", "u", "/", "pro", "enter", "l"}, highlight: ".", shown: []string{"a.txt", "esc back"}, hidden: []string{"esc clear"}},
 		{name: "the remote browser searches too", keys: []string{"C", "d", "/", "rea"}, highlight: "readme", hidden: []string{"docs/"}},
 	}
 	for _, tt := range tests {
