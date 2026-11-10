@@ -51,7 +51,9 @@ func Add(confPath, alias, name string, specs []string) error {
 
 // validate rejects what cannot be written as one meta line, or what the
 // engine could never verify (CONTRACT-tunnel §5: a spec needs an all-digit
-// local port among its first two ':'-fields).
+// local port among its first two ':'-fields; a reverse `R…` spec,
+// SASASH.4.41, an all-digit remote port among the first two fields after
+// the R).
 func validate(name string, specs []string) error {
 	if name == "" || strings.ContainsAny(name, " \t\r\n#") {
 		return fmt.Errorf("forward set name %q: want a single word", name)
@@ -61,7 +63,10 @@ func validate(name string, specs []string) error {
 	}
 	seen := make(map[string]bool)
 	for _, s := range specs {
-		if strings.ContainsAny(s, " \t\r\n") || !hasLocalPort(s) {
+		if strings.ContainsAny(s, " \t\r\n") || !(hasLocalPort(s) || isReverse(s)) {
+			if strings.HasPrefix(s, "R") {
+				return fmt.Errorf("spec %q: no remote port", s)
+			}
 			return fmt.Errorf("spec %q: no local port", s)
 		}
 		if seen[s] {
@@ -80,6 +85,13 @@ func hasLocalPort(spec string) bool {
 		}
 	}
 	return false
+}
+
+// isReverse mirrors tunnel.Reverse (pinned by a test): `R` followed by an
+// ssh -R spec whose remote port is all-digit among its first two fields.
+// The -L rule above is untouched; this only widens what validate accepts.
+func isReverse(spec string) bool {
+	return strings.HasPrefix(spec, "R") && hasLocalPort(spec[1:])
 }
 
 // lineTerm is the Host line's own terminator, so the inserted line

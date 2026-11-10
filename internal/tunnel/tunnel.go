@@ -1,6 +1,7 @@
 // Package tunnel is the M3 engine (SPEC §4, SASASH.7 Model B): one detached
-// `ssh -N -L` process per forward, grouped into named sets, and the honest
-// three-state status model. No UI — the TUI pane and the CLI both consume
+// `ssh -N -L` process per forward (`-R` for an `R…` reverse spec,
+// SASASH.4.41), grouped into named sets, and the honest three-state status
+// model. No UI — the TUI pane and the CLI both consume
 // this package. Contract: .squad/CONTRACT-tunnel.md (ratified).
 //
 // A forward IS a process: Spawn starts it and records its pid, Kill sends
@@ -93,11 +94,17 @@ func (s Status) String() string {
 
 // Forward is one forward's reconciled view.
 type Forward struct {
-	Set   string // owning set name; "" = ad-hoc
-	Spec  string // verbatim, e.g. "3000:localhost:3000"
-	Port  string // parsed local port; "" when unparseable (then State is Down)
-	Pid   int    // the live sasash process serving this forward; 0 when none is alive
-	State Status
+	Set  string // owning set name; "" = ad-hoc
+	Spec string // verbatim, e.g. "3000:localhost:3000" or "R2222:localhost:22"
+	// Port is the parsed local port; "" when unparseable (then State is
+	// Down) and always "" for a reverse forward, which binds no local port.
+	Port string
+	// Reverse marks an `R…` spec (SASASH.4.41): an `ssh -R` whose listener
+	// lives on the remote host. Its State is the recorded process's
+	// liveness alone — Up or Down, never Listening.
+	Reverse bool
+	Pid     int // the live sasash process serving this forward; 0 when none is alive
+	State   Status
 	// Since and DownSince are observed times from the stats store (contract
 	// CONTRACT-stats.md): start of the current accepting run, and the first
 	// observation of the port dead after being up. Zero = unknown, or no
@@ -220,8 +227,16 @@ func (e Engine) exec(ctx context.Context, argv ...string) error {
 // to the master and exits 0, so the listener is the master's and Kill
 // would drop nothing. Disabling sharing keeps the listener in the process
 // whose pid is recorded, which is the whole model.
+//
+// A reverse spec (`R2222:localhost:22`, SASASH.4.41) becomes `-R` with the
+// R stripped; every flag above holds for it unchanged — ExitOnForwardFailure
+// is what makes a remote bind that fails end the process.
 func SpawnArgv(host, spec string) []string {
-	return []string{"ssh", "-N", "-S", "none", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", spec, host}
+	flag := "-L"
+	if _, ok := Reverse(spec); ok {
+		flag, spec = "-R", spec[1:]
+	}
+	return []string{"ssh", "-N", "-S", "none", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", flag, spec, host}
 }
 
 // Spawn starts one detached tunnel process for spec and waits for reality
@@ -239,7 +254,13 @@ func SpawnArgv(host, spec string) []string {
 // and ssh's bind ends our process (ExitOnForwardFailure) and can beat the
 // handshake by one poll; the next Status reconciles it (pid dead + port
 // answering = Listening).
+//
+// A reverse spec (Reverse) has no local port: it skips both the pre-dial
+// and the handshake dial and is judged by liveness alone (spawnReverse).
 func (e Engine) Spawn(ctx context.Context, host, set, spec string) error {
+	if rport, ok := Reverse(spec); ok {
+		return e.spawnReverse(ctx, host, set, spec, rport)
+	}
 	port := localPort(spec)
 	if port == "" {
 		return fmt.Errorf("spec %q: no local port to verify; refusing to start what cannot be checked", spec)
@@ -292,6 +313,60 @@ func (e Engine) Spawn(ctx context.Context, host, set, spec string) error {
 		}
 	}
 }
+
+// spawnReverse is Spawn for an `R…` spec (SASASH.4.41). There is no local
+// port to pre-dial or to answer, so success is the process surviving the
+// settle window (reverseSettle × the engine timeout, wall-clock like
+// grace): ssh authenticates and asks the remote side to bind within it,
+// and ExitOnForwardFailure makes a refused remote bind end the process —
+// so dying first is failure with its stderr as the reason. A failure that
+// lands after the window is the next Status's to show (pid dead => Down).
+// The log is <host>.R<port>.log, never a -L forward's <host>.<port>.log.
+func (e Engine) spawnReverse(ctx context.Context, host, set, spec, rport string) error {
+	logPath, err := e.hostFile(host, ".R"+rport+".log")
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(e.StateDir, 0o700); err != nil {
+		return err
+	}
+	argv := SpawnArgv(host, spec)
+	sp := e.spawner()
+	pid, err := sp.Spawn(argv, logPath)
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
+	}
+	settled := time.Now().Add(reverseSettle * e.timeout())
+	for {
+		if !sp.Alive(pid) {
+			return fmt.Errorf("%s: %s", strings.Join(argv, " "), e.lastWords(logPath))
+		}
+		if !time.Now().Before(settled) {
+			return e.record(host, set, spec, pid)
+		}
+		select {
+		case <-ctx.Done():
+			_ = sp.Kill(pid)
+			if e.grace(pid) {
+				return fmt.Errorf("%s: not settled: %w", strings.Join(argv, " "), ctx.Err())
+			}
+			what := "recorded"
+			if rerr := e.record(host, set, spec, pid); rerr != nil {
+				what = "NOT recorded: " + rerr.Error()
+			}
+			return fmt.Errorf("%s: not settled, and pid %d survived SIGTERM (%s): %w", strings.Join(argv, " "), pid, what, ctx.Err())
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// reverseSettle is how many engine timeouts a reverse forward's process
+// must survive to count as started: 3s at the default timeout — room for
+// auth and the remote bind's reply — and a few polls in the unit tier.
+const reverseSettle = 3
 
 // grace waits one dial-timeout's worth for pid to die after a signal,
 // reaping it; false means it is still alive. Wall-clock, not ctx: the
@@ -484,13 +559,15 @@ func (e Engine) SpawnSet(ctx context.Context, host, set string, specs []string) 
 // serving reports whether a recorded process for spec is alive and its
 // port answers — the one case SpawnSet leaves alone.
 func (e Engine) serving(ctx context.Context, st hostState, spec string) bool {
+	_, reverse := Reverse(spec)
 	port := localPort(spec)
-	if port == "" {
+	if port == "" && !reverse {
 		return false
 	}
 	sp := e.spawner()
 	for _, pid := range st.pids(spec) {
-		if sp.Alive(pid) && e.dialOK(ctx, port) {
+		// A reverse forward has no local port: alive is all there is.
+		if sp.Alive(pid) && (reverse || e.dialOK(ctx, port)) {
 			return true
 		}
 	}
@@ -558,8 +635,13 @@ func (e Engine) Status(ctx context.Context, host string, desired []hostmodel.For
 			return
 		}
 		seen[spec] = true
-		f := Forward{Set: set, Spec: spec, Port: localPort(spec)}
-		f.Pid, f.State = e.verdict(ctx, st.pids(spec), f.Port)
+		f := Forward{Set: set, Spec: spec}
+		if _, f.Reverse = Reverse(spec); f.Reverse {
+			f.Pid, f.State = e.reverseVerdict(st.pids(spec))
+		} else {
+			f.Port = localPort(spec)
+			f.Pid, f.State = e.verdict(ctx, st.pids(spec), f.Port)
+		}
 		out.Forwards = append(out.Forwards, f)
 	}
 	for _, ds := range desired {
@@ -627,6 +709,21 @@ func (e Engine) verdict(ctx context.Context, pids []int, port string) (int, Stat
 	return 0, Listening
 }
 
+// reverseVerdict judges a reverse forward (SASASH.4.41): its listener is
+// on the remote host, out of reach of a local dial, so a recorded pid
+// alive => Up (that pid), anything else => Down. Never Listening: nothing
+// local can answer for it, and a foreign listener on the same port number
+// here is unrelated.
+func (e Engine) reverseVerdict(pids []int) (int, Status) {
+	sp := e.spawner()
+	for _, pid := range pids {
+		if sp.Alive(pid) {
+			return pid, Up
+		}
+	}
+	return 0, Down
+}
+
 // dialOK reports whether 127.0.0.1:port accepts within the engine timeout.
 func (e Engine) dialOK(ctx context.Context, port string) bool {
 	dctx, cancel := context.WithTimeout(ctx, e.timeout())
@@ -654,6 +751,19 @@ func localPort(spec string) string {
 		}
 	}
 	return ""
+}
+
+// Reverse classifies a reverse-forward spec (SASASH.4.41): an `R` prefix
+// followed by ssh -R syntax, `R[bind:]port:host:hostport`. ok is true when
+// the rest names an all-digit remote port among its first two ':'-fields
+// (localPort's rule, applied after the R); remotePort is that port. The
+// spec string, R included, stays the forward's identity everywhere.
+func Reverse(spec string) (remotePort string, ok bool) {
+	if !strings.HasPrefix(spec, "R") {
+		return "", false
+	}
+	port := localPort(spec[1:])
+	return port, port != ""
 }
 
 func allDigits(s string) bool {
