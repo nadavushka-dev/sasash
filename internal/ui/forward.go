@@ -169,7 +169,7 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 	// adds none, keeping the input in the prompt to fix.
 	fields := strings.Fields(raw)
 	if len(fields) == 0 {
-		m.notice = "no spec — want local:host:port [more…]"
+		m.notice = "no spec — want local:host:port or Rremote:host:port [more…]"
 		return m, nil
 	}
 	specs := make([]string, 0, len(fields))

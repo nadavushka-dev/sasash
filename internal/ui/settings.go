@@ -538,7 +538,7 @@ func (m Model) submitTunnel() (tea.Model, tea.Cmd) {
 		m.tunnel.name = v
 		m.mode = promptTunnelSpecs
 		m.prompt.Reset()
-		m.prompt.Placeholder = "spec [spec…]  e.g. 3000:localhost:3000"
+		m.prompt.Placeholder = "spec [spec…]  e.g. 3000:localhost:3000 · R2222:localhost:22 = reverse"
 		return m, m.prompt.Focus()
 	case promptTunnelSpecs:
 		specs := strings.Fields(v)

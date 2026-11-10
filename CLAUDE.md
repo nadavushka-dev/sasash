@@ -66,7 +66,10 @@ the outside world — that is what makes the logic testable without a live SSH s
 - **Tunnel state: reality wins.** Report three distinct states (`up` / `listening` /
   `down`) from the recorded process's liveness + a local port dial; the state file
   (set → spec → pid) is a cache, never truth. A forward is one detached `ssh -N -L`
-  process (SPEC §4, Model B); `-O` is for the interactive master only.
+  process (SPEC §4, Model B); `-O` is for the interactive master only. The one
+  exception is a reverse forward (`R`-prefixed spec → `ssh -N -R`, SASASH.4.41):
+  its listener is on the remote side, so it is `up` / `down` by process liveness
+  alone — never `listening` — and skips the local-port pre-check.
 
 ## Testing
 

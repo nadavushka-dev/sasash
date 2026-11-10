@@ -70,7 +70,7 @@ func DefaultKeyMap() KeyMap {
 		FocusLeft:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "host list")),
 		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle forward")),
 		ToggleSet:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "toggle set")),
-		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward")),
+		AddFwd:      key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "add forward (R… = reverse)")),
 		CancelFwd:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill forward")),
 		EditFwd:     key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "edit forward")),
 		DeclareFwd:  key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new forward set (declare)")),
