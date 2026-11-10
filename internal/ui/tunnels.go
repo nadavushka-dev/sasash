@@ -435,6 +435,12 @@ func (m Model) tunnelsView(host hostmodel.Host) string {
 			m.styles.PathName.Render(fmt.Sprintf("%-*s", nameWidth, setLabel(f.Set))),
 			m.styles.PathAddr.Render(fmt.Sprintf("%-*s", specWidth, f.Spec)),
 			m.styles.PathExtra.Render(word)))
+		// A reverse forward (SASASH.4.41) listens on the REMOTE host: the
+		// arrow says so without color, and its verdict is the process's
+		// liveness alone, so the row never reads listening.
+		if rport, ok := reverseSpec(f.Spec); ok {
+			b.WriteString(" " + m.styles.PathExtra.Render("⇐ remote :"+rport))
+		}
 		// A live later claimant cannot be told apart from the earlier
 		// one on its port (demoteShared); a dead one has nothing to say.
 		if !pending && f.State != tunnel.Down {

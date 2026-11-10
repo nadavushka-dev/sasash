@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,7 +45,7 @@ func (m Model) openEditFwd(host hostmodel.Host, row tunnel.Forward) (tea.Model, 
 	m.editFwd = editFwdState{host: host.Alias, set: row.Set, old: row.Spec, live: live, pid: row.Pid}
 	m.mode = promptEditFwd
 	m.prompt.Reset()
-	m.prompt.Placeholder = "local:host:port"
+	m.prompt.Placeholder = "local:host:port or Rremote:host:port"
 	m.prompt.SetValue(row.Spec)
 	m.prompt.CursorEnd()
 	return m, m.prompt.Focus()
@@ -76,8 +75,8 @@ func (m Model) editFwdPlan(newSpec string) []string {
 // submitEditFwd is enter in the edit prompt.
 func (m Model) submitEditFwd() (tea.Model, tea.Cmd) {
 	newSpec, _ := expandSpec(m.prompt.Value())
-	if port, _ := localPort(newSpec); port == "" {
-		m.notice = "spec " + strconv.Quote(newSpec) + ": no local port — want local:host:port"
+	if why := specRefusal(newSpec, newSpec); why != "" {
+		m.notice = why
 		return m, nil
 	}
 	e := m.editFwd
@@ -157,7 +156,7 @@ func (m Model) promptExpansion() string {
 		changed := len(fields) > 1
 		for _, s := range fields {
 			full, expanded := expandSpec(s)
-			if port, _ := localPort(full); port == "" {
+			if specRefusal(s, full) != "" {
 				return "" // enter will refuse this token; promise nothing
 			}
 			changed = changed || expanded
@@ -175,7 +174,7 @@ func (m Model) promptExpansion() string {
 		changed := false
 		for _, s := range strings.Fields(v) {
 			full, expanded := expandSpec(s)
-			if port, _ := localPort(full); port == "" {
+			if specRefusal(s, full) != "" {
 				return "" // enter will refuse this token; promise nothing
 			}
 			changed = changed || expanded

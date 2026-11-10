@@ -12,6 +12,7 @@ import (
 
 	"github.com/nadavushka-dev/sasash/internal/hostmodel"
 	"github.com/nadavushka-dev/sasash/internal/probe"
+	"github.com/nadavushka-dev/sasash/internal/tunnel"
 )
 
 // portSearch is how far above a held port `+` looks for a free one.
@@ -98,6 +99,37 @@ func localPort(spec string) (port string, field int) {
 	return "", -1
 }
 
+// reverseSpec reports whether spec is a reverse forward (SASASH.4.41,
+// `R2222:localhost:22`) and its remote port — the engine's own classifier,
+// so the pane and the engine can never disagree on what is reverse. A
+// reverse spec has no local port: it is never dialled, remapped, or held.
+func reverseSpec(spec string) (remotePort string, ok bool) { return tunnel.Reverse(spec) }
+
+// specRefusal is why a typed (expanded) spec cannot be taken, "" when it
+// can: a -L spec needs a local port (unchanged), an R… spec a remote one.
+func specRefusal(typed, full string) string {
+	if _, ok := reverseSpec(full); ok {
+		return ""
+	}
+	if strings.HasPrefix(full, "R") {
+		return "spec " + strconv.Quote(typed) + ": no remote port — want Rremote:host:port"
+	}
+	if port, _ := localPort(full); port == "" {
+		return "spec " + strconv.Quote(typed) + ": no local port — want local:host:port"
+	}
+	return ""
+}
+
+// defaultSetName is the set-name prompt's default for a set whose first
+// forward is spec: its local port, or R<remote port> for a reverse one.
+func defaultSetName(spec string) string {
+	if rport, ok := reverseSpec(spec); ok {
+		return "R" + rport
+	}
+	port, _ := localPort(spec)
+	return port
+}
+
 // withLocalPort rewrites the local-port field of spec; a spec with no
 // such field (field < 0) is returned unchanged.
 func withLocalPort(spec string, field int, port string) string {
@@ -116,7 +148,7 @@ func (m Model) openForward(host hostmodel.Host, value string) (Model, tea.Cmd) {
 	m.mode = promptForward
 	m.fwdHost = m.tunnelHost(host).Alias // the tunnel is the machine's, not the variant's
 	m.prompt.Reset()
-	m.prompt.Placeholder = "local:host:port [more…]  (! prefix = session-only, unsaved)"
+	m.prompt.Placeholder = "local:host:port or Rremote:host:port [more…]  (! prefix = session-only, unsaved)"
 	m.prompt.SetValue(value)
 	m.prompt.CursorEnd()
 	return m, m.prompt.Focus()
@@ -144,8 +176,8 @@ func (m Model) submitForward() (Model, tea.Cmd) {
 	seen := make(map[string]bool, len(fields))
 	for _, tok := range fields {
 		full, _ := expandSpec(tok)
-		if port, _ := localPort(full); port == "" {
-			m.notice = "spec " + strconv.Quote(tok) + ": no local port — want local:host:port"
+		if why := specRefusal(tok, full); why != "" {
+			m.notice = why
 			return m, nil // stay in the prompt; nothing added
 		}
 		if seen[full] {
@@ -190,6 +222,9 @@ func (m Model) forwardCheckCmd(alias string, specs []string, ephemeral bool, ses
 		// Every spec's local port is dialled: a held one is a conflict.
 		var conflicts []forwardPortConflict
 		for _, spec := range specs {
+			if _, reverse := reverseSpec(spec); reverse {
+				continue // its listener is remote: no local port to hold
+			}
 			port, _ := localPort(spec)
 			if held(cctx, prober, port) {
 				conflicts = append(conflicts, forwardPortConflict{port: port, next: nextFreePort(cctx, prober, port)})
@@ -230,7 +265,7 @@ func (m Model) openForwardName(host hostmodel.Host, specs []string) (Model, tea.
 	}
 	// The default set name is the first spec's local port (SASASH.4.27: a
 	// multi-spec set names itself after its first forward).
-	port, _ := localPort(specs[0])
+	port := defaultSetName(specs[0])
 	m.fwdHost = host.Alias
 	m.fwdSpecs = specs
 	m.mode = promptForwardName

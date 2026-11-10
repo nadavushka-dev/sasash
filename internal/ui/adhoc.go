@@ -140,6 +140,11 @@ func parseAdhoc(input string) (adhocTarget, error) {
 // (3000:web is malformed, never 3000:localhost:web).
 func addForward(t *adhocTarget, spec string) error {
 	full, _ := expandSpec(spec)
+	// An R… value is a reverse spec to the engine (SASASH.4.41), which `a`
+	// does not take: refused here, so a -L can never quietly become a -R.
+	if _, reverse := reverseSpec(full); reverse {
+		return fmt.Errorf("forward %q: R… is a reverse spec — add it with + in the tunnels pane", spec)
+	}
 	if strings.Count(full, ":") < 2 {
 		return fmt.Errorf("forward %q: want local:host:port", spec)
 	}

@@ -553,8 +553,8 @@ func (m Model) submitTunnel() (tea.Model, tea.Cmd) {
 		seen := make(map[string]bool)
 		for i, spec := range specs {
 			full, _ := expandSpec(spec)
-			if port, _ := localPort(full); port == "" {
-				m.notice = "spec " + strconv.Quote(spec) + ": no local port — want local:host:port"
+			if why := specRefusal(spec, full); why != "" {
+				m.notice = why
 				return m, nil
 			}
 			if seen[full] {
