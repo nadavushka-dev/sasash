@@ -13,7 +13,7 @@ not a daemon, not a second place your connection info lives.
 ### Solves
 1. Remembering which host alias exists → searchable list.
 2. Getting an address as *data* for non-ssh uses → copy to clipboard / `sasash addr <host>`.
-3. Adding a port-forward without killing the existing tunnel → one more `ssh -N -L` process; the others are untouched (§4).
+3. Adding a port-forward without killing the existing tunnel → one more `ssh -N -L` (or `-R`) process; the others are untouched (§4).
 4. Bonus, and the one that bites daily: **knowing which network path to a host is alive right now.**
 
 ### Explicitly out of scope
@@ -73,6 +73,7 @@ never guesses either from a name.
 # @sasash tags dev,tlv
 # @sasash forwards web  3000:localhost:3000 3001:localhost:3001
 # @sasash forwards api  4011:localhost:4011 4012:localhost:4012 4013:localhost:4013
+# @sasash forwards mac  R2222:localhost:22
 Host ubuntu
   HostName 192.168.3.141
   User nadav
@@ -141,8 +142,8 @@ every other ssh-aware tool on the machine follows immediately.
 ### Model
 - **Desired state** → `# @sasash forwards <name> ...` in `sasash.conf`. Durable, named sets.
 - **Actual state** → `~/.local/state/sasash/`. A **cache, never truth.**
-- **A forward IS a process** (Model B, SASASH.7): one detached `ssh -N -L` per local port,
-  grouped into named sets. No shared master on the tunnel path, no `-O`, no ControlPath
+- **A forward IS a process** (Model B, SASASH.7): one detached `ssh -N -L` per local port
+  (`ssh -N -R` per reverse spec, SASASH.4.41), grouped into named sets. No shared master on the tunnel path, no `-O`, no ControlPath
   required. Stopping a forward kills its process, and that drops its listener *and* its
   established connections together, touching nothing else.
 
@@ -151,6 +152,7 @@ every other ssh-aware tool on the machine follows immediately.
 | action | command |
 |---|---|
 | start a forward | `ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -L 4014:localhost:4014 <host>` — sasash detaches it itself (own session, stdin/stdout from/to `/dev/null`, stderr to `~/.local/state/sasash/<host>.<port>.log`) and records the pid. Success is the local port answering; the process exiting first is failure, with its stderr as the reason |
+| start a reverse forward (SASASH.4.41) | `ssh -N -S none -o BatchMode=yes -o ExitOnForwardFailure=yes -R 2222:localhost:22 <host>` — the spec `R2222:localhost:22` with its `R` stripped, every flag the same, detached and recorded the same way (stderr to `~/.local/state/sasash/<host>.R<port>.log`, never a `-L` forward's log). No local port is pre-dialled or waited for: success is the process still alive after a settle window (three engine timeouts, 3s by default — room for auth and the remote bind's reply); the process exiting first is failure, with its stderr as the reason — `ExitOnForwardFailure` makes a refused remote bind end it (`remote port forwarding failed for listen port 2222`) |
 | add a port to a running set | the same, once more — the other processes are not touched, nothing restarts |
 | remove a forward | SIGTERM to that one process — the listener and the connections through it drop together; the other processes are untouched |
 | set down | SIGTERM to each of the set's processes |
@@ -203,8 +205,22 @@ Reality wins over the state file, always. Report three distinct states, don't co
 
 A tunnel manager that lies about what's up is worse than no tunnel manager.
 
+**Reverse forwards (SASASH.4.41).** A spec prefixed with `R` is an `ssh -R`: the rest is ssh's
+own `-R` syntax, `R[bind:]port:host:hostport` (an all-digit remote port among its first two
+fields after the `R`), and the whole string, `R` included, is the forward's identity — in the
+meta line, the state file, and every `fwdset` token. It mixes freely with `-L` specs in one set.
+(A `-L` spec whose bind address starts with a capital `R` would read as reverse — write the
+address another way.)
+Its listener is on the REMOTE host, out of reach of a local dial, so its verdict is the
+recorded process's liveness alone: `● up` while a recorded pid is alive, `○ down` otherwise —
+never `◐ listening`, and a local listener on the same port number is unrelated. Probing the
+remote side is out of scope; a remote bind that fails after the settle window shows as down
+on the next poll (the process exits). No persistence beyond the other forwards': no launchd,
+no autossh, no reconnect.
+
 ### Port conflicts
-Before adding a forward, dial `127.0.0.1:<port>`. If something already holds it, say so and
+Before adding a forward, dial `127.0.0.1:<port>` (a reverse forward has no local port and is
+never dialled, remapped, or counted as held). If something already holds it, say so and
 offer the next free port. Never silently remap — the engine's spawn dials first too and
 refuses a port that already answers (a foreign listener would make its own readiness dial
 lie), and `ExitOnForwardFailure` catches the one that appears in between.
@@ -315,6 +331,12 @@ alive or dead, not since the master started — and nothing when unknown; `last 
 `last switch → path` appear once recorded. Paths carry session memory only: a sparkline of the
 newest probe latencies that fit (`·` for a miss), their min–max, and `answered/rounds` this
 session — forgotten when the TUI exits.
+
+Every prompt that takes a spec also takes a reverse one (`R2222:localhost:22`, §4), typed in
+full — there is no reverse shorthand, and `R…` never expands; a `+` set whose first forward
+is reverse defaults its name to `R<remote port>`. The tunnels pane marks a reverse row `⇐ remote :<port>` beside its state —
+a glyph, so it survives `NO_COLOR`. `a` takes no reverse spec: an `R…` value after `-L` is
+refused (add it with `+`).
 
 Forward specs accept two shorthands wherever one is typed — `+`, `E`, both settings prompts
 that take specs, and `-L` in `a`: `3000` is `3000:localhost:3000` and `2000:3000` (two
@@ -453,7 +475,8 @@ value needs evaluation, write it explicitly into `cmd`, e.g.
 ## 7. CLI (non-TUI surface)
 
 The CLI takes no typed forward specs — `up` applies declared sets, which are canonical
-three-part specs on their meta lines (the §5 shorthands are a TUI input convenience).
+three-part specs on their meta lines (the §5 shorthands are a TUI input convenience). A
+declared reverse spec (`R…`, §4) is brought up and down by `up`/`down` like any other.
 
 ```
 sasash                    # TUI

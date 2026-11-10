@@ -25,7 +25,9 @@ is all. See [`SPEC.md`](SPEC.md) for the design of record.
   (`ssh`, `scp`, `git`, VS Code Remote…) follows.
 - **Port-forwards that persist** — declare a forward set once; `space` brings a forward up or
   down (one detached `ssh -N -L` process per port), `s` toggles the whole set. State is read
-  from reality — a live process plus a local port dial — never a cache.
+  from reality — a live process plus a local port dial — never a cache. Reverse forwards too:
+  `R2222:localhost:22` is an `ssh -N -R` (reach a machine behind a VPN from the remote side),
+  shown with `⇐ remote` and judged by its process alone.
 - **File transfer** — `C` copies files and directories between your machine and a host with
   `scp`, browsing **both ends** in the same browser (local over the filesystem, remote over
   `ssh … ls`). `space` marks several — the marks survive moving between directories — and one
